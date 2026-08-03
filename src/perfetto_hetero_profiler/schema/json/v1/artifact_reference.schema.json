@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://perfetto-hetero-profiler.local/schema/v1/artifact_reference.schema.json",
+  "title": "ArtifactReference v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "run_id", "artifact_id", "artifact_kind", "relative_path", "format", "producer", "created_at_unix_ns", "attributes"],
+  "properties": {
+    "schema_version": {"type": "string", "pattern": "^1\\.[0-9]+\\.[0-9]+$"},
+    "record_type": {"const": "artifact"},
+    "run_id": {"type": "string", "minLength": 1},
+    "artifact_id": {"type": "string", "minLength": 1},
+    "artifact_kind": {"enum": ["raw_log", "torch_trace", "nsys_report", "rbln_report", "telemetry", "event_stream", "metric_stream", "perfetto_trace", "overview", "manifest", "other"]},
+    "relative_path": {"type": "string", "minLength": 1},
+    "format": {"type": "string", "minLength": 1},
+    "producer": {"type": "string", "minLength": 1},
+    "created_at_unix_ns": {"type": "integer", "minimum": 0},
+    "attributes": {"type": "object"},
+    "host_id": {"type": ["string", "null"]},
+    "request_id": {"type": ["string", "null"]},
+    "size_bytes": {"type": ["integer", "null"], "minimum": 0},
+    "sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "clock_domain_id": {"type": ["string", "null"]}
+  }
+}

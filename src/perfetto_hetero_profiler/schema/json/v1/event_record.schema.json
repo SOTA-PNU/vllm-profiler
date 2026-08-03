@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://perfetto-hetero-profiler.local/schema/v1/event_record.schema.json",
+  "title": "EventRecord v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "run_id", "event_id", "event_name", "event_type", "phase", "host_id", "clock_domain_id", "timestamp_ns", "attributes"],
+  "properties": {
+    "schema_version": {"type": "string", "pattern": "^1\\.[0-9]+\\.[0-9]+$"},
+    "record_type": {"const": "event"},
+    "run_id": {"type": "string", "minLength": 1},
+    "event_id": {"type": "string", "minLength": 1},
+    "event_name": {"type": "string", "minLength": 1},
+    "event_type": {"enum": ["instant", "span"]},
+    "phase": {"enum": ["request", "prefill", "kv_export", "kv_transform", "kv_transfer", "decode", "sampling", "response", "system", "synchronization"]},
+    "host_id": {"type": "string", "minLength": 1},
+    "clock_domain_id": {"type": "string", "minLength": 1},
+    "timestamp_ns": {"type": "integer", "minimum": 0},
+    "attributes": {"type": "object"},
+    "request_id": {"type": ["string", "null"]},
+    "parent_event_id": {"type": ["string", "null"]},
+    "process_id": {"type": ["integer", "null"], "minimum": 0},
+    "thread_id": {"type": ["integer", "null"], "minimum": 0},
+    "device_type": {"type": ["string", "null"], "enum": ["cpu", "gpu", "npu", "system_memory", "network", "unknown", null]},
+    "device_id": {"type": ["string", "null"]},
+    "duration_ns": {"type": ["integer", "null"], "minimum": 0}
+  }
+}

@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://perfetto-hetero-profiler.local/schema/v1/run_manifest.schema.json",
+  "title": "RunManifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "run_id",
+    "mode",
+    "profile_mode",
+    "status",
+    "created_at_unix_ns",
+    "models",
+    "workload",
+    "hosts",
+    "software",
+    "devices",
+    "configuration",
+    "attributes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "pattern": "^1\\.[0-9]+\\.[0-9]+$"},
+    "record_type": {"const": "run_manifest"},
+    "run_id": {"type": "string", "minLength": 1},
+    "mode": {"enum": ["gpu_only", "npu_only", "hybrid"]},
+    "profile_mode": {"enum": ["monitor", "detailed_profile"]},
+    "status": {"enum": ["planned", "running", "succeeded", "failed", "partial", "cancelled"]},
+    "created_at_unix_ns": {"type": "integer", "minimum": 0},
+    "models": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/model"}
+    },
+    "workload": {"$ref": "#/$defs/workload"},
+    "hosts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/host"}
+    },
+    "software": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/software"}
+    },
+    "devices": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/device"}
+    },
+    "configuration": {"type": "object"},
+    "attributes": {"type": "object"}
+  },
+  "$defs": {
+    "nullableString": {"type": ["string", "null"]},
+    "nullableNonNegativeInteger": {"type": ["integer", "null"], "minimum": 0},
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "model_id", "revision", "tokenizer_id", "dtype"],
+      "properties": {
+        "role": {"enum": ["served", "prefill", "decode"]},
+        "model_id": {"type": "string", "minLength": 1},
+        "revision": {"$ref": "#/$defs/nullableString"},
+        "tokenizer_id": {"$ref": "#/$defs/nullableString"},
+        "dtype": {"$ref": "#/$defs/nullableString"}
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_count", "concurrency", "request_rate_per_s", "input_tokens", "output_tokens", "max_model_len", "warmup_requests"],
+      "properties": {
+        "request_count": {"$ref": "#/$defs/nullableNonNegativeInteger"},
+        "concurrency": {"$ref": "#/$defs/nullableNonNegativeInteger"},
+        "request_rate_per_s": {"type": ["number", "null"], "minimum": 0},
+        "input_tokens": {"$ref": "#/$defs/nullableNonNegativeInteger"},
+        "output_tokens": {"$ref": "#/$defs/nullableNonNegativeInteger"},
+        "max_model_len": {"$ref": "#/$defs/nullableNonNegativeInteger"},
+        "warmup_requests": {"$ref": "#/$defs/nullableNonNegativeInteger"}
+      }
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host_id", "role", "hostname", "operating_system", "architecture"],
+      "properties": {
+        "host_id": {"type": "string", "minLength": 1},
+        "role": {"type": "string", "minLength": 1},
+        "hostname": {"type": "string", "minLength": 1},
+        "operating_system": {"type": "string", "minLength": 1},
+        "architecture": {"type": "string", "minLength": 1}
+      }
+    },
+    "software": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "role", "path"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "version": {"$ref": "#/$defs/nullableString"},
+        "role": {"type": "string", "minLength": 1},
+        "path": {"$ref": "#/$defs/nullableString"}
+      }
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host_id", "device_type", "device_id", "vendor", "model", "status", "memory_total_bytes", "attributes"],
+      "properties": {
+        "host_id": {"type": "string", "minLength": 1},
+        "device_type": {"enum": ["cpu", "gpu", "npu", "system_memory", "network", "unknown"]},
+        "device_id": {"type": "string", "minLength": 1},
+        "vendor": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "status": {"type": "string", "minLength": 1},
+        "memory_total_bytes": {"$ref": "#/$defs/nullableNonNegativeInteger"},
+        "attributes": {"type": "object"}
+      }
+    }
+  }
+}

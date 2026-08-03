@@ -1,0 +1,70 @@
+{
+  "attributes": {
+    "example.description": "Synthetic NPU-only detailed profile run"
+  },
+  "configuration": {
+    "profiler": "rbln"
+  },
+  "created_at_unix_ns": 1784916001000000000,
+  "devices": [
+    {
+      "attributes": {
+        "rbln.firmware_version": "example"
+      },
+      "device_id": "npu0",
+      "device_type": "npu",
+      "host_id": "npu-host",
+      "memory_total_bytes": 16877879296,
+      "model": "Example RBLN NPU",
+      "status": "normal",
+      "vendor": "Rebellions"
+    }
+  ],
+  "hosts": [
+    {
+      "architecture": "x86_64",
+      "host_id": "npu-host",
+      "hostname": "npu-host-alias",
+      "operating_system": "Linux",
+      "role": "combined"
+    }
+  ],
+  "mode": "npu_only",
+  "models": [
+    {
+      "dtype": "bfloat16",
+      "model_id": "example/causal-lm",
+      "revision": null,
+      "role": "served",
+      "tokenizer_id": "example/causal-lm"
+    }
+  ],
+  "profile_mode": "detailed_profile",
+  "record_type": "run_manifest",
+  "run_id": "example-npu-only",
+  "schema_version": "1.0.0",
+  "software": [
+    {
+      "name": "rebel-compiler",
+      "path": null,
+      "role": "npu_runtime",
+      "version": "example"
+    },
+    {
+      "name": "vllm-rbln",
+      "path": null,
+      "role": "inference",
+      "version": "example"
+    }
+  ],
+  "status": "succeeded",
+  "workload": {
+    "concurrency": 1,
+    "input_tokens": 16,
+    "max_model_len": 4096,
+    "output_tokens": 8,
+    "request_count": 1,
+    "request_rate_per_s": null,
+    "warmup_requests": 1
+  }
+}

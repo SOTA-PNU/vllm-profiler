@@ -1,0 +1,277 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://perfetto-hetero-profiler.local/overview/v1/overview_comparison.schema.json",
+  "title": "Deterministic Overview Comparison v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "comparison",
+    "runs",
+    "metrics",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "record_type": {"const": "overview_comparison"},
+    "comparison": {"$ref": "#/$defs/comparison"},
+    "runs": {
+      "type": "array",
+      "minItems": 2,
+      "items": {"$ref": "#/$defs/run"}
+    },
+    "metrics": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/metric"}
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "comparison": {
+            "properties": {
+              "comparability": {"const": "not_comparable"}
+            },
+            "required": ["comparability"]
+          }
+        },
+        "required": ["comparison"]
+      },
+      "then": {
+        "properties": {
+          "metrics": {
+            "items": {
+              "properties": {
+                "deltas": {"maxItems": 0}
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "comparability",
+        "comparability_reasons",
+        "baseline_run_id"
+      ],
+      "properties": {
+        "comparability": {
+          "enum": ["comparable", "diagnostic_only", "not_comparable"]
+        },
+        "comparability_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "baseline_run_id": {"type": ["string", "null"], "minLength": 1}
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "run_mode",
+        "profile_mode",
+        "profile_kind",
+        "overview_sha256",
+        "request_sample_count",
+        "model_identity_sha256",
+        "hardware_identity_sha256",
+        "workload_identity_sha256",
+        "canonical_clock_domain_id",
+        "clock_alignment_status",
+        "source_integrity_valid",
+        "quality_warnings"
+      ],
+      "properties": {
+        "run_id": {"type": "string", "minLength": 1},
+        "run_mode": {"enum": ["gpu_only", "npu_only", "hybrid"]},
+        "profile_mode": {"enum": ["monitor", "detailed_profile"]},
+        "profile_kind": {"type": "string", "minLength": 1},
+        "overview_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "request_sample_count": {"type": "integer", "minimum": 0},
+        "model_identity_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "hardware_identity_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "workload_identity_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "canonical_clock_domain_id": {"type": "string", "minLength": 1},
+        "clock_alignment_status": {
+          "enum": [
+            "canonical",
+            "aligned",
+            "partial",
+            "unaligned",
+            "not_applicable",
+            "not_available",
+            "unknown"
+          ]
+        },
+        "source_integrity_valid": {"type": "boolean"},
+        "quality_warnings": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "scalar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["availability", "value", "unavailable_reason"],
+      "properties": {
+        "availability": {
+          "enum": ["available", "not_available", "not_collected", "error"]
+        },
+        "value": {"type": ["number", "null"]},
+        "unavailable_reason": {"type": ["string", "null"], "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"availability": {"const": "available"}},
+            "required": ["availability"]
+          },
+          "then": {
+            "properties": {
+              "value": {"type": "number"},
+              "unavailable_reason": {"type": "null"}
+            }
+          },
+          "else": {
+            "properties": {
+              "value": {"type": "null"},
+              "unavailable_reason": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      ]
+    },
+    "value": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "availability",
+        "value",
+        "unavailable_reason",
+        "sample_count"
+      ],
+      "properties": {
+        "run_id": {"type": "string", "minLength": 1},
+        "availability": {
+          "enum": ["available", "not_available", "not_collected", "error"]
+        },
+        "value": {"type": ["number", "null"]},
+        "unavailable_reason": {"type": ["string", "null"], "minLength": 1},
+        "sample_count": {"type": "integer", "minimum": 0}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"availability": {"const": "available"}},
+            "required": ["availability"]
+          },
+          "then": {
+            "properties": {
+              "value": {"type": "number"},
+              "unavailable_reason": {"type": "null"},
+              "sample_count": {"minimum": 1}
+            }
+          },
+          "else": {
+            "properties": {
+              "value": {"type": "null"},
+              "unavailable_reason": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      ]
+    },
+    "delta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "baseline_run_id", "absolute", "percentage"],
+      "properties": {
+        "run_id": {"type": "string", "minLength": 1},
+        "baseline_run_id": {"type": "string", "minLength": 1},
+        "absolute": {"$ref": "#/$defs/scalar"},
+        "percentage": {"$ref": "#/$defs/scalar"}
+      }
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "section",
+        "observation_layer",
+        "canonical_unit",
+        "direction",
+        "values",
+        "deltas",
+        "quality_warnings"
+      ],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "section": {
+          "enum": [
+            "request_facing_latency",
+            "pipeline_latency",
+            "throughput_and_tokens",
+            "transfer"
+          ]
+        },
+        "observation_layer": {
+          "enum": [
+            "request_facing_client",
+            "hybrid_pipeline",
+            "normalized_resource_metric",
+            "gpu_only",
+            "npu_only",
+            "run"
+          ]
+        },
+        "canonical_unit": {"type": "string", "minLength": 1},
+        "direction": {
+          "enum": ["lower_is_preferred", "higher_is_preferred", "neutral"]
+        },
+        "values": {
+          "type": "array",
+          "minItems": 2,
+          "items": {"$ref": "#/$defs/value"}
+        },
+        "deltas": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/delta"}
+        },
+        "quality_warnings": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

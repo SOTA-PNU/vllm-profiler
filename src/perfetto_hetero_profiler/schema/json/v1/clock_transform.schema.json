@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://perfetto-hetero-profiler.local/schema/v1/clock_transform.schema.json",
+  "title": "ClockTransform v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "run_id", "transform_id", "source_clock_domain_id", "target_clock_domain_id", "scale", "offset_ns", "uncertainty_ns", "method", "valid_from_source_ns", "valid_to_source_ns", "attributes"],
+  "properties": {
+    "schema_version": {"type": "string", "pattern": "^1\\.[0-9]+\\.[0-9]+$"},
+    "record_type": {"const": "clock_transform"},
+    "run_id": {"type": "string", "minLength": 1},
+    "transform_id": {"type": "string", "minLength": 1},
+    "source_clock_domain_id": {"type": "string", "minLength": 1},
+    "target_clock_domain_id": {"type": "string", "minLength": 1},
+    "scale": {"type": "number", "exclusiveMinimum": 0},
+    "offset_ns": {"type": "integer"},
+    "uncertainty_ns": {"type": "integer", "minimum": 0},
+    "method": {"enum": ["ntp", "chrony", "rpc_midpoint", "shared_event", "manual", "device_correlation"]},
+    "valid_from_source_ns": {"type": "integer", "minimum": 0},
+    "valid_to_source_ns": {"type": ["integer", "null"], "minimum": 0},
+    "attributes": {"type": "object"}
+  }
+}

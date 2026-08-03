@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://perfetto-hetero-profiler.local/schema/v1/sync_point.schema.json",
+  "title": "SyncPoint v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "run_id", "sync_point_id", "source_clock_domain_id", "target_clock_domain_id", "source_timestamp_ns", "target_timestamp_ns", "method", "uncertainty_ns", "attributes"],
+  "properties": {
+    "schema_version": {"type": "string", "pattern": "^1\\.[0-9]+\\.[0-9]+$"},
+    "record_type": {"const": "sync_point"},
+    "run_id": {"type": "string", "minLength": 1},
+    "sync_point_id": {"type": "string", "minLength": 1},
+    "source_clock_domain_id": {"type": "string", "minLength": 1},
+    "target_clock_domain_id": {"type": "string", "minLength": 1},
+    "source_timestamp_ns": {"type": "integer", "minimum": 0},
+    "target_timestamp_ns": {"type": "integer", "minimum": 0},
+    "method": {"enum": ["ntp", "chrony", "rpc_midpoint", "shared_event", "manual", "device_correlation"]},
+    "uncertainty_ns": {"type": "integer", "minimum": 0},
+    "attributes": {"type": "object"}
+  }
+}

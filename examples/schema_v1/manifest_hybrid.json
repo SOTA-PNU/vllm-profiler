@@ -1,0 +1,111 @@
+{
+  "attributes": {
+    "example.description": "Synthetic GPU prefill and RBLN NPU decode run"
+  },
+  "configuration": {
+    "decode_port": 8200,
+    "prefill_port": 8100,
+    "proxy_port": 8192
+  },
+  "created_at_unix_ns": 1784916002000000000,
+  "devices": [
+    {
+      "attributes": {
+        "nvidia.driver_version": "example"
+      },
+      "device_id": "gpu0",
+      "device_type": "gpu",
+      "host_id": "gpu-prefill-host",
+      "memory_total_bytes": 102005473280,
+      "model": "Example NVIDIA GPU",
+      "status": "available",
+      "vendor": "NVIDIA"
+    },
+    {
+      "attributes": {
+        "rbln.firmware_version": "example"
+      },
+      "device_id": "npu0",
+      "device_type": "npu",
+      "host_id": "npu-decode-host",
+      "memory_total_bytes": 16877879296,
+      "model": "Example RBLN NPU",
+      "status": "normal",
+      "vendor": "Rebellions"
+    }
+  ],
+  "hosts": [
+    {
+      "architecture": "x86_64",
+      "host_id": "gpu-prefill-host",
+      "hostname": "gpu-prefill-alias",
+      "operating_system": "Linux",
+      "role": "gpu_prefill"
+    },
+    {
+      "architecture": "x86_64",
+      "host_id": "npu-decode-host",
+      "hostname": "npu-decode-alias",
+      "operating_system": "Linux",
+      "role": "npu_decode"
+    }
+  ],
+  "mode": "hybrid",
+  "models": [
+    {
+      "dtype": "bfloat16",
+      "model_id": "example/causal-lm",
+      "revision": null,
+      "role": "served",
+      "tokenizer_id": "example/causal-lm"
+    },
+    {
+      "dtype": "bfloat16",
+      "model_id": "example/causal-lm",
+      "revision": null,
+      "role": "prefill",
+      "tokenizer_id": "example/causal-lm"
+    },
+    {
+      "dtype": "bfloat16",
+      "model_id": "example/causal-lm",
+      "revision": null,
+      "role": "decode",
+      "tokenizer_id": "example/causal-lm"
+    }
+  ],
+  "profile_mode": "monitor",
+  "record_type": "run_manifest",
+  "run_id": "example-hybrid",
+  "schema_version": "1.0.0",
+  "software": [
+    {
+      "name": "vllm",
+      "path": null,
+      "role": "prefill",
+      "version": "example"
+    },
+    {
+      "name": "vllm-rbln",
+      "path": null,
+      "role": "decode",
+      "version": "example"
+    },
+    {
+      "name": "nixl",
+      "path": null,
+      "role": "transfer",
+      "version": "example"
+    }
+  ],
+  "status": "succeeded",
+  "workload": {
+    "concurrency": 1,
+    "input_tokens": 16,
+    "max_model_len": 4096,
+    "output_tokens": 2,
+    "request_count": 1,
+    "request_rate_per_s": null,
+    "warmup_requests": 1
+  }
+}

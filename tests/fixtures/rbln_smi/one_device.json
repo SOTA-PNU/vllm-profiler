@@ -1,0 +1,20 @@
+{
+  "KMD_version": "3.0.0",
+  "devices": [
+    {
+      "npu": 0,
+      "name": "RBLN-CA22",
+      "status": "normal",
+      "fw_ver": "3.0.0",
+      "temperature": "53C",
+      "card_power": "25000000uW",
+      "memory": {
+        "used": "0",
+        "total": "16877879296"
+      },
+      "util": "0.0",
+      "pstate": "P14"
+    }
+  ],
+  "contexts": []
+}

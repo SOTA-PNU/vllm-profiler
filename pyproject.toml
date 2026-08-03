@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "perfetto-hetero-profiler"
+version = "0.1.0"
+description = "Deterministic GPU, RBLN NPU, and hybrid profiling artifacts"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Perfetto Heterogeneous Profiler contributors" }]
+dependencies = [
+  "perfetto==0.57.2",
+  "protobuf==6.33.6",
+]
+
+[project.scripts]
+hetero-profiler = "perfetto_hetero_profiler.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"perfetto_hetero_profiler.schema" = ["json/v1/*.json"]
+"perfetto_hetero_profiler.overview" = ["json/v1/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

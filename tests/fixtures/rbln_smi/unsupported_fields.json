@@ -1,0 +1,13 @@
+{
+  "KMD_version": "3.0.0",
+  "devices": [
+    {
+      "npu": 0,
+      "name": "RBLN-CA22",
+      "status": "normal",
+      "temperature": null,
+      "util": ""
+    }
+  ],
+  "contexts": []
+}

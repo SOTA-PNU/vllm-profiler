@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://perfetto-hetero-profiler.local/schema/v1/metric_sample.schema.json",
+  "title": "MetricSample v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "run_id", "metric_name", "metric_kind", "scope", "host_id", "clock_domain_id", "timestamp_ns", "availability", "origin", "unit", "value", "dimensions", "attributes"],
+  "properties": {
+    "schema_version": {"type": "string", "pattern": "^1\\.[0-9]+\\.[0-9]+$"},
+    "record_type": {"const": "metric"},
+    "run_id": {"type": "string", "minLength": 1},
+    "metric_name": {"type": "string", "minLength": 1},
+    "metric_kind": {"enum": ["gauge", "counter", "duration", "rate", "ratio", "count"]},
+    "scope": {"enum": ["run", "request", "phase", "host", "process", "device", "transfer"]},
+    "host_id": {"type": "string", "minLength": 1},
+    "clock_domain_id": {"type": "string", "minLength": 1},
+    "timestamp_ns": {"type": "integer", "minimum": 0},
+    "availability": {"enum": ["available", "not_available", "not_collected", "error"]},
+    "origin": {"enum": ["measured", "derived", "estimated"]},
+    "unit": {"type": "string", "minLength": 1},
+    "value": {"type": ["number", "null"]},
+    "dimensions": {"type": "object"},
+    "attributes": {"type": "object"},
+    "request_id": {"type": ["string", "null"]},
+    "phase": {"type": ["string", "null"], "enum": ["request", "prefill", "kv_export", "kv_transform", "kv_transfer", "decode", "sampling", "response", "system", "synchronization", null]},
+    "device_type": {"type": ["string", "null"], "enum": ["cpu", "gpu", "npu", "system_memory", "network", "unknown", null]},
+    "device_id": {"type": ["string", "null"]},
+    "interval_ns": {"type": ["integer", "null"], "minimum": 0},
+    "reason": {"type": ["string", "null"]},
+    "source_event_ids": {"type": ["array", "null"], "items": {"type": "string", "minLength": 1}}
+  }
+}

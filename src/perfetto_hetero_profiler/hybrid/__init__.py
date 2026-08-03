@@ -1,0 +1,88 @@
+"""Phase 4 hybrid source alignment and merge API."""
+
+from .alignment import (
+    AlignedTimestamp,
+    AlignmentError,
+    TimestampTransform,
+    align_event,
+    align_event_stream,
+    align_metric,
+    align_metric_stream,
+    align_timestamp,
+)
+from .bundle import HybridBundleMerger, HybridMergeResult
+from .clock_sync import (
+    ClockEstimate,
+    ClockProbeSample,
+    ClockProbeTransport,
+    ClockSyncError,
+    FakeClockProbeTransport,
+    LocalClockProbeTransport,
+    collect_probe_samples,
+    estimate_clock,
+    probe_clock,
+    same_clock_estimate,
+)
+from .config import AlignmentMethod, HybridMergeConfig, build_hybrid_plan
+from .join import (
+    ITERATION_MARKERS,
+    JoinResult,
+    MARKER_ORDER,
+    MarkerValidation,
+    OrderingIssue,
+    join_requests,
+    validate_marker_order,
+)
+from .runtime_markers import (
+    CANONICAL_MARKER_PHASES,
+    RuntimeMarkerIngestError,
+    ingest_runtime_marker_files,
+)
+from .validation import (
+    SourceBundle,
+    SourceBundleError,
+    classify_hybrid_status,
+    load_source_bundle,
+    validate_hybrid_records,
+)
+
+__all__ = [
+    "AlignedTimestamp",
+    "AlignmentError",
+    "AlignmentMethod",
+    "ClockEstimate",
+    "ClockProbeSample",
+    "ClockProbeTransport",
+    "ClockSyncError",
+    "FakeClockProbeTransport",
+    "HybridBundleMerger",
+    "HybridMergeConfig",
+    "HybridMergeResult",
+    "ITERATION_MARKERS",
+    "JoinResult",
+    "LocalClockProbeTransport",
+    "MARKER_ORDER",
+    "MarkerValidation",
+    "OrderingIssue",
+    "SourceBundle",
+    "SourceBundleError",
+    "TimestampTransform",
+    "CANONICAL_MARKER_PHASES",
+    "RuntimeMarkerIngestError",
+    "align_event",
+    "align_event_stream",
+    "align_metric",
+    "align_metric_stream",
+    "align_timestamp",
+    "build_hybrid_plan",
+    "classify_hybrid_status",
+    "collect_probe_samples",
+    "estimate_clock",
+    "ingest_runtime_marker_files",
+    "join_requests",
+    "load_source_bundle",
+    "probe_clock",
+    "same_clock_estimate",
+    "validate_hybrid_records",
+    "validate_marker_order",
+]
