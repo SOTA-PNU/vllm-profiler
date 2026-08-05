@@ -14,6 +14,8 @@ from unittest import mock
 
 from perfetto_hetero_profiler.overview.loader import (
     OverviewInputError,
+    _exact_perfetto_files,
+    _expected_query_count,
     assert_perfetto_unchanged,
     load_matching_perfetto,
     normalized_identity,
@@ -33,6 +35,9 @@ from perfetto_hetero_profiler.perfetto.converter import (
     convert_perfetto,
 )
 from perfetto_hetero_profiler.perfetto.loader import load_hybrid_run
+from perfetto_hetero_profiler.perfetto.timeline_summary import (
+    TIMELINE_SUMMARY_MAPPING_VERSION,
+)
 
 from tests.test_perfetto_conversion import (
     _build_monitor_family,
@@ -48,6 +53,61 @@ _PERFETTO_FILES = {
     TRACE_NAME,
     TRACE_VALIDATION_NAME,
 }
+
+
+class QueryInventoryTests(unittest.TestCase):
+    def test_native_details_add_exactly_one_semantics_query(self) -> None:
+        manifest = {
+            "counts": {
+                "native_detail_slice_count": 10,
+                "native_detail_instant_count": 2,
+            }
+        }
+        self.assertEqual(
+            _expected_query_count(TIMELINE_SUMMARY_MAPPING_VERSION, manifest), 16
+        )
+
+    def test_separate_unaligned_native_trace_does_not_add_query(self) -> None:
+        manifest = {
+            "counts": {
+                "native_detail_slice_count": 0,
+                "native_detail_instant_count": 0,
+                "separate_native_trace_count": 1,
+            }
+        }
+        self.assertEqual(
+            _expected_query_count(TIMELINE_SUMMARY_MAPPING_VERSION, manifest), 15
+        )
+
+    def test_exact_rbln_native_pair_is_an_allowed_bundle_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in (
+                "artifact_manifest.json",
+                "artifact_manifest_validation.json",
+                "conversion_manifest.json",
+                "trace.pftrace",
+                "trace_validation.json",
+                "trace.rbln-native.pftrace",
+                "trace.rbln-native.validation.json",
+            ):
+                (root / name).write_bytes(b"test")
+            self.assertEqual(len(_exact_perfetto_files(root)), 7)
+
+    def test_partial_rbln_native_pair_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in (
+                "artifact_manifest.json",
+                "artifact_manifest_validation.json",
+                "conversion_manifest.json",
+                "trace.pftrace",
+                "trace_validation.json",
+                "trace.rbln-native.pftrace",
+            ):
+                (root / name).write_bytes(b"test")
+            with self.assertRaisesRegex(OverviewInputError, "exactly"):
+                _exact_perfetto_files(root)
 
 
 def _socket_creation_available() -> bool:

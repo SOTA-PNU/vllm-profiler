@@ -26,6 +26,10 @@ from .hybrid import (
     HybridBundleMerger,
     HybridMergeConfig,
     build_hybrid_plan,
+    HybridRunner,
+    build_hybrid_run_plan,
+    load_hybrid_runner_config,
+    validate_hybrid_invocation,
 )
 from .npu import (
     NpuRuntimeSmokeConfig,
@@ -144,6 +148,25 @@ def build_parser() -> argparse.ArgumentParser:
     offline.add_argument("--offline", dest="offline", action="store_true", default=True)
     offline.add_argument("--allow-online", dest="offline", action="store_false")
     vllm_parser.add_argument("--dry-run", action="store_true")
+    hybrid_collect = collect_subparsers.add_parser(
+        "hybrid",
+        help="Run reusable GPU-prefill/NPU-decode collection.",
+    )
+    hybrid_collect.add_argument("--config", type=Path, required=True)
+    hybrid_collect.add_argument("--run-root", type=Path, required=True)
+    hybrid_collect.add_argument("--run-id", required=True)
+    hybrid_collect.add_argument(
+        "--profile-mode",
+        choices=("monitor", "gpu-torch", "gpu-nsys", "npu-torch", "npu-rbln"),
+        default="monitor",
+    )
+    prompts = hybrid_collect.add_mutually_exclusive_group()
+    prompts.add_argument("--prompt")
+    prompts.add_argument("--prompt-file", type=Path)
+    hybrid_collect.add_argument("--warmup-requests", type=int)
+    hybrid_collect.add_argument("--measured-requests", type=int)
+    hybrid_collect.add_argument("--max-output-tokens", type=int)
+    hybrid_collect.add_argument("--dry-run", action="store_true")
     merge_parser = subparsers.add_parser(
         "merge", help="Merge immutable normalized source bundles."
     )
@@ -421,9 +444,88 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0 if result.status in {RunStatus.SUCCEEDED, RunStatus.PARTIAL} else 1
     if args.command == "collect":
-        if args.collect_target not in {"gpu", "gpu-vllm", "npu", "npu-runtime"}:
+        if args.collect_target not in {"gpu", "gpu-vllm", "hybrid", "npu", "npu-runtime"}:
             args.collect_parser.print_help()
             return 0
+        if args.collect_target == "hybrid":
+            try:
+                config = load_hybrid_runner_config(args.config).with_overrides(
+                    prompt=args.prompt,
+                    prompt_file=args.prompt_file,
+                    warmup_requests=args.warmup_requests,
+                    measured_requests=args.measured_requests,
+                    max_output_tokens=args.max_output_tokens,
+                )
+                validate_hybrid_invocation(
+                    config,
+                    run_root=args.run_root,
+                    run_id=args.run_id,
+                    profile_mode=args.profile_mode,
+                )
+                if args.dry_run:
+                    print(
+                        json.dumps(
+                            build_hybrid_run_plan(
+                                config,
+                                run_root=args.run_root,
+                                run_id=args.run_id,
+                                profile_mode=args.profile_mode,
+                            ),
+                            ensure_ascii=False,
+                            indent=2,
+                            sort_keys=True,
+                        )
+                    )
+                    return 0
+                result = HybridRunner(
+                    config,
+                    run_root=args.run_root,
+                    run_id=args.run_id,
+                    profile_mode=args.profile_mode,
+                ).run()
+            except (OSError, ValueError, RuntimeError) as error:
+                print(f"collection error: {error}", file=sys.stderr)
+                return 2
+            print(
+                json.dumps(
+                    {
+                        "status": result.status.value,
+                        "hybrid": str(result.run_directory),
+                        "gpu_source": str(result.gpu_run_directory),
+                        "npu_source": str(result.npu_run_directory),
+                        "coordinator": str(result.coordinator_directory),
+                        "perfetto": (
+                            str(result.perfetto_directory)
+                            if result.perfetto_directory is not None
+                            else None
+                        ),
+                        "request_focused_perfetto": (
+                            str(result.request_focused_perfetto_directory)
+                            if result.request_focused_perfetto_directory is not None
+                            else None
+                        ),
+                        "external_html_overview": (
+                            str(result.overview_directory)
+                            if result.overview_directory is not None
+                            else None
+                        ),
+                        "closeout_recovery": (
+                            str(result.recovery_directory)
+                            if result.recovery_directory is not None
+                            else None
+                        ),
+                        "publication": str(result.publication_directory),
+                        "warmup_completed": result.warmup_count,
+                        "measured_completed": result.measured_count,
+                        "errors": list(result.errors),
+                    },
+                    allow_nan=False,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0 if result.status is RunStatus.SUCCEEDED else 1
         if args.collect_target == "npu-runtime":
             try:
                 config = NpuRuntimeSmokeConfig(

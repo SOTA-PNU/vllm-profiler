@@ -208,6 +208,34 @@ class CommandTests(unittest.TestCase):
             self.assertFalse(second.terminated)
             self.assertFalse(third.killed)
 
+    def test_leader_first_stop_allows_graceful_signal_handler(self):
+        script = (
+            "import signal,sys,time; "
+            "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); "
+            "print('ready', flush=True); time.sleep(30)"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process = ManagedProcess(
+                CommandSpec(
+                    argv=(sys.executable, "-c", script),
+                    terminate_grace_sec=0.5,
+                ),
+                root / "stdout.log",
+                root / "stderr.log",
+            )
+            process.start()
+            deadline = time.monotonic() + 1
+            while not (root / "stdout.log").read_text().strip():
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.01)
+            result = process.stop_leader_first()
+            repeated = process.stop_leader_first()
+            self.assertEqual(result.return_code, 0)
+            self.assertTrue(result.terminated)
+            self.assertFalse(result.killed)
+            self.assertEqual(repeated.return_code, 0)
+
     def test_start_failure_closes_output_handles(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -167,6 +167,81 @@ class ManagedProcess:
             killed=killed,
         )
 
+    def stop_leader_first(
+        self,
+        *,
+        leader_signal: signal.Signals | int = signal.SIGTERM,
+        timed_out: bool = False,
+    ) -> CommandResult:
+        """Ask the verified leader to exit before using owned-group fallback.
+
+        Servers that coordinate worker shutdown need a chance to run their
+        normal signal handler.  Descendants are still cleaned up, but only
+        after the leader exits or ignores the first signal.
+        """
+        if self.process is None:
+            raise RuntimeError("child process has not been started")
+        terminated = killed = False
+        try:
+            if self.process.poll() is None:
+                try:
+                    current_group = self._get_process_group(self.process.pid)
+                except ProcessLookupError:
+                    current_group = None
+                if current_group is not None:
+                    if current_group != self.process_group_id:
+                        raise RuntimeError(
+                            "owned process group identity changed; refusing to signal"
+                        )
+                    try:
+                        self.process.send_signal(leader_signal)
+                        terminated = True
+                    except ProcessLookupError:
+                        pass
+                try:
+                    return_code = self.process.wait(
+                        timeout=self.spec.terminate_grace_sec
+                    )
+                except subprocess.TimeoutExpired:
+                    terminated = (
+                        self._signal_owned_group(signal.SIGTERM) or terminated
+                    )
+                    try:
+                        return_code = self.process.wait(
+                            timeout=self.spec.terminate_grace_sec
+                        )
+                    except subprocess.TimeoutExpired:
+                        killed = self._signal_owned_group(signal.SIGKILL)
+                        return_code = self.process.wait()
+                    else:
+                        remaining_terminated, remaining_killed = (
+                            self._finish_remaining_group(term_already_sent=True)
+                        )
+                        terminated = terminated or remaining_terminated
+                        killed = killed or remaining_killed
+                else:
+                    remaining_terminated, remaining_killed = (
+                        self._finish_remaining_group(term_already_sent=False)
+                    )
+                    terminated = terminated or remaining_terminated
+                    killed = killed or remaining_killed
+            else:
+                return_code = self.process.wait()
+                terminated, killed = self._finish_remaining_group(
+                    term_already_sent=False
+                )
+        finally:
+            self._close_outputs()
+        assert self.started_monotonic_ns is not None
+        return CommandResult(
+            return_code=return_code,
+            started_monotonic_ns=self.started_monotonic_ns,
+            ended_monotonic_ns=self._monotonic_ns(),
+            timed_out=timed_out,
+            terminated=terminated,
+            killed=killed,
+        )
+
     def _signal_owned_group(
         self, sig: signal.Signals | int, *, leader_may_have_exited: bool = False
     ) -> bool:

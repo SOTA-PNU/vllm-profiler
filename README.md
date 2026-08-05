@@ -47,6 +47,19 @@ hetero-profiler collect gpu \
   --command python3 -c "print('hello')"
 ```
 
+GPU Prefill–NPU Decode 통합 실행은 로컬 모델, RBLN cache와 두 vLLM 환경을
+미리 준비한 뒤 다음처럼 계획을 확인합니다. 설정 형식은
+[`examples/hybrid_config.json`](examples/hybrid_config.json)을 참고하세요.
+
+```bash
+hetero-profiler collect hybrid \
+  --config /absolute/path/hybrid-config.json \
+  --run-root /absolute/path/runs \
+  --run-id example-hybrid \
+  --profile-mode monitor \
+  --dry-run
+```
+
 성공한 normalized hybrid run을 Perfetto trace로 변환합니다.
 
 ```bash
@@ -93,9 +106,10 @@ RBLN NPU에서 vLLM 기반 Hybrid workload를 수집하려면 별도
 
 ## 지원 범위와 제한사항
 
-- `merge hybrid` CLI는 현재 synthetic source 검증용입니다. 실제
-  GPU-prefill/NPU-decode workload를 처음부터 실행하는 범용 runner는 제공하지
-  않습니다.
+- `collect hybrid`는 GPU Prefill, NPU Decode, package proxy, telemetry,
+  normalization, Perfetto와 외부 HTML Overview 생성을 한 실행으로 관리합니다.
+- `merge hybrid`는 별도의 normalized source 병합 검증 명령이며 실제 workload
+  runner가 아닙니다.
 - 상세 profiler는 한 run에 하나씩 수집합니다.
 - Native profiler clock은 근거가 허용하는 범위에서만 정렬합니다. RBLN
   native trace는 canonical anchor가 없으면 별도 timeline으로 유지합니다.

@@ -312,19 +312,20 @@ class HybridBundleMerger:
     ) -> tuple[ClockEstimate, bool, str | None]:
         method = self.config.alignment_method
         if method is AlignmentMethod.SAME_CLOCK_DOMAIN:
-            gpu_domains = {
-                (clock.host_id, clock.clock_domain_id)
-                for clock in gpu.clock_domains
-            }
-            npu_domains = {
-                (clock.host_id, clock.clock_domain_id)
-                for clock in npu.clock_domains
-            }
+            gpu_domains = self._record_clock_domains(gpu)
+            npu_domains = self._record_clock_domains(npu)
             if gpu_domains != npu_domains:
                 return (
                     same_clock_estimate(),
                     False,
-                    "same-clock-domain requires identical host_id/clock_domain_id sets",
+                    "same-clock-domain requires identical normalized-record "
+                    "host_id/clock_domain_id sets",
+                )
+            if not gpu_domains:
+                return (
+                    same_clock_estimate(),
+                    False,
+                    "same-clock-domain requires a shared monotonic normalized-record clock",
                 )
             return same_clock_estimate(), True, None
         transport = self.clock_transport
@@ -347,6 +348,28 @@ class HybridBundleMerger:
             return same_clock_estimate(), False, str(error)
         return estimate, True, None
 
+    @staticmethod
+    def _record_clock_ids(source: SourceBundle) -> set[str]:
+        return {
+            record.clock_domain_id
+            for record in (*source.events, *source.metrics)
+        }
+
+    def _record_clocks(self, source: SourceBundle) -> list[ClockDomain]:
+        referenced = self._record_clock_ids(source)
+        return [
+            clock
+            for clock in source.clock_domains
+            if clock.clock_domain_id in referenced
+            and clock.clock_type is ClockType.MONOTONIC
+        ]
+
+    def _record_clock_domains(self, source: SourceBundle) -> set[tuple[str, str]]:
+        return {
+            (clock.host_id, clock.clock_domain_id)
+            for clock in self._record_clocks(source)
+        }
+
     def _timestamp_transforms(
         self,
         source: SourceBundle,
@@ -367,7 +390,7 @@ class HybridBundleMerger:
                 available=available,
                 reason=reason,
             )
-            for clock in source.clock_domains
+            for clock in self._record_clocks(source)
         }
 
     def _clock_records(
@@ -417,6 +440,8 @@ class HybridBundleMerger:
                         },
                     )
                 )
+                if clock not in self._record_clocks(source):
+                    continue
                 transforms.append(
                     ClockTransform(
                         run_id=run_id,
@@ -438,13 +463,16 @@ class HybridBundleMerger:
         sync_points: list[SyncPoint] = []
         if estimate.samples:
             selected = estimate.samples[estimate.selected_index]
+            npu_record_clocks = self._record_clocks(npu)
+            if not npu_record_clocks:
+                return domains, sync_points, transforms
             sync_points.append(
                 SyncPoint(
                     run_id=run_id,
                     sync_point_id="npu-selected-probe",
                     source_clock_domain_id=canonical,
                     target_clock_domain_id=(
-                        f"npu:{npu.clock_domains[0].clock_domain_id}"
+                        f"npu:{npu_record_clocks[0].clock_domain_id}"
                     ),
                     source_timestamp_ns=(selected.t0_ns + selected.t3_ns) // 2,
                     target_timestamp_ns=(selected.t1_ns + selected.t2_ns) // 2,
@@ -544,6 +572,13 @@ class HybridBundleMerger:
                         },
                     )
                 )
+            metrics.extend(
+                self._transfer_metrics(
+                    result,
+                    by_name=by_name,
+                    alignment_accepted=alignment_accepted,
+                )
+            )
         joined_count = sum(
             result.status in {"joined", "partial"} for result in joins
         )
@@ -591,6 +626,163 @@ class HybridBundleMerger:
                 )
             )
         return metrics
+
+    def _transfer_metrics(
+        self,
+        result: JoinResult,
+        *,
+        by_name: dict[str, object],
+        alignment_accepted: bool,
+    ) -> list[MetricSample]:
+        """Derive transfer KPIs only from explicit paired marker evidence."""
+        start = by_name.get("kv_transfer_start")
+        end = by_name.get("kv_transfer_end")
+        request_start = by_name.get("request_received")
+        request_end = by_name.get("response_done")
+        transform_start = by_name.get("kv_transform_start")
+        transform_end = by_name.get("kv_transform_end")
+        event_values = [
+            event for event in (start, end, request_start, request_end)
+            if event is not None
+        ]
+        timestamp_ns = max(
+            (event.timestamp_ns for event in event_values), default=0
+        )
+        source_ids = (
+            [start.event_id, end.event_id]
+            if start is not None and end is not None
+            else None
+        )
+        reason: str | None = None
+        transfer_bytes: int | None = None
+        duration: int | None = None
+        if not alignment_accepted:
+            reason = "alignment uncertainty exceeds the accepted threshold"
+        elif start is None or end is None:
+            reason = "required KV transfer marker pair is unavailable"
+        elif end.timestamp_ns < start.timestamp_ns:
+            reason = "KV transfer marker order is reversed"
+        else:
+            duration = end.timestamp_ns - start.timestamp_ns
+            raw_start = start.attributes.get("kv.transfer_bytes")
+            raw_end = end.attributes.get("kv.transfer_bytes")
+            if (
+                isinstance(raw_start, int)
+                and not isinstance(raw_start, bool)
+                and raw_start >= 0
+                and raw_start == raw_end
+            ):
+                transfer_bytes = raw_start
+            else:
+                reason = "equal non-negative kv.transfer_bytes evidence is unavailable"
+
+        def metric(
+            name: str,
+            kind: MetricKind,
+            unit: str,
+            value: int | float | None,
+            unavailable_reason: str | None,
+            *,
+            ids: list[str] | None = source_ids,
+            origin: ValueOrigin = ValueOrigin.DERIVED,
+        ) -> MetricSample:
+            return MetricSample(
+                run_id=self.config.run_id,
+                metric_name=name,
+                metric_kind=kind,
+                scope=MetricScope.TRANSFER,
+                host_id=self.config.coordinator_host_id,
+                clock_domain_id=self.config.canonical_clock_domain_id,
+                timestamp_ns=timestamp_ns,
+                availability=(
+                    Availability.AVAILABLE
+                    if value is not None
+                    else Availability.NOT_AVAILABLE
+                ),
+                origin=origin,
+                unit=unit,
+                value=value,
+                request_id=result.request_id,
+                phase=Phase.KV_TRANSFER,
+                interval_ns=duration,
+                reason=None if value is not None else unavailable_reason,
+                source_event_ids=ids,
+                dimensions={"hybrid.join_method": result.join_method},
+                attributes={"hybrid.confidence": result.confidence},
+            )
+
+        duration_reason = (
+            reason
+            if duration is None
+            else None
+        )
+        bandwidth: float | None = None
+        bandwidth_reason: str | None = reason
+        if transfer_bytes is not None and duration is not None:
+            if duration == 0:
+                bandwidth_reason = "KV transfer duration is zero"
+            else:
+                bandwidth = transfer_bytes * 1_000_000_000 / duration
+                bandwidth_reason = None
+        e2e: int | None = None
+        if (
+            alignment_accepted
+            and request_start is not None
+            and request_end is not None
+            and request_end.timestamp_ns >= request_start.timestamp_ns
+        ):
+            e2e = request_end.timestamp_ns - request_start.timestamp_ns
+        share: float | None = None
+        share_reason = "E2E or transfer duration is unavailable"
+        if duration is not None and e2e is not None:
+            if e2e == 0:
+                share_reason = "E2E duration is zero"
+            elif duration > e2e:
+                share_reason = "transfer duration exceeds E2E duration"
+            else:
+                share = duration / e2e
+                share_reason = None
+        transform_duration: int | None = None
+        transform_reason = "required KV transform marker pair is unavailable"
+        transform_ids: list[str] | None = None
+        if (
+            alignment_accepted
+            and transform_start is not None
+            and transform_end is not None
+            and transform_end.timestamp_ns >= transform_start.timestamp_ns
+        ):
+            transform_duration = (
+                transform_end.timestamp_ns - transform_start.timestamp_ns
+            )
+            transform_reason = None
+            transform_ids = [transform_start.event_id, transform_end.event_id]
+        return [
+            metric(
+                "transfer.bytes", MetricKind.COUNT, "bytes", transfer_bytes,
+                reason, origin=ValueOrigin.MEASURED,
+            ),
+            metric(
+                "transfer.duration", MetricKind.DURATION, "ns", duration,
+                duration_reason,
+            ),
+            metric(
+                "transfer.effective_bandwidth", MetricKind.RATE, "bytes/s",
+                bandwidth, bandwidth_reason,
+            ),
+            metric(
+                "transfer.e2e_share", MetricKind.RATIO, "ratio", share,
+                share_reason,
+            ),
+            metric(
+                "transfer.transform_duration", MetricKind.DURATION, "ns",
+                transform_duration, transform_reason, ids=transform_ids,
+            ),
+            metric(
+                "transfer.wait_duration", MetricKind.DURATION, "ns", None,
+                "no explicit transfer-scoped wait interval marker is available",
+                ids=None,
+            ),
+        ]
 
     def _manifest(
         self,
@@ -656,6 +848,12 @@ class HybridBundleMerger:
                 "hybrid.alignment_offset_ns": estimate.offset_ns,
                 "hybrid.alignment_uncertainty_ns": estimate.uncertainty_ns,
                 "hybrid.status_reasons": list(reasons),
+                "hybrid.profiler_alignment_status": (
+                    "partial"
+                    if ProfileMode.DETAILED_PROFILE
+                    in {gpu.manifest.profile_mode, npu.manifest.profile_mode}
+                    else "not_applicable"
+                ),
             },
         )
 

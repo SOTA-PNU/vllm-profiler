@@ -10,7 +10,7 @@ reconciliation.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import os
@@ -27,10 +27,17 @@ from ..perfetto.artifacts import (
 from ..perfetto.converter import (
     CONVERSION_MANIFEST_NAME,
     OUTPUT_ROOT_ID as PERFETTO_ROOT_ID,
+    RBLN_NATIVE_TRACE_NAME,
+    RBLN_NATIVE_VALIDATION_NAME,
     TRACE_NAME,
     TRACE_VALIDATION_NAME,
 )
 from ..perfetto.loader import LoadedHybridRun
+from ..perfetto.native_details import (
+    augment_trace_plan,
+    build_native_detail_plan,
+    native_validation_metadata,
+)
 from ..perfetto.planner import PlanBuildResult, build_trace_plan
 from ..perfetto.tooling import ToolchainRuntime, resolve_toolchain
 from ..perfetto.timeline_summary import (
@@ -48,6 +55,13 @@ _EXPECTED_PERFETTO_FILES = frozenset(
         CONVERSION_MANIFEST_NAME,
         TRACE_NAME,
         TRACE_VALIDATION_NAME,
+    }
+)
+_EXPECTED_RBLN_PERFETTO_FILES = frozenset(
+    {
+        *_EXPECTED_PERFETTO_FILES,
+        RBLN_NATIVE_TRACE_NAME,
+        RBLN_NATIVE_VALIDATION_NAME,
     }
 )
 _JSON_VALUE = TypeVar("_JSON_VALUE")
@@ -237,11 +251,20 @@ def _exact_perfetto_files(root: Path) -> tuple[FileIdentity, ...]:
     except OSError as error:
         raise OverviewInputError("Perfetto directory cannot be enumerated") from error
     actual_names = {entry.name for entry in entries}
-    if actual_names != _EXPECTED_PERFETTO_FILES:
-        missing = sorted(_EXPECTED_PERFETTO_FILES - actual_names)
-        unexpected = sorted(actual_names - _EXPECTED_PERFETTO_FILES)
+    if actual_names not in {
+        _EXPECTED_PERFETTO_FILES,
+        _EXPECTED_RBLN_PERFETTO_FILES,
+    }:
+        expected = (
+            _EXPECTED_RBLN_PERFETTO_FILES
+            if RBLN_NATIVE_TRACE_NAME in actual_names
+            or RBLN_NATIVE_VALIDATION_NAME in actual_names
+            else _EXPECTED_PERFETTO_FILES
+        )
+        missing = sorted(expected - actual_names)
+        unexpected = sorted(actual_names - expected)
         raise OverviewInputError(
-            "Perfetto directory must contain exactly the published five files; "
+            "Perfetto directory must match exactly one supported file set; "
             f"missing={missing}, unexpected={unexpected}"
         )
     return tuple(
@@ -388,14 +411,35 @@ def _mapping_version(manifest: dict[str, Any]) -> str:
     return version
 
 
-def _expected_query_count(mapping_version: str) -> int:
+def _expected_query_count(
+    mapping_version: str,
+    manifest: dict[str, Any] | None = None,
+) -> int:
     if mapping_version == LEGACY_MAPPING_VERSION:
-        return 10
-    if mapping_version == TIMELINE_SUMMARY_MAPPING_VERSION:
-        return 15
-    raise OverviewInputError(
-        f"unsupported Perfetto trace mapping version: {mapping_version!r}"
-    )
+        base = 10
+    elif mapping_version == TIMELINE_SUMMARY_MAPPING_VERSION:
+        base = 15
+    else:
+        raise OverviewInputError(
+            f"unsupported Perfetto trace mapping version: {mapping_version!r}"
+        )
+    if manifest is None:
+        return base
+    counts = manifest.get("counts")
+    if not isinstance(counts, dict):
+        raise OverviewInputError("Perfetto conversion counts are invalid")
+    native_count = 0
+    for field in ("native_detail_slice_count", "native_detail_instant_count"):
+        value = counts.get(field, 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise OverviewInputError(
+                f"Perfetto conversion {field} is invalid"
+            )
+        native_count += value
+    # Trace validation adds exactly one native-event semantics query whenever
+    # converted native slices or instants are present. RBLN's separate,
+    # unaligned trace does not change the canonical trace query inventory.
+    return base + int(native_count > 0)
 
 
 def _require_manifest_match(
@@ -447,7 +491,7 @@ def _require_manifest_match(
         or trace_validation.get("valid") is not True
         or trace_validation.get("mismatches") != []
         or trace_validation.get("query_count")
-        != _expected_query_count(mapping_version)
+        != _expected_query_count(mapping_version, manifest)
     ):
         raise OverviewInputError(
             "Perfetto conversion trace-validation summary is invalid"
@@ -488,7 +532,7 @@ def _require_stored_trace_validation(
     mapping_version = _mapping_version(manifest)
     if (
         not isinstance(queries, list)
-        or len(queries) != _expected_query_count(mapping_version)
+        or len(queries) != _expected_query_count(mapping_version, manifest)
         or any(
             not isinstance(query, dict) or query.get("matched") is not True
             for query in queries
@@ -565,11 +609,24 @@ def load_matching_perfetto(
             else None
         ),
     )
+    native = None
+    if "native_details" in stored_validation:
+        native = build_native_detail_plan(loaded, planning.plan)
+        if native.summaries:
+            planning = replace(
+                planning,
+                plan=augment_trace_plan(planning.plan, native),
+            )
     fresh_validation = validate_trace(
         planning.plan,
         root / TRACE_NAME,
         toolchain=toolchain,
     )
+    if native is not None:
+        fresh_validation["native_details"] = native_validation_metadata(
+            planning.plan,
+            native,
+        )
     if fresh_validation != stored_validation:
         raise OverviewInputError(
             "fresh official Trace Processor result differs from stored Phase 5 "

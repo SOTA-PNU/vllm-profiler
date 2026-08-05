@@ -88,6 +88,7 @@ def build_overview_validation(
     expected_total_counters = (
         plan.metadata.available_resource_metric_count + expected_kpi_counters
     )
+    expected_total_flows = len(plan.plan.flows)
     actual_kpi_counters = counts.get("timeline_summary_kpis", 0)
     actual_total_counters = counts.get("counters")
     actual_resource_counters = (
@@ -104,7 +105,7 @@ def build_overview_validation(
         mismatches.append("Perfetto total counter count differs")
     if actual_resource_counters != plan.metadata.available_resource_metric_count:
         mismatches.append("Perfetto resource counter count differs")
-    if counts.get("flows") != plan.metadata.emitted_flow_count:
+    if counts.get("flows") != expected_total_flows:
         mismatches.append("Perfetto flow count differs")
     if counts.get("dangling_flows") != 0:
         mismatches.append("Perfetto contains dangling flows")
@@ -171,11 +172,11 @@ def build_overview_validation(
             ),
         },
         "flow_reconciliation": {
-            "expected": plan.metadata.emitted_flow_count,
+            "expected": expected_total_flows,
             "actual": counts.get("flows"),
             "dangling": counts.get("dangling_flows"),
             "matched": (
-                counts.get("flows") == plan.metadata.emitted_flow_count
+                counts.get("flows") == expected_total_flows
                 and counts.get("dangling_flows") == 0
             ),
         },

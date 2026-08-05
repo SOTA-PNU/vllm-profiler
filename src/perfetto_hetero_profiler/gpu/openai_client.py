@@ -56,6 +56,9 @@ class OpenAICompletionClient:
         self.monotonic_ns = monotonic_ns
         self.opener = opener
 
+    def close(self) -> None:
+        """Close client-owned resources (none for the stdlib implementation)."""
+
     def complete(
         self,
         *,
@@ -63,28 +66,35 @@ class OpenAICompletionClient:
         request_id: str,
         prompt: str,
         max_output_tokens: int,
+        temperature: float = 0,
+        stream: bool = True,
     ) -> CompletionObservation:
         if not request_id:
             raise ValueError("request_id must not be empty")
         if not 1 <= max_output_tokens <= 16:
             raise ValueError("max_output_tokens must be in [1, 16]")
-        body = json.dumps(
-            {
-                "model": model,
-                "prompt": prompt,
-                "max_tokens": max_output_tokens,
-                "temperature": 0,
-                "stream": True,
-                "stream_options": {"include_usage": True},
-                "request_id": request_id,
-                "return_token_ids": True,
-            }
-        ).encode("utf-8")
+        if isinstance(temperature, bool) or not 0 <= temperature <= 2:
+            raise ValueError("temperature must be in [0, 2]")
+        request_body = {
+            "model": model,
+            "prompt": prompt,
+            "max_tokens": max_output_tokens,
+            "temperature": temperature,
+            "stream": stream,
+            "request_id": request_id,
+            "return_token_ids": True,
+        }
+        if stream:
+            request_body["stream_options"] = {"include_usage": True}
+        body = json.dumps(request_body).encode("utf-8")
         request = Request(
             f"{self.base_url}/v1/completions",
             data=body,
             method="POST",
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "X-Request-Id": request_id,
+            },
         )
         received_ns = self.monotonic_ns()
         token_timestamps: list[int] = []
@@ -95,37 +105,54 @@ class OpenAICompletionClient:
                 status = int(response.status)
                 if status != 200:
                     raise RuntimeError(f"completion returned HTTP {status}")
-                for raw_line in response:
-                    line = raw_line.decode("utf-8", errors="strict").strip()
-                    if not line.startswith("data:"):
-                        continue
-                    payload = line[5:].strip()
-                    arrival_ns = self.monotonic_ns()
-                    if payload == "[DONE]":
-                        done_ns = arrival_ns
-                        break
-                    chunk = json.loads(payload)
-                    if "error" in chunk:
-                        raise RuntimeError(f"completion stream error: {chunk['error']}")
-                    chunk_usage = chunk.get("usage")
-                    if chunk_usage:
+                if stream:
+                    for raw_line in response:
+                        line = raw_line.decode("utf-8", errors="strict").strip()
+                        if not line.startswith("data:"):
+                            continue
+                        payload = line[5:].strip()
+                        arrival_ns = self.monotonic_ns()
+                        if payload == "[DONE]":
+                            done_ns = arrival_ns
+                            break
+                        chunk = json.loads(payload)
+                        if "error" in chunk:
+                            raise RuntimeError(f"completion stream error: {chunk['error']}")
+                        chunk_usage = chunk.get("usage")
+                        if chunk_usage:
+                            usage = {
+                                "prompt_tokens": int(chunk_usage["prompt_tokens"]),
+                                "completion_tokens": int(
+                                    chunk_usage["completion_tokens"]
+                                ),
+                                "total_tokens": int(chunk_usage["total_tokens"]),
+                            }
+                        for choice in chunk.get("choices", ()):
+                            token_ids = choice.get("token_ids") or ()
+                            token_timestamps.extend(arrival_ns for _ in token_ids)
+                else:
+                    document = json.loads(response.read())
+                    if "error" in document:
+                        raise RuntimeError(
+                            f"completion response error: {document['error']}"
+                        )
+                    raw_usage = document.get("usage")
+                    if raw_usage:
                         usage = {
-                            "prompt_tokens": int(chunk_usage["prompt_tokens"]),
-                            "completion_tokens": int(
-                                chunk_usage["completion_tokens"]
-                            ),
-                            "total_tokens": int(chunk_usage["total_tokens"]),
+                            "prompt_tokens": int(raw_usage["prompt_tokens"]),
+                            "completion_tokens": int(raw_usage["completion_tokens"]),
+                            "total_tokens": int(raw_usage["total_tokens"]),
                         }
-                    for choice in chunk.get("choices", ()):
-                        token_ids = choice.get("token_ids") or ()
-                        token_timestamps.extend(arrival_ns for _ in token_ids)
+                    done_ns = self.monotonic_ns()
         except (HTTPError, URLError, TimeoutError, UnicodeError, json.JSONDecodeError) as error:
             raise RuntimeError(f"completion request failed: {error}") from error
-        if done_ns is None:
+        if stream and done_ns is None:
             raise RuntimeError("completion stream ended without [DONE]")
+        if done_ns is None:  # pragma: no cover - defensive non-stream boundary
+            raise RuntimeError("completion response did not finish")
         if usage is None:
             raise RuntimeError("completion stream did not include exact usage")
-        if usage["completion_tokens"] != len(token_timestamps):
+        if stream and usage["completion_tokens"] != len(token_timestamps):
             raise RuntimeError(
                 "completion usage does not match streamed token_ids "
                 f"({usage['completion_tokens']} != {len(token_timestamps)})"

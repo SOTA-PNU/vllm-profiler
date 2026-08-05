@@ -17,6 +17,8 @@ from perfetto_hetero_profiler.hybrid import (
 )
 from perfetto_hetero_profiler.schema import (
     Availability,
+    ClockDomain,
+    ClockType,
     DeviceType,
     MetricSample,
     RunPaths,
@@ -49,6 +51,8 @@ class HybridCase:
         gpu_markers=GPU_MARKERS,
         npu_markers=NPU_MARKERS,
         npu_times=None,
+        gpu_marker_attributes=None,
+        npu_marker_attributes=None,
         include_artifact=False,
     ):
         root = Path(directory)
@@ -70,6 +74,7 @@ class HybridCase:
             clock_domain_id=clock_gpu,
             markers=gpu_markers,
             timestamps=gpu_times,
+            marker_attributes=gpu_marker_attributes,
             include_artifact=include_artifact,
         )
         self.npu = build_source_bundle(
@@ -79,6 +84,7 @@ class HybridCase:
             clock_domain_id=clock_npu,
             markers=npu_markers,
             timestamps=npu_times,
+            marker_attributes=npu_marker_attributes,
             include_artifact=include_artifact,
         )
         self.output_root = root / "hybrid-runs"
@@ -159,6 +165,43 @@ class HybridBundleTests(unittest.TestCase):
             result = HybridBundleMerger(merge_config(case)).merge()
             self.assertIs(result.status, RunStatus.SUCCEEDED)
             self.assertEqual(result.joined_request_count, 1)
+
+    def test_unaligned_native_clock_is_preserved_without_transform(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = HybridCase(directory)
+            gpu_paths = RunPaths(case.gpu.parent, case.gpu.name)
+            gpu_clocks = read_jsonl(gpu_paths.clock_domains)
+            gpu_clocks.append(
+                ClockDomain(
+                    run_id=case.gpu.name,
+                    clock_domain_id="torch-native",
+                    host_id="host-0",
+                    clock_type=ClockType.EXTERNAL,
+                    unit="ns",
+                    monotonic=False,
+                    adjustable=False,
+                    attributes={
+                        "profiler.alignment_status": "partial",
+                        "profiler.unaligned": True,
+                    },
+                )
+            )
+            write_jsonl(gpu_paths.clock_domains, gpu_clocks, overwrite=True)
+
+            result = HybridBundleMerger(merge_config(case)).merge()
+
+            self.assertIs(result.status, RunStatus.SUCCEEDED)
+            clocks = read_jsonl(case.output / "clocks/clock_domains.jsonl")
+            self.assertIn(
+                "gpu:torch-native",
+                {clock.clock_domain_id for clock in clocks},
+            )
+            transforms = read_jsonl(case.output / "clocks/transforms.jsonl")
+            self.assertEqual(len(transforms), 2)
+            self.assertNotIn(
+                "gpu:torch-native",
+                {transform.source_clock_domain_id for transform in transforms},
+            )
 
     def test_same_host_different_clock_is_not_same_clock(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -263,6 +306,51 @@ class HybridBundleTests(unittest.TestCase):
                 "latency.sampling",
             ):
                 self.assertIs(latency[name].availability, Availability.AVAILABLE)
+
+    def test_transfer_metrics_require_and_use_explicit_byte_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            attributes = {
+                "kv_transfer_start": {"kv.transfer_bytes": 58_720_256},
+                "kv_transfer_end": {"kv.transfer_bytes": 58_720_256},
+            }
+            case = HybridCase(directory, gpu_marker_attributes=attributes)
+            HybridBundleMerger(merge_config(case)).merge()
+            metrics = {
+                row.metric_name: row
+                for row in read_jsonl(case.output / "metrics/metrics.jsonl")
+                if isinstance(row, MetricSample)
+                and row.metric_name.startswith("transfer.")
+                and row.request_id == "request-1"
+            }
+            self.assertEqual(metrics["transfer.bytes"].value, 58_720_256)
+            self.assertEqual(metrics["transfer.duration"].value, 100_000)
+            self.assertEqual(
+                metrics["transfer.effective_bandwidth"].value,
+                587_202_560_000,
+            )
+            self.assertAlmostEqual(metrics["transfer.e2e_share"].value, 1 / 15)
+            self.assertIs(
+                metrics["transfer.wait_duration"].availability,
+                Availability.NOT_AVAILABLE,
+            )
+
+    def test_transfer_bytes_are_unavailable_without_matching_pair(self):
+        with tempfile.TemporaryDirectory() as directory:
+            attributes = {
+                "kv_transfer_start": {"kv.transfer_bytes": 64},
+                "kv_transfer_end": {"kv.transfer_bytes": 32},
+            }
+            case = HybridCase(directory, gpu_marker_attributes=attributes)
+            HybridBundleMerger(merge_config(case)).merge()
+            metrics = read_jsonl(case.output / "metrics/metrics.jsonl")
+            transfer_bytes = next(
+                row for row in metrics if row.metric_name == "transfer.bytes"
+            )
+            self.assertIs(
+                transfer_bytes.availability,
+                Availability.NOT_AVAILABLE,
+            )
+            self.assertIn("equal non-negative", transfer_bytes.reason)
 
     def test_missing_marker_is_partial_and_metric_unavailable(self):
         with tempfile.TemporaryDirectory() as directory:

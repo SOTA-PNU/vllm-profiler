@@ -31,6 +31,7 @@ binary를 `--trace-processor`로 명시하세요.
 | `hetero-profiler collect gpu-vllm` | 로컬 vLLM request와 GPU telemetry 수집 |
 | `hetero-profiler collect npu` | child command와 RBLN NPU/host telemetry 수집 |
 | `hetero-profiler collect npu-runtime` | compiled RBLN artifact의 runtime 수집 |
+| `hetero-profiler collect hybrid` | GPU Prefill–NPU Decode 통합 실행과 결과 생성 |
 | `hetero-profiler merge hybrid` | synthetic GPU/NPU source 병합 검증 |
 | `hetero-profiler convert perfetto` | normalized hybrid run을 Perfetto로 변환 |
 | `hetero-profiler overview generate` | 단일 run의 JSON/HTML 리포트 생성 |
@@ -134,11 +135,70 @@ hetero-profiler collect npu-runtime \
 사용합니다. Token stream이 없는 workload에서는 TTFT와 TPOT가
 `not_available`일 수 있습니다.
 
-## Hybrid source
+## GPU Prefill–NPU Decode 통합 실행
 
-현재 `merge hybrid` 명령은 clock alignment와 request join을 테스트하는
-synthetic source 전용입니다. 실제 GPU-prefill/NPU-decode workload runner가
-아닙니다.
+`collect hybrid`는 세 child process를 모두 package 코드로 시작하고 소유합니다.
+설정은 절대 경로를 사용하며 출력은 반드시 새 run ID여야 합니다. 먼저 제공된
+[`hybrid_config.json`](../examples/hybrid_config.json)을 복사해 로컬 model,
+cache, vLLM Python 환경과 Perfetto/Nsight 경로를 수정합니다.
+
+```bash
+hetero-profiler collect hybrid \
+  --config /absolute/path/hybrid-config.json \
+  --run-root /absolute/path/runs \
+  --run-id manual-hybrid-01 \
+  --profile-mode monitor \
+  --dry-run
+```
+
+`--dry-run`을 제거하면 readiness, telemetry, warm-up, 측정, normalization,
+Perfetto 변환과 외부 HTML Overview 생성을 순서대로 수행합니다. `--prompt`,
+`--prompt-file`, `--warmup-requests`, `--measured-requests`,
+`--max-output-tokens`으로 workload 일부를 덮어쓸 수 있습니다. Prompt와 생성
+텍스트는 결과에 저장하지 않습니다.
+
+Profile mode는 다음 중 하나만 선택할 수 있습니다.
+
+| Mode | 상세 수집 대상 |
+| --- | --- |
+| `monitor` | canonical marker와 CPU/GPU/NPU/memory telemetry |
+| `gpu-torch` | GPU Prefill의 PyTorch/Kineto trace |
+| `gpu-nsys` | GPU Prefill의 Nsight report와 공식 SQLite export |
+| `npu-torch` | NPU Decode server의 host-side PyTorch/ATen trace |
+| `npu-rbln` | RBLN device Perfetto PB aggregate와 shard |
+
+한 실행에서 profiler 하나만 켜는 이유는 profiler끼리 lifecycle과 장치 상태를
+간섭시키지 않고 각 capture의 overhead와 provenance를 분리하기 위해서입니다.
+NPU Torch는 NPU 내부 실행 시간이 아니라 Decode server의 host-side 활동입니다.
+
+기존 immutable-source 정책 때문에 결과는 sibling 디렉터리로 분리됩니다.
+
+```text
+runs/<run-id>/              normalized hybrid bundle
+runs/<run-id>-gpu/          immutable GPU source and raw capture
+runs/<run-id>-npu/          immutable NPU source and raw capture
+runs/<run-id>-coordinator/  server logs, cleanup and validation evidence
+runs/<run-id>-perfetto/     trace.pftrace and detached validation
+runs/<run-id>-perfetto-request-focused/ presentation trace bundle
+runs/<run-id>-overview/     external overview.json and overview.html
+runs/<run-id>-closeout-recovery/ detached immutable-input manifest
+runs/<run-id>-publication/  overall result and determinism evidence
+```
+
+실패 원인은 `<run-id>-coordinator/result.json`과 `raw/*.stderr.log`에서
+확인합니다. Runner는 leader의 정상 종료를 먼저 요청하고, 필요할 때만 자신이
+만든 process group을 단계적으로 정리합니다. 기존 서버나 다른 사용자 process는
+종료하지 않습니다.
+
+RBLN PB는 공식 Perfetto trace이지만 canonical `CLOCK_MONOTONIC` anchor가 없는
+경우 `trace.rbln-native.pftrace`로 분리됩니다. Relative timestamp를 임의로
+Hybrid timeline에 이동하지 않습니다. HTML Overview는 Perfetto UI plugin이
+아닌 독립적인 결과 화면입니다. 한 번의 smoke 실행은 benchmark가 아닙니다.
+
+## Hybrid source 병합
+
+`merge hybrid` 명령은 clock alignment와 request join을 테스트하는 synthetic
+source용 저수준 명령입니다. 실제 실행에는 위의 `collect hybrid`를 사용합니다.
 
 ```bash
 hetero-profiler merge hybrid \

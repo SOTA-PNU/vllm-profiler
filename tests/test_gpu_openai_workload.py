@@ -101,6 +101,53 @@ class CompletionClientTests(unittest.TestCase):
         self.assertTrue(body["stream"])
         self.assertTrue(body["stream_options"]["include_usage"])
         self.assertTrue(body["return_token_ids"])
+        self.assertEqual(captured["request"].get_header("X-request-id"), "request-1")
+
+    def test_configurable_temperature_preserves_stream_contract(self) -> None:
+        client, captured = self.client(
+            self.good_chunks(), [100, 120, 150, 170, 190]
+        )
+        client.complete(
+            model="m", request_id="r", prompt="p", max_output_tokens=8,
+            temperature=0.25, stream=True,
+        )
+        self.assertEqual(json.loads(captured["request"].data)["temperature"], 0.25)
+
+    def test_non_streaming_has_no_fabricated_token_timestamps(self) -> None:
+        body = json.dumps(
+            {
+                "choices": [{"text": "answer", "token_ids": [1, 2]}],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 2,
+                    "total_tokens": 3,
+                },
+            }
+        ).encode()
+
+        class NonStreamingResponse(FakeResponse):
+            def read(self):
+                return body
+
+        captured = {}
+
+        def opener(request, timeout):
+            captured["request"] = request
+            return NonStreamingResponse([])
+
+        client = OpenAICompletionClient(
+            "http://127.0.0.1:1", timeout_sec=1,
+            monotonic_ns=iter([10, 20]).__next__, opener=opener,
+        )
+        result = client.complete(
+            model="m", request_id="r", prompt="p", max_output_tokens=2,
+            stream=False,
+        )
+        self.assertEqual(result.output_tokens, 2)
+        self.assertEqual(result.token_timestamps_ns, ())
+        self.assertIsNone(result.ttft_ns)
+        self.assertIsNone(result.tpot_ns)
+        self.assertNotIn("stream_options", json.loads(captured["request"].data))
 
     def test_rejects_missing_usage(self) -> None:
         client, _ = self.client([sse("[DONE]")], [1, 2])
