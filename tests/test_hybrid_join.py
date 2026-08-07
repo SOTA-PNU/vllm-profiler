@@ -6,6 +6,7 @@ from perfetto_hetero_profiler.hybrid.join import (
     ITERATION_MARKERS,
     MARKER_ORDER,
     join_requests,
+    validate_marker_groups,
     validate_marker_order,
 )
 from perfetto_hetero_profiler.schema import DeviceType
@@ -69,6 +70,41 @@ class MarkerValidationTests(unittest.TestCase):
     def test_full_contract_is_valid(self):
         result = validate_marker_order(rows(MARKER_ORDER))
         self.assertEqual(result.status, "valid")
+
+    def test_two_correlated_request_contracts_are_not_duplicates(self):
+        source = rows(
+            MARKER_ORDER,
+            request_id="request-1",
+            attributes={"hybrid.correlation_id": "request-1"},
+        )
+        source.extend(
+            rows(
+                MARKER_ORDER,
+                request_id="request-2",
+                start=1000,
+                role="npu",
+                attributes={"hybrid.correlation_id": "request-2"},
+            )
+        )
+        result = validate_marker_groups(source)
+        self.assertEqual(result.status, "valid")
+        self.assertFalse(result.duplicate_markers)
+
+    def test_group_validation_accepts_legacy_single_uncorrelated_contract(self):
+        result = validate_marker_groups(rows(MARKER_ORDER))
+        self.assertEqual(result.status, "valid")
+
+    def test_group_validation_rejects_mixed_correlation_contract(self):
+        source = rows(
+            MARKER_ORDER,
+            attributes={"hybrid.correlation_id": "request-1"},
+        )
+        source[0].attributes.pop("hybrid.correlation_id")
+        result = validate_marker_groups(source)
+        self.assertEqual(result.status, "invalid")
+        self.assertTrue(
+            any("correlation_id" in issue for issue in result.pairing_issues)
+        )
 
     def test_missing_marker_is_partial(self):
         result = validate_marker_order(

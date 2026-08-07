@@ -32,6 +32,7 @@ from .join import (
     OrderingIssue,
     join_requests,
     validate_marker_order,
+    validate_marker_groups,
 )
 from .runtime_markers import (
     CANONICAL_MARKER_PHASES,
@@ -103,4 +104,5 @@ __all__ = [
     "validate_hybrid_records",
     "validate_hybrid_invocation",
     "validate_marker_order",
+    "validate_marker_groups",
 ]

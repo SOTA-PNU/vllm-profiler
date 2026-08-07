@@ -286,6 +286,75 @@ def _section_by_name(result: dict[str, object], section: str) -> dict[str, dict]
     return {item["name"]: item for item in result[section]}
 
 
+def _two_request_fixture() -> SimpleNamespace:
+    loaded = _fixture()
+    duplicate_events = []
+    for event in loaded.events:
+        attributes = dict(event.attributes)
+        attributes["hybrid.correlation_id"] = "correlation-2"
+        if "hybrid.transfer_id" in attributes:
+            attributes["hybrid.transfer_id"] = "transfer-2"
+        if "proxy.client_request_id_hash" in attributes:
+            attributes["proxy.client_request_id_hash"] = "explicit-hash-2"
+        duplicate_events.append(
+            replace(
+                event,
+                event_id=f"{event.event_id}-request-2",
+                timestamp_ns=event.timestamp_ns + 200,
+                request_id="correlation-2",
+                attributes=attributes,
+            )
+        )
+
+    run_names = {
+        "request.count",
+        "throughput.requests",
+        "throughput.input_tokens",
+        "throughput.output_tokens",
+        "throughput.total_tokens",
+    }
+    interval_ns = 220
+    interval_seconds = interval_ns / 1_000_000_000
+    run_values = {
+        "request.count": 2,
+        "throughput.requests": 2 / interval_seconds,
+        "throughput.input_tokens": 6 / interval_seconds,
+        "throughput.output_tokens": 4 / interval_seconds,
+        "throughput.total_tokens": 10 / interval_seconds,
+    }
+    metrics = []
+    for metric in loaded.metrics:
+        if metric.metric_name in run_names and metric.request_id is None:
+            metrics.append(
+                replace(
+                    metric,
+                    value=run_values[metric.metric_name],
+                    interval_ns=interval_ns,
+                )
+            )
+            continue
+        metrics.append(metric)
+        if metric.request_id is not None:
+            metrics.append(
+                replace(
+                    metric,
+                    request_id=(
+                        "client-m02"
+                        if metric.request_id == CLIENT_REQUEST_ID
+                        else "correlation-2"
+                    ),
+                    timestamp_ns=metric.timestamp_ns + 200,
+                )
+            )
+    return SimpleNamespace(
+        **{
+            **loaded.__dict__,
+            "events": tuple((*loaded.events, *duplicate_events)),
+            "metrics": tuple(metrics),
+        }
+    )
+
+
 class OverviewCalculationTests(unittest.TestCase):
     def test_complete_fixture_uses_distinct_observation_layers(self) -> None:
         result = calculate_overview_kpis(_fixture())
@@ -328,6 +397,28 @@ class OverviewCalculationTests(unittest.TestCase):
         self.assertEqual(
             transfer["transfer.wait_duration"]["availability"], "not_available"
         )
+
+    def test_multiple_requests_use_explicit_run_aggregates(self) -> None:
+        result = calculate_overview_kpis(_two_request_fixture())
+        request = _section_by_name(result, "request_facing_latency")
+        pipeline = _section_by_name(result, "pipeline_latency")
+        throughput = _section_by_name(result, "throughput_and_tokens")
+        transfer = _section_by_name(result, "transfer")
+
+        self.assertEqual(request["latency.e2e"]["value"], 110)
+        self.assertEqual(request["latency.e2e"]["scope"]["scope_type"], "run")
+        self.assertEqual(
+            request["latency.e2e"]["aggregation_method"],
+            "arithmetic_mean_across_measured_requests_v1",
+        )
+        self.assertEqual(pipeline["latency.sampling"]["value"], 8)
+        self.assertEqual(throughput["request.count"]["value"], 2)
+        self.assertEqual(throughput["request.input_tokens"]["value"], 6)
+        self.assertEqual(throughput["request.output_tokens"]["value"], 4)
+        self.assertEqual(throughput["request.total_tokens"]["value"], 10)
+        self.assertEqual(transfer["transfer.bytes"]["availability"], "not_available")
+        self.assertEqual(transfer["transfer.duration"]["value"], 10)
+        self.assertEqual(transfer["transfer.duration"]["scope"]["scope_type"], "run")
 
         required = {
             "name",

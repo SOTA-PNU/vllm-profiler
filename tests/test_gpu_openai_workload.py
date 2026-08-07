@@ -76,7 +76,9 @@ class CompletionClientTests(unittest.TestCase):
         ]
 
     def test_stream_observation_uses_exact_token_ids(self) -> None:
-        client, _ = self.client(self.good_chunks(), [100, 120, 150, 170, 190])
+        client, _ = self.client(
+            self.good_chunks(), [100, 110, 120, 150, 170, 190]
+        )
         observation = client.complete(
             model="/models/qwen",
             request_id="request-1",
@@ -86,10 +88,11 @@ class CompletionClientTests(unittest.TestCase):
         self.assertEqual(observation.token_timestamps_ns, (120, 150, 150))
         self.assertEqual(observation.output_tokens, 3)
         self.assertEqual(observation.done_ns, 190)
+        self.assertEqual(observation.response_started_ns, 110)
 
     def test_request_enables_stream_usage_and_token_ids(self) -> None:
         client, captured = self.client(
-            self.good_chunks(), [100, 120, 150, 170, 190]
+            self.good_chunks(), [100, 110, 120, 150, 170, 190]
         )
         client.complete(
             model="/models/qwen",
@@ -105,7 +108,7 @@ class CompletionClientTests(unittest.TestCase):
 
     def test_configurable_temperature_preserves_stream_contract(self) -> None:
         client, captured = self.client(
-            self.good_chunks(), [100, 120, 150, 170, 190]
+            self.good_chunks(), [100, 110, 120, 150, 170, 190]
         )
         client.complete(
             model="m", request_id="r", prompt="p", max_output_tokens=8,
@@ -137,7 +140,7 @@ class CompletionClientTests(unittest.TestCase):
 
         client = OpenAICompletionClient(
             "http://127.0.0.1:1", timeout_sec=1,
-            monotonic_ns=iter([10, 20]).__next__, opener=opener,
+            monotonic_ns=iter([10, 15, 20]).__next__, opener=opener,
         )
         result = client.complete(
             model="m", request_id="r", prompt="p", max_output_tokens=2,
@@ -147,10 +150,11 @@ class CompletionClientTests(unittest.TestCase):
         self.assertEqual(result.token_timestamps_ns, ())
         self.assertIsNone(result.ttft_ns)
         self.assertIsNone(result.tpot_ns)
+        self.assertEqual(result.response_started_ns, 15)
         self.assertNotIn("stream_options", json.loads(captured["request"].data))
 
     def test_rejects_missing_usage(self) -> None:
-        client, _ = self.client([sse("[DONE]")], [1, 2])
+        client, _ = self.client([sse("[DONE]")], [1, 2, 3])
         with self.assertRaisesRegex(RuntimeError, "exact usage"):
             client.complete(
                 model="m", request_id="r", prompt="p", max_output_tokens=1
@@ -169,7 +173,7 @@ class CompletionClientTests(unittest.TestCase):
                 }
             )
         ]
-        client, _ = self.client(chunks, [1, 2])
+        client, _ = self.client(chunks, [1, 2, 3])
         with self.assertRaisesRegex(RuntimeError, "without \\[DONE\\]"):
             client.complete(
                 model="m", request_id="r", prompt="p", max_output_tokens=1
@@ -190,7 +194,7 @@ class CompletionClientTests(unittest.TestCase):
             ),
             sse("[DONE]"),
         ]
-        client, _ = self.client(chunks, [1, 2, 3, 4])
+        client, _ = self.client(chunks, [1, 2, 3, 4, 5])
         with self.assertRaisesRegex(RuntimeError, "does not match"):
             client.complete(
                 model="m", request_id="r", prompt="p", max_output_tokens=1

@@ -36,6 +36,7 @@ binary를 `--trace-processor`로 명시하세요.
 | `hetero-profiler convert perfetto` | normalized hybrid run을 Perfetto로 변환 |
 | `hetero-profiler overview generate` | 단일 run의 JSON/HTML 리포트 생성 |
 | `hetero-profiler overview compare` | 여러 Overview 비교 |
+| `hetero-profiler phase7` | 고정 Hybrid 조건의 정확도·반복성·측정 부하 검증 |
 
 실행 전 `--dry-run`으로 경로와 child command를 확인하는 것을 권장합니다.
 
@@ -194,6 +195,64 @@ RBLN PB는 공식 Perfetto trace이지만 canonical `CLOCK_MONOTONIC` anchor가 
 경우 `trace.rbln-native.pftrace`로 분리됩니다. Relative timestamp를 임의로
 Hybrid timeline에 이동하지 않습니다. HTML Overview는 Perfetto UI plugin이
 아닌 독립적인 결과 화면입니다. 한 번의 smoke 실행은 benchmark가 아닙니다.
+
+## Phase 7B 프로파일러 검증
+
+`phase7`은 `collect hybrid`를 반복 호출해 프로파일러 자체의 정확도, 반복성,
+측정 부하를 검증합니다. 설정 예시는
+[`phase7b_config.json`](../examples/phase7b_config.json)입니다. 먼저 고정
+Hybrid 설정을 준비하고 그 파일의 SHA-256을 Phase 7B 설정에 기록합니다.
+
+```bash
+sha256sum /absolute/path/hybrid-config.json
+
+hetero-profiler phase7 run \
+  --config /absolute/path/phase7b-config.json \
+  --experiment-root /absolute/path/phase7b-experiment \
+  --dry-run
+```
+
+`--dry-run`은 파일, 서버, 포트를 사용하지 않고 36개 logical trial과 최대 42개
+hardware attempt 계획만 출력합니다. 실제 실행은 `--dry-run`을 제거합니다.
+중단된 실험은 같은 설정과 출력 경로로 재개합니다.
+
+```bash
+hetero-profiler phase7 run \
+  --config /absolute/path/phase7b-config.json \
+  --experiment-root /absolute/path/phase7b-experiment \
+  --resume
+
+hetero-profiler phase7 status \
+  --experiment-root /absolute/path/phase7b-experiment
+
+hetero-profiler phase7 validate \
+  --experiment-root /absolute/path/phase7b-experiment
+
+hetero-profiler phase7 report \
+  --experiment-root /absolute/path/phase7b-experiment
+```
+
+이미 게시된 experiment report를 보존하면서 report 집계 코드를 다시 적용하려면
+겹치지 않는 새 출력 경로를 지정합니다. 이 명령은 source trial을 읽기 전용으로
+사용하고 report, limitations, source provenance와 detached manifest만 게시합니다.
+
+```bash
+hetero-profiler phase7 report \
+  --experiment-root /absolute/path/phase7b-experiment \
+  --output-root /absolute/path/phase7b-report
+```
+
+실험 조건은 `reference`, `monitor`, `gpu_torch`, `gpu_nsys`, `npu_torch`,
+`npu_rbln`입니다. Reference는 resource collector와 상세 profiler를 끄지만 현재
+runtime marker emission은 남으므로 완전한 무계측 기준이 아닙니다. 각 조건은
+pilot 1회와 formal 5회로 실행되고, pilot은 formal 통계에서 제외됩니다.
+
+독립 streaming client의 `CLOCK_MONOTONIC_NS` 원본 경계로 E2E, TTFT, TPOT를
+재계산하며 요청·토큰·marker는 정확히 대조합니다. Formal 결과에는 표본
+표준편차(`n-1`), CV, MAD, p50, p95와 같은 round의 paired overhead가
+포함됩니다. `report.html`은 Perfetto 내장 Overview가 아닌 독립 결과
+dashboard입니다. 5회 formal 반복과 단일 모델·고정 partition 결과를 일반적인
+benchmark 또는 하드웨어 우열로 해석하면 안 됩니다.
 
 ## Hybrid source 병합
 

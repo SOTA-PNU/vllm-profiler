@@ -20,6 +20,7 @@ class CompletionObservation:
     output_tokens: int
     total_tokens: int
     http_status: int
+    response_started_ns: int | None = None
 
     @property
     def e2e_ns(self) -> int:
@@ -100,8 +101,10 @@ class OpenAICompletionClient:
         token_timestamps: list[int] = []
         usage: dict[str, int] | None = None
         done_ns: int | None = None
+        response_started_ns: int | None = None
         try:
             with self.opener(request, timeout=self.timeout_sec) as response:
+                response_started_ns = self.monotonic_ns()
                 status = int(response.status)
                 if status != 200:
                     raise RuntimeError(f"completion returned HTTP {status}")
@@ -166,4 +169,5 @@ class OpenAICompletionClient:
             output_tokens=usage["completion_tokens"],
             total_tokens=usage["total_tokens"],
             http_status=status,
+            response_started_ns=response_started_ns,
         )

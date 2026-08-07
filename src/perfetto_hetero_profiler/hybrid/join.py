@@ -288,6 +288,61 @@ def validate_marker_order(events: Iterable[EventRecord]) -> MarkerValidation:
     )
 
 
+def validate_marker_groups(events: Iterable[EventRecord]) -> MarkerValidation:
+    """Validate a multi-request run without treating requests as duplicates."""
+
+    rows = tuple(events)
+    grouped: dict[str, list[EventRecord]] = defaultdict(list)
+    uncorrelated: list[EventRecord] = []
+    for event in rows:
+        if event.event_name not in {*MARKER_ORDER, "first_token_emitted", "token_emitted"}:
+            continue
+        correlation = event.attributes.get("hybrid.correlation_id")
+        if not isinstance(correlation, str) or not correlation:
+            uncorrelated.append(event)
+        else:
+            grouped[correlation].append(event)
+
+    missing: list[str] = []
+    duplicates: list[str] = []
+    pairing: list[str] = []
+    ordering: list[OrderingIssue] = []
+    if uncorrelated and not grouped:
+        # Historical single-request normalized bundles predate the explicit
+        # correlation attribute.  Their ordinary duplicate/order validation
+        # remains safe; two such requests still collide and are rejected.
+        return validate_marker_order(uncorrelated)
+    if uncorrelated:
+        pairing.append(
+            f"{len(uncorrelated)} canonical marker events lack hybrid.correlation_id"
+        )
+    statuses: list[str] = []
+    for correlation in sorted(grouped):
+        validation = validate_marker_order(grouped[correlation])
+        statuses.append(validation.status)
+        missing.extend(f"{correlation}:{name}" for name in validation.missing_markers)
+        duplicates.extend(
+            f"{correlation}:{name}" for name in validation.duplicate_markers
+        )
+        pairing.extend(
+            f"{correlation}:{reason}" for reason in validation.pairing_issues
+        )
+        ordering.extend(validation.ordering_issues)
+    if pairing or duplicates or "invalid" in statuses:
+        status = "invalid"
+    elif missing or ordering or "partial" in statuses:
+        status = "partial"
+    else:
+        status = "valid"
+    return MarkerValidation(
+        missing_markers=tuple(missing),
+        duplicate_markers=tuple(duplicates),
+        pairing_issues=tuple(pairing),
+        ordering_issues=tuple(ordering),
+        status=status,
+    )
+
+
 def _groups(events: Iterable[EventRecord]) -> dict[str, tuple[EventRecord, ...]]:
     grouped: dict[str, list[EventRecord]] = defaultdict(list)
     for event in events:

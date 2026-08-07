@@ -419,13 +419,23 @@ def _prepare(
     if os.path.lexists(output):
         raise FileExistsError(f"output already exists: {output}")
     toolchain = resolve_toolchain(config.trace_processor_path)
+    correlations = {
+        event.attributes.get("hybrid.correlation_id")
+        for event in loaded.events
+        if event.event_name == "request_received"
+    }
+    timeline_summary = (
+        build_timeline_summary_context(loaded)
+        if len(correlations) == 1
+        else None
+    )
     planning = build_trace_plan(
         loaded.manifest,
         loaded.events,
         loaded.metrics,
         canonical_clock_domain_id=loaded.canonical_clock_domain_id,
         native_envelopes=loaded.native_envelopes,
-        timeline_summary=build_timeline_summary_context(loaded),
+        timeline_summary=timeline_summary,
     )
     native = (
         build_native_detail_plan(loaded, planning.plan)
@@ -826,7 +836,41 @@ def _timeline_summary_mapping_metadata(
     )
     root = tracks.get("summary.root")
     if root is None:
-        raise PerfettoConversionError("timeline summary plan has no root track")
+        return {
+            "kind": "normalized_events",
+            "mapping_version": plan.mapping_version,
+            "source_identity_sha256": plan.source_identity_sha256,
+            "root_track": None,
+            "timeline_summary_hierarchy": [],
+            "resource_telemetry_hierarchy": resource_tracks,
+            "trace_attributes": [
+                {"key": item.key, "value": item.value}
+                for item in plan.trace_attributes
+            ],
+            "ordering_policy": {
+                "descriptor_metadata": (
+                    "TrackDescriptor.child_ordering_and_sibling_order_rank"
+                ),
+                "ui_guarantee": "hint_not_absolute_cross_version_order",
+            },
+            "flow_policy": {
+                "representative_location": "detailed_tracks_only",
+                "explicit_correlation_required": True,
+                "timestamp_proximity_fallback": False,
+            },
+            "native_clock_policy": {
+                "native_details_emitted": bool(
+                    native is not None and native.emitted_event_count
+                ),
+                "unaligned_native_events_inferred": False,
+                "partial_derived_native_events": bool(
+                    native is not None and native.emitted_event_count
+                ),
+                "host_api_boundary_only": not bool(
+                    native is not None and native.emitted_event_count
+                ),
+            },
+        }
     kpi_mappings: list[dict[str, Any]] = []
     for counter in sorted(
         (

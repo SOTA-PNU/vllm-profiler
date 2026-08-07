@@ -11,7 +11,7 @@ import re
 import stat
 from typing import Any, TypeVar
 
-from ..hybrid.join import validate_marker_order
+from ..hybrid.join import validate_marker_groups
 from ..schema import (
     ArtifactIntegrityError,
     ArtifactKind,
@@ -650,7 +650,7 @@ def _validate_normalized_records(
                 f"event {event.event_id!r} has an unknown parent"
             )
 
-    marker_validation = validate_marker_order(events)
+    marker_validation = validate_marker_groups(events)
     if marker_validation.status != "valid":
         issue_statuses = tuple(
             issue.status for issue in marker_validation.ordering_issues

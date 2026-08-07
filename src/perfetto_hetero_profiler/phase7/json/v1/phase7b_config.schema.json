@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sota-pnu.github.io/vllm-profiler/schema/phase7b-config-v1.json",
+  "title": "Phase 7B experiment configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "experiment_id", "hybrid_config", "schedule"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "experiment_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,191}$"},
+    "hybrid_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seed", "max_hardware_attempts"],
+      "properties": {
+        "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "max_hardware_attempts": {"const": 42}
+      }
+    }
+  }
+}

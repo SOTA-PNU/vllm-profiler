@@ -14,7 +14,7 @@ import json
 import math
 from typing import Any, Mapping
 
-from ..hybrid.join import validate_marker_order
+from ..hybrid.join import validate_marker_groups
 from ..overview.calculation import calculate_overview_kpis
 from ..schema import Availability
 from .model import TraceAttributeSpec
@@ -396,7 +396,7 @@ def _data_quality_annotations(
 ) -> tuple[tuple[str, bool | int | float | str], ...]:
     manifest = getattr(loaded, "manifest", None)
     events = tuple(getattr(loaded, "events", ()))
-    validation = validate_marker_order(events)
+    validation = validate_marker_groups(events)
     if validation.status != "valid":
         raise TimelineSummaryInputError(
             "marker validation changed after the normalized run was loaded"
@@ -422,8 +422,8 @@ def _data_quality_annotations(
         raise TimelineSummaryInputError(
             "canonical request markers lack explicit correlation identity"
         )
-    joined_requests = len(correlation_ids) if len(correlation_ids) == 1 else 0
-    unjoined_requests = 0 if joined_requests else len(correlation_ids)
+    joined_requests = len(correlation_ids)
+    unjoined_requests = 0
     attributes = getattr(manifest, "attributes", {})
     configuration = getattr(manifest, "configuration", {})
     if not isinstance(attributes, dict) or not isinstance(configuration, dict):

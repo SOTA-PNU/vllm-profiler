@@ -647,9 +647,19 @@ def validate_kpi(kpi: KpiValue, path: str = "kpi") -> None:
     for index, source in enumerate(kpi.sources):
         validate_kpi_source(source, f"{path}.sources[{index}]")
     validate_kpi_scope(kpi.scope, f"{path}.scope")
-    if kpi.scope.scope_type not in {
+    scope_allowed = kpi.scope.scope_type in {
         scope.value for scope in definition.allowed_scopes
-    }:
+    }
+    aggregate_run_scope = (
+        kpi.scope.scope_type == "run"
+        and kpi.aggregation_method
+        in {
+            "arithmetic_mean_across_measured_requests_v1",
+            "not_available_across_measured_requests_v1",
+            "ratio_of_measured_request_means_v1",
+        }
+    )
+    if not scope_allowed and not aggregate_run_scope:
         _fail(
             f"{path}.scope.scope_type",
             "is not allowed by METRIC_CATALOG for this KPI",

@@ -404,7 +404,10 @@ def _mapping_version(manifest: dict[str, Any]) -> str:
     if not isinstance(mapping, dict):
         raise OverviewInputError("Perfetto trace_mapping must be an object")
     version = mapping.get("mapping_version")
-    if version != TIMELINE_SUMMARY_MAPPING_VERSION:
+    if version not in {
+        LEGACY_MAPPING_VERSION,
+        TIMELINE_SUMMARY_MAPPING_VERSION,
+    }:
         raise OverviewInputError(
             f"unsupported Perfetto trace mapping version: {version!r}"
         )

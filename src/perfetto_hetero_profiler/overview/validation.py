@@ -60,15 +60,44 @@ def build_overview_validation(
     pipeline = _pipeline_kpis(report)
     mismatches: list[str] = []
     reconciled_phases: list[dict[str, Any]] = []
+    aggregate_request_count = next(
+        (
+            row["slice_count"]
+            for row in phase_rows
+            if row["kpi_name"] == "latency.e2e"
+            and isinstance(row.get("slice_count"), int)
+            and not isinstance(row.get("slice_count"), bool)
+            and row["slice_count"] > 0
+        ),
+        None,
+    )
     for row in phase_rows:
         current = dict(row)
         kpi = pipeline.get(str(row["kpi_name"]))
         current["overview_duration_ns"] = (
             kpi.get("value") if kpi is not None else None
         )
+        aggregate = (
+            kpi is not None
+            and kpi.get("aggregation_method")
+            == "arithmetic_mean_across_measured_requests_v1"
+        )
+        expected_overview_duration = row["event_duration_ns"]
+        if aggregate:
+            if aggregate_request_count is None:
+                expected_overview_duration = None
+            else:
+                expected_overview_duration = (
+                    row["event_duration_ns"] / aggregate_request_count
+                )
+        current["overview_expected_duration_ns"] = expected_overview_duration
+        current["overview_aggregation_method"] = (
+            kpi.get("aggregation_method") if kpi is not None else None
+        )
         current["overview_matched"] = (
             current["matched"] is True
-            and current["overview_duration_ns"] == current["event_duration_ns"]
+            and current["overview_duration_ns"]
+            == expected_overview_duration
         )
         if current["overview_matched"] is not True:
             mismatches.append(

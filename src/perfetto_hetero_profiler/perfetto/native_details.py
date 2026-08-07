@@ -416,6 +416,13 @@ def augment_trace_plan(
 
     instants: list[InstantSpec] = []
     for spec in base_plan.instants:
+        if spec.track_key == "clock_metadata":
+            annotations = dict(spec.annotations)
+            annotations["hetero.native_details_emitted"] = bool(native_types)
+            instants.append(
+                replace(spec, annotations=tuple(sorted(annotations.items())))
+            )
+            continue
         if spec.track_key != "summary.data_quality":
             instants.append(spec)
             continue
@@ -443,9 +450,16 @@ def augment_trace_plan(
             replace(spec, annotations=tuple(sorted(annotations.items())))
         )
 
+    base_track_keys = {track.key for track in base_plan.tracks}
+    native_tracks = tuple(
+        replace(track, parent_key=None, sibling_order_rank=None)
+        if track.parent_key == "summary.root" and "summary.root" not in base_track_keys
+        else track
+        for track in native.tracks
+    )
     return replace(
         base_plan,
-        tracks=tuple((*base_plan.tracks, *native.tracks)),
+        tracks=tuple((*base_plan.tracks, *native_tracks)),
         slices=tuple(
             sorted(
                 (*slices, *native.slices),
@@ -481,16 +495,17 @@ def request_focused_plan(plan: TracePlan) -> TracePlan:
     request_rows = [
         spec
         for spec in plan.slices
-        if spec.track_key == "summary.request_summary"
-        and spec.name == "Hybrid Request"
+        if spec.track_key in {"summary.request_summary", "request"}
+        and spec.name in {"Hybrid Request", "Request"}
     ]
-    if len(request_rows) != 1:
+    if not request_rows:
         raise NativeDetailError(
-            "request-focused trace requires exactly one Hybrid Request slice"
+            "request-focused trace requires at least one Hybrid Request slice"
         )
-    request = request_rows[0]
-    start = request.timestamp_ns
-    end = start + request.duration_ns
+    start = min(request.timestamp_ns for request in request_rows)
+    end = max(
+        request.timestamp_ns + request.duration_ns for request in request_rows
+    )
     by_key = plan.track_by_key
 
     def is_under(track_key: str, root_key: str) -> bool:
@@ -598,6 +613,13 @@ def request_focused_plan(plan: TracePlan) -> TracePlan:
         )
     adjusted_instants: list[InstantSpec] = []
     for spec in instants:
+        if spec.track_key == "clock_metadata":
+            annotations = dict(spec.annotations)
+            annotations["hetero.native_details_emitted"] = bool(native_types)
+            adjusted_instants.append(
+                replace(spec, annotations=tuple(sorted(annotations.items())))
+            )
+            continue
         if spec.track_key != "summary.data_quality":
             adjusted_instants.append(spec)
             continue
@@ -803,15 +825,18 @@ def _expected_native_subset(
         requests = [
             spec
             for spec in plan.slices
-            if spec.track_key == "summary.request_summary"
-            and spec.name == "Hybrid Request"
+            if spec.track_key in {"summary.request_summary", "request"}
+            and spec.name in {"Hybrid Request", "Request"}
         ]
-        if len(requests) != 1:
+        if not requests:
             raise NativeDetailError(
-                "focused native validation requires one Hybrid Request slice"
+                "focused native validation requires a request slice"
             )
-        start = requests[0].timestamp_ns
-        end = start + requests[0].duration_ns
+        start = min(request.timestamp_ns for request in requests)
+        end = max(
+            request.timestamp_ns + request.duration_ns
+            for request in requests
+        )
         slices = tuple(
             spec
             for spec in native.slices

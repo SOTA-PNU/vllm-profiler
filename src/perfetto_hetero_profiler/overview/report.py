@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
 
-from ..hybrid.join import validate_marker_order
+from ..hybrid.join import validate_marker_groups
 from ..perfetto.loader import LoadedHybridRun
 from ..schema import Availability
 from .calculation import calculate_overview_kpis
@@ -349,7 +349,7 @@ def _data_quality(
     loaded: LoadedHybridRun,
     perfetto: LoadedPerfettoBundle,
 ) -> dict[str, Any]:
-    marker = validate_marker_order(loaded.events)
+    marker = validate_marker_groups(loaded.events)
     resource_metrics = [
         metric
         for metric in loaded.metrics

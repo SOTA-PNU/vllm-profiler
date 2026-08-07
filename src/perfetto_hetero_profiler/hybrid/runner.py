@@ -550,12 +550,14 @@ class HybridRunner:
         run_root: Path,
         run_id: str,
         profile_mode: HybridProfileMode,
+        enable_telemetry: bool = True,
         process_factory: Callable[..., ManagedProcess] = ManagedProcess,
         client_factory: Callable[..., OpenAICompletionClient] = OpenAICompletionClient,
     ) -> None:
         self.config = config
         self.layout = _Layout(Path(run_root), run_id)
         self.profile_mode = profile_mode
+        self.enable_telemetry = enable_telemetry
         self.process_factory = process_factory
         self.client_factory = client_factory
 
@@ -598,7 +600,8 @@ class HybridRunner:
             processes["decode"].start()
             started.append("decode")
             self._record_started_process(owned_processes, "decode", processes["decode"])
-            telemetry.start()
+            if self.enable_telemetry:
+                telemetry.start()
             _wait_http(
                 f"http://{config.decode.host}:{config.decode.http_port}",
                 "/v1/models", processes["decode"], config.startup_timeout_sec,
@@ -1189,6 +1192,11 @@ class HybridRunner:
             {
                 "request_id": item.request_id,
                 "http_status": item.http_status,
+                "request_start_ns": item.received_ns,
+                "http_response_start_ns": item.response_started_ns,
+                "valid_token_timestamps_ns": list(item.token_timestamps_ns),
+                "stream_end_ns": item.done_ns,
+                "status": "succeeded",
                 "input_tokens": item.input_tokens,
                 "output_tokens": item.output_tokens,
                 "total_tokens": item.total_tokens,
@@ -1266,6 +1274,8 @@ class HybridRunner:
                 "warmup_request_ids": [item.request_id for item in warmups],
                 "measured": measured_rows,
                 "stores_prompt_or_generated_text": False,
+                "clock": "CLOCK_MONOTONIC_NS",
+                "method_id": "independent_streaming_client_v1",
             },
         )
 

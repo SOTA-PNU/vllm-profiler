@@ -167,6 +167,33 @@ def build_parser() -> argparse.ArgumentParser:
     hybrid_collect.add_argument("--measured-requests", type=int)
     hybrid_collect.add_argument("--max-output-tokens", type=int)
     hybrid_collect.add_argument("--dry-run", action="store_true")
+    phase7_parser = subparsers.add_parser(
+        "phase7", help="Run and validate fixed Hybrid profiler experiments."
+    )
+    phase7_parser.set_defaults(phase7_parser=phase7_parser)
+    phase7_subparsers = phase7_parser.add_subparsers(dest="phase7_command")
+    phase7_run = phase7_subparsers.add_parser(
+        "run", help="Run or resume the deterministic Phase 7B schedule."
+    )
+    phase7_run.add_argument("--config", type=Path, required=True)
+    phase7_run.add_argument("--experiment-root", type=Path, required=True)
+    phase7_run.add_argument("--resume", action="store_true")
+    phase7_run.add_argument("--dry-run", action="store_true")
+    for name, help_text in (
+        ("status", "Inspect an existing Phase 7B checkpoint."),
+        ("validate", "Freshly validate all successful Phase 7B trials."),
+    ):
+        command_parser = phase7_subparsers.add_parser(name, help=help_text)
+        command_parser.add_argument("--experiment-root", type=Path, required=True)
+    phase7_report = phase7_subparsers.add_parser(
+        "report", help="Deterministically generate Phase 7B JSON/HTML reports."
+    )
+    phase7_report.add_argument("--experiment-root", type=Path, required=True)
+    phase7_report.add_argument(
+        "--output-root",
+        type=Path,
+        help="Publish a corrected report to a new, non-overlapping directory.",
+    )
     merge_parser = subparsers.add_parser(
         "merge", help="Merge immutable normalized source bundles."
     )
@@ -293,6 +320,50 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "version":
         print(f"{parser.prog} {__version__}")
+        return 0
+    if args.command == "phase7":
+        if args.phase7_command is None:
+            args.phase7_parser.print_help()
+            return 0
+        try:
+            from .phase7 import (
+                experiment_status,
+                generate_report,
+                run_experiment,
+                validate_experiment,
+            )
+
+            if args.phase7_command == "run":
+                result = run_experiment(
+                    config_path=args.config,
+                    experiment_root=args.experiment_root,
+                    resume=args.resume,
+                    dry_run=args.dry_run,
+                )
+            elif args.phase7_command == "status":
+                result = experiment_status(args.experiment_root)
+            elif args.phase7_command == "validate":
+                result = validate_experiment(args.experiment_root)
+            else:
+                result = generate_report(
+                    args.experiment_root,
+                    output_root=args.output_root,
+                )
+        except KeyboardInterrupt:
+            print("phase7 interrupted; checkpoint preserved for --resume", file=sys.stderr)
+            return 130
+        except (OSError, ValueError, RuntimeError) as error:
+            print(f"phase7 error: {error}", file=sys.stderr)
+            return 2
+        print(
+            json.dumps(
+                result,
+                allow_nan=False,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
     if args.command == "schema":
         if args.schema_command == "version":

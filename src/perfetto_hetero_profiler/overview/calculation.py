@@ -507,6 +507,24 @@ def _raw_request_provenance(
 def _request_facing_latency(
     loaded: object, metrics: Sequence[MetricSample]
 ) -> list[dict[str, object]]:
+    request_ids = sorted(
+        {
+            metric.request_id
+            for metric in metrics
+            if metric.metric_name == "latency.e2e"
+            and metric.dimensions.get("hybrid.join_method") != "correlation_id"
+            and isinstance(metric.request_id, str)
+        }
+    )
+    if len(request_ids) > 1:
+        rows = [
+            _request_facing_latency(
+                loaded,
+                [metric for metric in metrics if metric.request_id == request_id],
+            )
+            for request_id in request_ids
+        ]
+        return _aggregate_request_kpis(loaded, rows, request_ids)
     e2e = _select_metric(metrics, "latency.e2e", pipeline=False)
     if e2e is None or not isinstance(e2e.request_id, str):
         candidates = [
@@ -678,6 +696,75 @@ def _request_facing_latency(
     return kpis
 
 
+def _aggregate_request_kpis(
+    loaded: object,
+    rows: Sequence[Sequence[dict[str, object]]],
+    request_ids: Sequence[str],
+) -> list[dict[str, object]]:
+    """Aggregate like-named request KPIs without hiding unavailable values."""
+
+    if not rows or len(rows) != len(request_ids):
+        raise OverviewCalculationError("request KPI aggregation inputs are incomplete")
+    by_name = [{str(item["name"]): item for item in group} for group in rows]
+    names = tuple(item["name"] for item in rows[0])
+    if any(set(group) != set(names) for group in by_name):
+        raise OverviewCalculationError("request KPI sets do not match")
+    result: list[dict[str, object]] = []
+    for name in names:
+        values = [group[name] for group in by_name]
+        available = all(
+            item["availability"] == Availability.AVAILABLE.value
+            for item in values
+        )
+        numeric = [
+            _finite_number(item["value"], field=f"{name} aggregate input")
+            for item in values
+            if item["availability"] == Availability.AVAILABLE.value
+        ]
+        value = math.fsum(numeric) / len(numeric) if available else None
+        first = values[0]
+        scope = first["scope"]
+        if not isinstance(scope, dict):
+            raise OverviewCalculationError("request KPI scope is invalid")
+        calculation = first["calculation"]
+        if not isinstance(calculation, dict):
+            raise OverviewCalculationError("request KPI calculation is invalid")
+        result.append(
+            _kpi(
+                name=name,
+                canonical_unit=str(first["canonical_unit"]),
+                value=value,
+                unavailable_reason=(
+                    None
+                    if available
+                    else "one or more measured request values are unavailable"
+                ),
+                aggregation_method="arithmetic_mean_across_measured_requests_v1",
+                sample_count=len(numeric),
+                sources=[
+                    source
+                    for item in values
+                    for source in item.get("sources", [])
+                ],
+                scope=_scope(
+                    loaded,
+                    scope_type="run",
+                    observation_layer=str(scope["observation_layer"]),
+                    phase=scope.get("phase"),
+                    window="measured_smoke",
+                ),
+                calculation_method="request_arithmetic_mean_v1",
+                formula=f"mean({calculation.get('formula', name)})",
+                clock=first["clock"],
+                warnings=(
+                    f"arithmetic mean across {len(request_ids)} explicitly "
+                    "identified measured requests",
+                ),
+            )
+        )
+    return result
+
+
 def _correlation_id(event: EventRecord) -> str:
     value = event.attributes.get("hybrid.correlation_id")
     if not isinstance(value, str) or not value:
@@ -827,6 +914,32 @@ def _pipeline_latency(
     relevant_names = {
         name for _, start, end, _ in _PAIRINGS for name in (start, end)
     } | {"sampling_start", "sampling_end"}
+    correlations = sorted(
+        {
+            _correlation_id(event)
+            for event in events
+            if event.event_name in relevant_names
+        }
+    )
+    if len(correlations) > 1:
+        rows = []
+        for correlation in correlations:
+            selected_events = [
+                event
+                for event in events
+                if event.event_name in relevant_names
+                and _correlation_id(event) == correlation
+            ]
+            selected_metrics = [
+                metric
+                for metric in metrics
+                if metric.request_id == correlation
+            ]
+            row, _ = _pipeline_latency(
+                loaded, selected_metrics, selected_events
+            )
+            rows.append(row)
+        return _aggregate_request_kpis(loaded, rows, correlations), {}
     if not any(event.event_name in relevant_names for event in events):
         clock = {
             "domain_ids": [],
@@ -1081,9 +1194,8 @@ def _throughput_and_tokens(
         "throughput.output_tokens",
         "throughput.total_tokens",
     )
-    selected: dict[str, MetricSample | None] = {}
-    for name in (*count_names, *rate_names):
-        candidates = [
+    candidates_by_name = {
+        name: [
             metric
             for metric in metrics
             if metric.metric_name == name
@@ -1093,6 +1205,18 @@ def _throughput_and_tokens(
                 == "measured_smoke"
             )
         ]
+        for name in (*count_names, *rate_names)
+    }
+    if any(len(items) > 1 for items in candidates_by_name.values()):
+        return _multi_request_throughput_and_tokens(
+            loaded,
+            candidates_by_name,
+            count_names=count_names,
+            rate_names=rate_names,
+        )
+    selected: dict[str, MetricSample | None] = {}
+    for name in (*count_names, *rate_names):
+        candidates = candidates_by_name[name]
         if len(candidates) > 1:
             raise OverviewCalculationError(
                 f"{name} has ambiguous measured_smoke metric provenance"
@@ -1219,6 +1343,161 @@ def _throughput_and_tokens(
     return result
 
 
+def _multi_request_throughput_and_tokens(
+    loaded: object,
+    candidates: dict[str, list[MetricSample]],
+    *,
+    count_names: Sequence[str],
+    rate_names: Sequence[str],
+) -> list[dict[str, object]]:
+    """Reconcile per-request token counts with one measured run window."""
+
+    singleton_names = ("request.count", *rate_names)
+    for name in singleton_names:
+        if len(candidates[name]) != 1:
+            raise OverviewCalculationError(
+                f"{name} requires exactly one measured_smoke run metric"
+            )
+    token_names = (
+        "request.input_tokens",
+        "request.output_tokens",
+        "request.total_tokens",
+    )
+    request_ids: set[str] | None = None
+    count_values: dict[str, int | float] = {}
+    for name in token_names:
+        rows = candidates[name]
+        if not rows:
+            raise OverviewCalculationError(
+                f"{name} requires measured request metrics"
+            )
+        ids = {metric.request_id for metric in rows}
+        if None in ids or len(ids) != len(rows):
+            raise OverviewCalculationError(
+                f"{name} has missing or duplicate request provenance"
+            )
+        typed_ids = {str(item) for item in ids}
+        if request_ids is None:
+            request_ids = typed_ids
+        elif typed_ids != request_ids:
+            raise OverviewCalculationError(
+                "measured request token metrics disagree on request IDs"
+            )
+        values = [_metric_contract(metric, name) for metric in rows]
+        if any(value is None for value in values):
+            raise OverviewCalculationError(
+                f"{name} measured request metric is unavailable"
+            )
+        count_values[name] = sum(value for value in values if value is not None)
+    if request_ids is None:  # pragma: no cover - token rows required above
+        raise OverviewCalculationError("measured request IDs are unavailable")
+    request_count_metric = candidates["request.count"][0]
+    request_count = _metric_contract(request_count_metric, "request.count")
+    if request_count != len(request_ids):
+        raise OverviewCalculationError(
+            "request.count does not match measured request provenance"
+        )
+    count_values["request.count"] = request_count
+    if (
+        count_values["request.input_tokens"]
+        + count_values["request.output_tokens"]
+        != count_values["request.total_tokens"]
+    ):
+        raise OverviewCalculationError("request.total_tokens reconciliation failed")
+
+    rate_metrics = {name: candidates[name][0] for name in rate_names}
+    intervals = {
+        metric.interval_ns
+        for metric in (request_count_metric, *rate_metrics.values())
+    }
+    if len(intervals) != 1:
+        raise OverviewCalculationError(
+            "measured_smoke throughput metrics disagree on window duration"
+        )
+    interval_ns = _non_bool_int(
+        intervals.pop(), field="measured_smoke interval_ns"
+    )
+    if interval_ns <= 0:
+        raise OverviewCalculationError(
+            "measured_smoke throughput window must be positive"
+        )
+    interval_seconds = interval_ns / 1_000_000_000
+    expected_rates = {
+        "throughput.requests": count_values["request.count"] / interval_seconds,
+        "throughput.input_tokens": (
+            count_values["request.input_tokens"] / interval_seconds
+        ),
+        "throughput.output_tokens": (
+            count_values["request.output_tokens"] / interval_seconds
+        ),
+        "throughput.total_tokens": (
+            count_values["request.total_tokens"] / interval_seconds
+        ),
+    }
+    for name, expected in expected_rates.items():
+        actual = _metric_contract(rate_metrics[name], name)
+        if actual != expected:
+            raise OverviewCalculationError(
+                f"{name} does not equal count / measured_smoke duration"
+            )
+
+    warning = (
+        f"measured_smoke contains {len(request_ids)} requests; this validation "
+        "workload is not a generalizable throughput benchmark"
+    )
+    result: list[dict[str, object]] = []
+    for name in (*count_names, *rate_names):
+        if name in token_names:
+            source_metrics = candidates[name]
+            value = count_values[name]
+            sample_count = len(source_metrics)
+            method = "sum_measured_request_counts_v1"
+            formula = "sum(per-request measured count)"
+        elif name == "request.count":
+            source_metrics = [request_count_metric]
+            value = count_values[name]
+            sample_count = 1
+            method = "measured_smoke_count_v1"
+            formula = "measured count"
+        else:
+            source_metrics = [rate_metrics[name]]
+            value = expected_rates[name]
+            sample_count = 1
+            method = "count_per_window_second_v1"
+            formula = "count * 1_000_000_000 / window_duration_ns"
+        result.append(
+            _kpi(
+                name=name,
+                canonical_unit=METRIC_CATALOG[name].unit,
+                value=value,
+                unavailable_reason=None,
+                aggregation_method="measured_smoke_window_v1",
+                sample_count=sample_count,
+                sources=[
+                    _source_metric(
+                        source_metrics,
+                        details={
+                            "window": "measured_smoke",
+                            "window_duration_ns": interval_ns,
+                            "measured_request_count": len(request_ids),
+                        },
+                    )
+                ],
+                scope=_scope(
+                    loaded,
+                    scope_type="run",
+                    observation_layer="request_facing_client",
+                    window="measured_smoke",
+                ),
+                calculation_method=method,
+                formula=formula,
+                clock=_clock(loaded, source_metrics),
+                warnings=(warning,),
+            )
+        )
+    return result
+
+
 def _transfer_kpis(
     loaded: object,
     pipeline: Sequence[dict[str, object]],
@@ -1233,12 +1512,14 @@ def _transfer_kpis(
     correlation = (
         _correlation_id(records[0]) if records else pipeline_e2e["scope"]["request_id"]
     )
+    aggregate_run = correlation is None
     scope = _scope(
         loaded,
-        scope_type="transfer",
+        scope_type="run" if aggregate_run else "transfer",
         observation_layer="hybrid_pipeline",
         request_id=correlation,
         phase="kv_transfer",
+        window="measured_smoke" if aggregate_run else None,
     )
     clock = (
         _clock(loaded, records)
@@ -1284,7 +1565,11 @@ def _transfer_kpis(
         canonical_unit="bytes",
         value=transfer_bytes,
         unavailable_reason=bytes_reason,
-        aggregation_method="equal_transfer_marker_attributes_v1",
+        aggregation_method=(
+            "not_available_across_measured_requests_v1"
+            if aggregate_run
+            else "equal_transfer_marker_attributes_v1"
+        ),
         sample_count=1 if transfer_bytes is not None else 0,
         sources=sources,
         scope=scope,
@@ -1298,7 +1583,11 @@ def _transfer_kpis(
         canonical_unit="ns",
         value=duration_value,
         unavailable_reason=transfer_latency["unavailable_reason"],
-        aggregation_method="canonical_marker_pair_v1",
+        aggregation_method=(
+            "arithmetic_mean_across_measured_requests_v1"
+            if aggregate_run
+            else "canonical_marker_pair_v1"
+        ),
         sample_count=transfer_latency["sample_count"],
         sources=transfer_latency["sources"],
         scope=scope,
@@ -1323,7 +1612,11 @@ def _transfer_kpis(
         canonical_unit="bytes/s",
         value=bandwidth,
         unavailable_reason=bandwidth_reason,
-        aggregation_method="bytes_per_transfer_duration_v1",
+        aggregation_method=(
+            "not_available_across_measured_requests_v1"
+            if aggregate_run
+            else "bytes_per_transfer_duration_v1"
+        ),
         sample_count=1 if bandwidth is not None else 0,
         sources=sources,
         scope=scope,
@@ -1336,7 +1629,11 @@ def _transfer_kpis(
         canonical_unit="ns",
         value=transform_latency["value"],
         unavailable_reason=transform_latency["unavailable_reason"],
-        aggregation_method="canonical_marker_pair_v1",
+        aggregation_method=(
+            "arithmetic_mean_across_measured_requests_v1"
+            if aggregate_run
+            else "canonical_marker_pair_v1"
+        ),
         sample_count=transform_latency["sample_count"],
         sources=transform_latency["sources"],
         scope=scope,
@@ -1351,7 +1648,11 @@ def _transfer_kpis(
         unavailable_reason=(
             "no explicit transfer-scoped classified wait intervals are present"
         ),
-        aggregation_method="interval_union_v1",
+        aggregation_method=(
+            "not_available_across_measured_requests_v1"
+            if aggregate_run
+            else "interval_union_v1"
+        ),
         sample_count=0,
         sources=[],
         scope=scope,
@@ -1377,7 +1678,11 @@ def _transfer_kpis(
         canonical_unit="ratio",
         value=share,
         unavailable_reason=share_reason,
-        aggregation_method="transfer_to_pipeline_e2e_ratio_v1",
+        aggregation_method=(
+            "ratio_of_measured_request_means_v1"
+            if aggregate_run
+            else "transfer_to_pipeline_e2e_ratio_v1"
+        ),
         sample_count=1 if share is not None else 0,
         sources=transfer_latency["sources"] + pipeline_e2e["sources"],
         scope=scope,
