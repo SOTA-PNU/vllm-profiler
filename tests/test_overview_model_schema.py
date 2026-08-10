@@ -1,4 +1,4 @@
-"""CPU-only contract tests for deterministic Phase 6 Overview models."""
+"""CPU-only contract tests for deterministic Overview models."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ from perfetto_hetero_profiler.schema import Availability
 from perfetto_hetero_profiler.schema.constants import JSON_SCHEMA_DRAFT
 
 
-RUN_ID = "phase6-run"
+RUN_ID = "overview-run"
 REQUEST_ID = "request-1"
 
 
@@ -762,7 +762,7 @@ class OverviewComparisonContractTests(unittest.TestCase):
 
         control = overview_to_dict(report())
         detailed = copy.deepcopy(control)
-        detailed["run"]["run_id"] = "phase6-run-detailed"
+        detailed["run"]["run_id"] = "overview-run-detailed"
         detailed["run"]["profile_mode"] = "detailed_profile"
         detailed["run"]["profiler_kind"] = "gpu_torch"
         built = build_comparison([detailed, control])

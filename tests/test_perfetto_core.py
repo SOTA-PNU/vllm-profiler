@@ -1,4 +1,4 @@
-"""CPU-only regression tests for the Phase 5 Perfetto core."""
+"""CPU-only regression tests for the Perfetto conversion core."""
 
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ else:
     _WRITER_IMPORT_ERROR = ""
 
 
-RUN_ID = "phase5-synthetic"
+RUN_ID = "perfetto-synthetic"
 CLOCK_ID = "hybrid-canonical"
 REQUEST_ID = "request-1"
 CORRELATION_ID = "correlation-1"

@@ -1,4 +1,4 @@
-"""Phase 0 CLI tests."""
+"""Command-line interface tests."""
 
 import contextlib
 import io

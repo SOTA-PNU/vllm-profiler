@@ -242,7 +242,7 @@ class CommandTests(unittest.TestCase):
             stdout = root / "stdout.log"
             stderr = root / "stderr.log"
             process = ManagedProcess(
-                CommandSpec(argv=("missing-command-phase3a-closeout",)),
+                CommandSpec(argv=("missing-command-process-test",)),
                 stdout,
                 stderr,
             )

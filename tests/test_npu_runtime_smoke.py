@@ -1,4 +1,4 @@
-"""CPU-only tests for Phase 3B RBLN runtime normalization."""
+"""CPU-only tests for RBLN runtime normalization."""
 
 import contextlib
 import io

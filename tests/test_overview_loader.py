@@ -1,4 +1,4 @@
-"""Integration coverage for strict Phase 6 Overview input loading."""
+"""Integration coverage for strict Overview input loading."""
 
 from __future__ import annotations
 
@@ -188,7 +188,7 @@ class PerfettoIdentityFilesystemTests(unittest.TestCase):
     "pinned Trace Processor or local TCP socket creation is unavailable",
 )
 class OverviewLoaderIntegrationTests(unittest.TestCase):
-    """Official-TP reconciliation against a generated Phase 5 bundle."""
+    """Official Trace Processor reconciliation against a generated bundle."""
 
     @classmethod
     def setUpClass(cls) -> None:

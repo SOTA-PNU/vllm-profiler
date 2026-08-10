@@ -1,4 +1,4 @@
-"""CPU-only contracts for Phase 6C native-detail conversion."""
+"""CPU-only contracts for native-detail conversion."""
 
 from __future__ import annotations
 

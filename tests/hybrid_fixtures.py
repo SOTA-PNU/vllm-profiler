@@ -1,4 +1,4 @@
-"""Synthetic schema-valid GPU/NPU source bundles for Phase 4A tests."""
+"""Synthetic schema-valid GPU/NPU source bundles for hybrid tests."""
 
 from __future__ import annotations
 

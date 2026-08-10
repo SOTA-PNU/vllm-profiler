@@ -1,4 +1,4 @@
-"""End-to-end Phase 5 conversion tests with immutable synthetic inputs."""
+"""End-to-end Perfetto conversion tests with immutable synthetic inputs."""
 
 from __future__ import annotations
 
@@ -174,7 +174,7 @@ def _write_closeout(
 
 
 def _add_overview_metrics(hybrid: Path, *, run_id: str) -> None:
-    """Add the explicit measured-smoke contract required by Phase 6 tests."""
+    """Add the explicit measured-smoke contract required by Overview tests."""
 
     metrics_path = hybrid / "metrics/metrics.jsonl"
     interval_ns = 1_000_000_000
@@ -274,7 +274,7 @@ def _artifact(
         artifact_kind=artifact_kind,
         relative_path=relative_path,
         format=format_name,
-        producer="synthetic-phase5-test",
+        producer="synthetic-conversion-test",
         created_at_unix_ns=1,
         host_id="host-0",
         size_bytes=path.stat().st_size,
@@ -540,9 +540,9 @@ def _build_monitor_family(
     if overview_metrics:
         _add_overview_metrics(hybrid, run_id=run_id)
 
-    # Phase 5 requires the finalized Phase 4 closeout policy marker. The
-    # generic Phase 4A merger predates that marker, so the synthetic closeout
-    # fixture records the evidence before it is detached and fingerprinted.
+    # Conversion requires the finalized closeout policy marker. The generic
+    # merger predates that marker, so the synthetic closeout fixture records
+    # the evidence before it is detached and fingerprinted.
     manifest_path = hybrid / "manifest.json"
     manifest = read_json(manifest_path)
     write_json(

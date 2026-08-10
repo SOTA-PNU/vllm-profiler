@@ -55,10 +55,10 @@ def write_config(root: Path, *, mutate_hybrid=None):
     hybrid_path = root / "hybrid.json"
     hybrid_path.write_text(json.dumps(hybrid), encoding="utf-8")
     digest = hashlib.sha256(hybrid_path.read_bytes()).hexdigest()
-    config_path = root / "phase7.json"
+    config_path = root / "experiment.json"
     config_path.write_text(json.dumps({
         "schema_version": "1.0",
-        "experiment_id": "test-phase7b",
+        "experiment_id": "test-repeatability",
         "hybrid_config": {"path": str(hybrid_path), "sha256": digest},
         "schedule": {"seed": 20260807, "max_hardware_attempts": 42},
     }), encoding="utf-8")

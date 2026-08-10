@@ -33,7 +33,7 @@ class SmokeConfigTests(unittest.TestCase):
     def config(self, **changes):
         values = {
             "run_root": Path("/runs"),
-            "run_id": "phase2b-gpu-monitor-test",
+            "run_id": "gpu-monitor-test",
             "model": Path("/models/qwen"),
             "profile_mode": "monitor",
             "host": "127.0.0.1",

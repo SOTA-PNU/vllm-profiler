@@ -1,4 +1,4 @@
-"""Tests for deterministic Phase 7 statistics and paired overhead."""
+"""Tests for deterministic experiment statistics and paired overhead."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from perfetto_hetero_profiler.phase7.statistics import (
 
 
 class DistributionTests(unittest.TestCase):
-    def test_phase7_descriptive_statistics_contract(self) -> None:
+    def test_descriptive_statistics_contract(self) -> None:
         summary = summarize_distribution([5, 1, 4, 2, 3])
         self.assertEqual(summary.sample_count, 5)
         self.assertEqual(summary.mean, 3.0)

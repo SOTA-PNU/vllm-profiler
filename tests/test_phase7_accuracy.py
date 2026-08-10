@@ -1,4 +1,4 @@
-"""Tests for fixed Phase 7 accuracy policies."""
+"""Tests for fixed experiment accuracy policies."""
 
 from __future__ import annotations
 

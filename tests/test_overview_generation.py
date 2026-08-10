@@ -1,4 +1,4 @@
-"""CPU-only integration tests for deterministic Phase 6 publication."""
+"""CPU-only integration tests for deterministic Overview publication."""
 
 from __future__ import annotations
 
@@ -169,16 +169,16 @@ class OverviewRunModeGoldenTests(unittest.TestCase):
 
     _GOLDEN_SHA256 = {
         "gpu_only": (
-            "5939e2b8794b766cdbb528875080a3f57b69bde655b54807af3fb7c35c945418",
-            "05f68d428111c9ed6610fe577a4fdd6db52b5fcc2ade91966ccbfd4893e467c2",
+            "fb374e6752ad45f69c375aa5da512ea6dc482d389791b30b3696494ccb7583a8",
+            "2530797f2b405ccf421aec4c52414589206d36b77a18763a94f6ececfbd14055",
         ),
         "npu_only": (
-            "be62087739bb1d933b06b6dc15c18d4efe4ca42580c612bab9037a73cd3d9c8e",
-            "b95fcb6eda8fe7d03cd1d452abb59d2f133567aabf6285f8ace16d6137b2873b",
+            "945c972608355fe7dcc926e4493da9eb4ea028ce2766f6456d8b2e76d29ab9cc",
+            "ba9507127bb0a1b02707a3e7a61251501207559fc180b2ddf0906200853d230e",
         ),
         "hybrid": (
-            "66baf6301fc8110fd57aedeb728fac39db2292de17701bbfce1eff11279210b2",
-            "eabab063caf0e11259a6e738c8a7a94dcbe59c168022fd9d80e2a100418a36c9",
+            "365c5ae8ce946d0d3d152f4d92177f6875ffab8bfe08fd7f3c4979323c88cfea",
+            "9b040d7dbec096b927e0b1b3335682cebe7ba9a045c62fa7ea501013bf756cf6",
         ),
     }
 
@@ -205,7 +205,7 @@ class OverviewRunModeGoldenTests(unittest.TestCase):
     "dedicated pinned Trace Processor binary is unavailable",
 )
 class OverviewGenerationIntegrationTests(unittest.TestCase):
-    """Exercise generation against genuine Phase 5 synthetic outputs."""
+    """Exercise generation against genuine synthetic conversion outputs."""
 
     @classmethod
     def setUpClass(cls) -> None:

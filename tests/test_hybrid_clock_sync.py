@@ -1,4 +1,4 @@
-"""Clock probe and estimator tests for Phase 4A."""
+"""Clock probe and estimator tests for hybrid time alignment."""
 
 import unittest
 

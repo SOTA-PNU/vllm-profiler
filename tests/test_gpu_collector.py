@@ -151,7 +151,7 @@ class GpuRunIntegrationTests(unittest.TestCase):
                 run_id="missing-command",
                 profile_mode=ProfileMode.MONITOR,
                 sample_interval_ms=100,
-                command=("command-that-does-not-exist-phase2a",),
+                command=("command-that-does-not-exist-gpu-collector",),
                 gpu_devices=(GpuDeviceInfo(0, "Fake GPU"),),
             )
             result = GpuRunCollector(config, gpu_client=fake_gpu_client()).run()
