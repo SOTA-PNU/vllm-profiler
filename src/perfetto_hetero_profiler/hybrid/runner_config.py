@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any, Literal
@@ -413,7 +414,7 @@ def validate_hybrid_invocation(
     current = Path(run_root.anchor)
     for part in run_root.parts[1:]:
         current /= part
-        if current.exists() and current.is_symlink():
+        if current.is_symlink():
             raise HybridRunnerConfigError(
                 f"--run-root must not traverse a symlink: {current}"
             )
@@ -431,7 +432,7 @@ def validate_hybrid_invocation(
             f"{run_id}-publication",
         )
     )
-    existing = [path for path in targets if path.exists()]
+    existing = [path for path in targets if os.path.lexists(path)]
     if existing:
         raise FileExistsError(f"run output already exists: {existing[0]}")
     if config.workload.max_output_tokens >= config.max_model_len:

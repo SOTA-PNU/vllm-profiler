@@ -179,6 +179,25 @@ class HybridRunnerConfigTests(unittest.TestCase):
                     config, run_root=linked, run_id="run", profile_mode="monitor"
                 )
 
+    def test_broken_symlink_output_is_rejected_before_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = self.load(root)
+            runs = root / "runs"
+            runs.mkdir()
+            target = runs / "same-gpu"
+            target.symlink_to(root / "missing-output", target_is_directory=True)
+
+            with self.assertRaisesRegex(FileExistsError, "already exists"):
+                validate_hybrid_invocation(
+                    config,
+                    run_root=runs,
+                    run_id="same",
+                    profile_mode="monitor",
+                )
+
+            self.assertTrue(target.is_symlink())
+
     def test_cli_dry_run_uses_overrides_and_creates_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

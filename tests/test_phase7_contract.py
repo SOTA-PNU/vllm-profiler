@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -19,7 +20,11 @@ from perfetto_hetero_profiler.phase7.config import (
     Phase7ConfigError,
     load_phase7_config,
 )
-from perfetto_hetero_profiler.phase7.experiment import CONDITION_MODE, build_plan
+from perfetto_hetero_profiler.phase7.experiment import (
+    CONDITION_MODE,
+    build_plan,
+    validate_experiment,
+)
 from perfetto_hetero_profiler.phase7.failure import FailureClass
 from perfetto_hetero_profiler.phase7.limitations import limitation_inventory
 from perfetto_hetero_profiler.phase7.paths import ExperimentPaths, Phase7PathError
@@ -160,6 +165,51 @@ class CheckpointTests(unittest.TestCase):
             self.assertEqual(decision.skip_logical_trial_ids, (trial.logical_trial_id,))
             with self.assertRaises(CheckpointIntegrityError):
                 store.load_for_resume(expected_config_sha256="a" * 64, expected_schedule_sha256="b" * 64, validate_success=lambda _: False)
+
+
+class ExperimentValidationTests(unittest.TestCase):
+    def test_fresh_validation_is_read_only_unless_persistence_is_explicit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            schedule = build_schedule(seed=20260807)
+            attempts = tuple(
+                SimpleNamespace(
+                    status=AttemptStatus.SUCCEEDED,
+                    attempt_id=trial.attempt_id(1),
+                    logical_trial_id=trial.logical_trial_id,
+                )
+                for trial in schedule.trials
+            )
+            config = SimpleNamespace(
+                sha256="a" * 64,
+                schedule=schedule,
+            )
+            checkpoint = SimpleNamespace(
+                config_sha256=config.sha256,
+                schedule_sha256=schedule.sha256,
+                attempts=attempts,
+            )
+            with mock.patch(
+                "perfetto_hetero_profiler.phase7.experiment.load_phase7_config",
+                return_value=config,
+            ), mock.patch(
+                "perfetto_hetero_profiler.phase7.experiment.CheckpointStore.load",
+                return_value=checkpoint,
+            ), mock.patch(
+                "perfetto_hetero_profiler.phase7.experiment._fresh_attempt_validation",
+                return_value=True,
+            ), mock.patch(
+                "perfetto_hetero_profiler.phase7.experiment._write_json"
+            ) as write_json:
+                result = validate_experiment(root)
+                write_json.assert_not_called()
+
+                output = root / "fresh_validation.json"
+                persisted = validate_experiment(root, output_path=output)
+                write_json.assert_called_once_with(output, persisted)
+
+            self.assertTrue(result["valid"])
+            self.assertEqual(result["successful_trials_checked"], 36)
 
 
 class SafetyAndLimitationsTests(unittest.TestCase):

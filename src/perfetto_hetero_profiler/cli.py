@@ -181,7 +181,10 @@ def build_parser() -> argparse.ArgumentParser:
     phase7_run.add_argument("--dry-run", action="store_true")
     for name, help_text in (
         ("status", "Inspect an existing Phase 7B checkpoint."),
-        ("validate", "Freshly validate all successful Phase 7B trials."),
+        (
+            "validate",
+            "Freshly validate all successful Phase 7B trials without writes.",
+        ),
     ):
         command_parser = phase7_subparsers.add_parser(name, help=help_text)
         command_parser.add_argument("--experiment-root", type=Path, required=True)

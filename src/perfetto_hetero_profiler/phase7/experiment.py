@@ -478,7 +478,10 @@ def run_experiment(
         elif all(item.logical_trial_id in successful for item in config.schedule.formal_round(trial.round_index)):
             print(f"phase7 formal round {trial.round_index}/5 complete", flush=True)
 
-    validation = validate_experiment(paths.root)
+    validation = validate_experiment(
+        paths.root,
+        output_path=paths.root / "fresh_validation.json",
+    )
     report = generate_report(paths.root)
     return {
         "status": "succeeded",
@@ -505,7 +508,18 @@ def experiment_status(experiment_root: Path) -> dict[str, object]:
     }
 
 
-def validate_experiment(experiment_root: Path) -> dict[str, object]:
+def validate_experiment(
+    experiment_root: Path,
+    *,
+    output_path: Path | None = None,
+) -> dict[str, object]:
+    """Validate successful trials without modifying the experiment by default.
+
+    A newly completed hardware run may explicitly persist its validation
+    evidence with ``output_path``.  Read-only validation and the public
+    ``phase7 validate`` command leave the existing experiment untouched.
+    """
+
     paths = ExperimentPaths.for_resume(experiment_root)
     config = load_phase7_config(paths.root / "config.json")
     checkpoint = CheckpointStore(paths.checkpoint).load()
@@ -528,7 +542,13 @@ def validate_experiment(experiment_root: Path) -> dict[str, object]:
     }
     if not valid:
         raise CheckpointIntegrityError("experiment fresh validation is incomplete or invalid")
-    _write_json(paths.root / "fresh_validation.json", result)
+    if output_path is not None:
+        output_path = Path(output_path)
+        if output_path != paths.root / "fresh_validation.json":
+            raise Phase7ExperimentError(
+                "validation output must be the experiment fresh_validation.json"
+            )
+        _write_json(output_path, result)
     return result
 
 

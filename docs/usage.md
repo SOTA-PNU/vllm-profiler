@@ -160,13 +160,13 @@ Perfetto 변환과 외부 HTML Overview 생성을 순서대로 수행합니다. 
 
 Profile mode는 다음 중 하나만 선택할 수 있습니다.
 
-| Mode | 상세 수집 대상 |
+| Mode | 상세 수집 대상과 권장 용도 |
 | --- | --- |
-| `monitor` | canonical marker와 CPU/GPU/NPU/memory telemetry |
-| `gpu-torch` | GPU Prefill의 PyTorch/Kineto trace |
-| `gpu-nsys` | GPU Prefill의 Nsight report와 공식 SQLite export |
-| `npu-torch` | NPU Decode server의 host-side PyTorch/ATen trace |
-| `npu-rbln` | RBLN device Perfetto PB aggregate와 shard |
+| `monitor` | canonical marker와 CPU/GPU/NPU/memory telemetry를 함께 보는 기본 실행 |
+| `gpu-torch` | GPU Prefill의 PyTorch/Kineto operator와 framework 활동 분석 |
+| `gpu-nsys` | GPU Prefill의 CUDA API, kernel, memcpy와 공식 correlation 분석 |
+| `npu-torch` | NPU Decode server의 host-side PyTorch/ATen 활동 분석 |
+| `npu-rbln` | RBLN device Neural Engine/DMA를 native Perfetto timeline에서 분석 |
 
 한 실행에서 profiler 하나만 켜는 이유는 profiler끼리 lifecycle과 장치 상태를
 간섭시키지 않고 각 capture의 overhead와 provenance를 분리하기 위해서입니다.
@@ -195,6 +195,8 @@ RBLN PB는 공식 Perfetto trace이지만 canonical `CLOCK_MONOTONIC` anchor가 
 경우 `trace.rbln-native.pftrace`로 분리됩니다. Relative timestamp를 임의로
 Hybrid timeline에 이동하지 않습니다. HTML Overview는 Perfetto UI plugin이
 아닌 독립적인 결과 화면입니다. 한 번의 smoke 실행은 benchmark가 아닙니다.
+현재 canonical marker에는 KV transfer 전체 구간은 있지만 transfer setup과
+wait를 독립적으로 분리하는 marker는 없습니다.
 
 ## Phase 7B 프로파일러 검증
 
@@ -232,6 +234,9 @@ hetero-profiler phase7 report \
   --experiment-root /absolute/path/phase7b-experiment
 ```
 
+`phase7 validate`는 성공 trial을 현재 디스크 상태에서 다시 읽어 검증 결과를
+표준 출력으로 반환하며 기존 experiment 파일을 수정하지 않습니다.
+
 이미 게시된 experiment report를 보존하면서 report 집계 코드를 다시 적용하려면
 겹치지 않는 새 출력 경로를 지정합니다. 이 명령은 source trial을 읽기 전용으로
 사용하고 report, limitations, source provenance와 detached manifest만 게시합니다.
@@ -253,6 +258,14 @@ pilot 1회와 formal 5회로 실행되고, pilot은 formal 통계에서 제외�
 포함됩니다. `report.html`은 Perfetto 내장 Overview가 아닌 독립 결과
 dashboard입니다. 5회 formal 반복과 단일 모델·고정 partition 결과를 일반적인
 benchmark 또는 하드웨어 우열로 해석하면 안 됩니다.
+
+검증된 고정 실행의 최초 report는 postprocess 집계에서 NPU source telemetry가
+누락되어 superseded 처리했습니다. 원본 experiment와 raw artifact는 변경하지
+않았고, 같은 36개 성공 trial에 수정된 집계만 다시 적용한 corrected report를
+canonical publication으로 사용합니다. 이는 hardware 재실행 결과가 아닙니다.
+Monitor와 reference의 E2E 차이 약 `-0.37%`는 formal 5회 안의 측정 변동으로
+해석하며 성능 향상으로 표현하지 않습니다. Reference 역시 runtime marker
+emission이 남아 있으므로 완전한 무계측 또는 순수 원본 성능 기준이 아닙니다.
 
 ## Hybrid source 병합
 
