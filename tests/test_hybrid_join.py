@@ -66,10 +66,91 @@ def two_iteration_contract():
     return source
 
 
+def observability_contract(*, observed_zero=False):
+    source = rows(
+        MARKER_ORDER,
+        attributes={
+            "hybrid.correlation_id": "request-1",
+            "hybrid.marker_version": "1.1.0",
+            "hybrid.transfer_id": "request-1-read-1",
+        },
+    )
+    transfer_end = next(
+        item for item in source if item.event_name == "kv_transfer_end"
+    )
+    if observed_zero:
+        transfer_end.attributes["kv.wait_observation"] = "done_on_first_poll"
+    extra = (
+        ("kv_handoff_start", 141, "request-1-handoff"),
+        ("kv_handoff_end", 144, "request-1-handoff"),
+        ("kv_transfer_setup_start", 144, "request-1-read-1"),
+        ("kv_transfer_setup_end", 149, "request-1-read-1"),
+        ("decode_schedule_wait_start", 181, "request-1-decode-ready"),
+        ("decode_schedule_wait_end", 199, "request-1-decode-ready"),
+    )
+    if not observed_zero:
+        extra += (
+            ("kv_transfer_wait_start", 152, "request-1-read-1"),
+            ("kv_transfer_wait_end", 158, "request-1-read-1"),
+        )
+    for index, (name, timestamp, transfer_id) in enumerate(extra):
+        source.append(
+            event(
+                run_id="hybrid-run",
+                event_name=name,
+                timestamp_ns=timestamp,
+                host_id="gpu-host",
+                clock_domain_id="canonical",
+                request_id="request-1",
+                event_id=f"observability-{index}",
+                device_type=DeviceType.NPU,
+                attributes={
+                    "hybrid.correlation_id": "request-1",
+                    "hybrid.marker_version": "1.1.0",
+                    "hybrid.transfer_id": transfer_id,
+                },
+            )
+        )
+    return source
+
+
 class MarkerValidationTests(unittest.TestCase):
     def test_full_contract_is_valid(self):
         result = validate_marker_order(rows(MARKER_ORDER))
         self.assertEqual(result.status, "valid")
+
+    def test_versioned_observability_contract_is_valid(self):
+        result = validate_marker_order(observability_contract())
+        self.assertEqual(result.status, "valid")
+        self.assertFalse(result.pairing_issues)
+        self.assertFalse(result.ordering_issues)
+
+    def test_observed_zero_wait_does_not_require_fabricated_pair(self):
+        result = validate_marker_order(observability_contract(observed_zero=True))
+        self.assertEqual(result.status, "valid")
+
+    def test_capability_marker_missing_is_invalid(self):
+        source = observability_contract()
+        source = [
+            item
+            for item in source
+            if item.event_name != "kv_transfer_setup_end"
+        ]
+        result = validate_marker_order(source)
+        self.assertEqual(result.status, "invalid")
+        self.assertTrue(
+            any("kv_transfer_setup_end" in issue for issue in result.pairing_issues)
+        )
+
+    def test_wait_pair_clock_mismatch_is_invalid(self):
+        source = observability_contract()
+        wait_end = next(
+            item for item in source if item.event_name == "kv_transfer_wait_end"
+        )
+        wait_end.clock_domain_id = "other-clock"
+        result = validate_marker_order(source)
+        self.assertEqual(result.status, "invalid")
+        self.assertTrue(any("clock domains" in issue for issue in result.pairing_issues))
 
     def test_two_correlated_request_contracts_are_not_duplicates(self):
         source = rows(

@@ -424,7 +424,10 @@ def _direction(name: str) -> str:
     if name.startswith("latency.") or name in {
         "transfer.duration",
         "transfer.transform_duration",
+        "transfer.handoff_duration",
+        "transfer.setup_duration",
         "transfer.wait_duration",
+        "decode.schedule_wait_duration",
     }:
         return "lower_is_preferred"
     if name.startswith("throughput.") or name == "transfer.effective_bandwidth":

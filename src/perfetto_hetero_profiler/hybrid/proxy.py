@@ -30,11 +30,13 @@ class MarkerWriter:
         source: str,
         attributes: dict[str, Any],
         remote_request_id_suffix: str | None = None,
+        transfer_id: str | None = None,
     ) -> None:
         with self.lock:
             self.sequence += 1
             row: dict[str, Any] = {
                 "schema_version": "1.0.0",
+                "marker_version": "1.1.0",
                 "event_name": event_name,
                 "timestamp_ns": time.monotonic_ns(),
                 "host_id": self.host_id,
@@ -51,6 +53,8 @@ class MarkerWriter:
             }
             if remote_request_id_suffix:
                 row["remote_request_id_suffix"] = remote_request_id_suffix[-64:]
+            if transfer_id:
+                row["transfer_id"] = transfer_id
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8", newline="\n") as stream:
                 stream.write(
@@ -247,6 +251,15 @@ class HybridProxyHandler(BaseHTTPRequestHandler):
                     kv_params.get("remote_block_ids")
                 ),
             },
+        )
+        markers.emit(
+            "kv_handoff_start",
+            request_id,
+            phase="kv_transfer",
+            source="hetero_profiler.proxy.decode_handoff",
+            remote_request_id_suffix=remote_request_id,
+            transfer_id=f"{request_id}-handoff",
+            attributes={"kv.handoff_state": "metadata_exported"},
         )
         decode_body = dict(body)
         decode_body["kv_transfer_params"] = kv_params

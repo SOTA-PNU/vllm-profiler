@@ -132,10 +132,27 @@ Canonical trace는 다음 request 중심 hierarchy를 사용합니다.
 Hybrid Request
 ├─ GPU Prefill
 ├─ KV Export
+├─ KV Handoff
+├─ KV Transfer Setup
 ├─ KV Transfer
+├─ KV Transfer Wait
 ├─ KV Transform
+├─ Decode Scheduling Wait
 └─ NPU Decode
 ```
+
+추가 구간은 versioned runtime marker가 있을 때만 생성합니다. KV Handoff는 GPU
+KV export 완료부터 NPU가 transfer handle 준비를 시작할 때까지, Transfer Setup은
+handle 준비 시작부터 비동기 transfer 제출 직전까지입니다. Transfer Wait은 제출
+후 첫 `PROC` 관찰부터 동일 handle의 `DONE` 관찰까지이며 polling 간격만큼 경계
+오차가 있을 수 있습니다. 첫 poll이 `DONE`이면 명시적으로 관찰된 0이고, marker가
+없는 상태와 구분합니다. Decode Scheduling Wait은 KV 동기화 완료 후 첫 decode
+model 실행 직전까지이며 scheduler 전체 queue 체류 시간을 뜻하지는 않습니다.
+
+Setup과 Wait은 전체 Transfer 구간에 포함될 수 있으므로 단순 합산하지 않습니다.
+모든 pair는 같은 request, correlation ID, transfer ID와 clock domain을 요구합니다.
+Capability가 없는 이전 run은 기존 계약으로 검증하며 새 KPI는
+`not_available`로 유지합니다.
 
 Resource metric은 counter track으로, native operation은 profiler와
 process/thread/device 단위의 하위 track으로 구성합니다. 선택적인

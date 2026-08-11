@@ -560,6 +560,7 @@ class HybridRunner:
         self.enable_telemetry = enable_telemetry
         self.process_factory = process_factory
         self.client_factory = client_factory
+        self._runtime_marker_capability = False
 
     def run(self) -> HybridRunResult:
         config, layout = self.config, self.layout
@@ -1151,6 +1152,10 @@ class HybridRunner:
             event for event in npu_events
             if event.attributes.get("hybrid.correlation_id") in measured_ids
         ]
+        self._runtime_marker_capability = any(
+            event.attributes.get("hybrid.marker_version") == "1.1.0"
+            for event in (*gpu_filtered, *npu_filtered)
+        )
         for request_id in measured_ids:
             validation = validate_marker_order(
                 [
@@ -1419,6 +1424,16 @@ class HybridRunner:
                 "hybrid.source_role": role,
                 "hybrid.real_source": True,
                 "hybrid.runner": "collect hybrid",
+                **(
+                    {
+                        "hybrid.runtime_marker_version": "1.1.0",
+                        "hybrid.runtime_marker_capabilities": [
+                            "transfer_wait_observability_v1"
+                        ],
+                    }
+                    if self._runtime_marker_capability
+                    else {}
+                ),
             },
         )
 

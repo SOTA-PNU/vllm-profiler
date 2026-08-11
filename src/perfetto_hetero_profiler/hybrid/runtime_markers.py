@@ -29,9 +29,17 @@ CANONICAL_MARKER_PHASES = {
     "kv_export_end": Phase.KV_EXPORT,
     "kv_transfer_start": Phase.KV_TRANSFER,
     "kv_transfer_end": Phase.KV_TRANSFER,
+    "kv_handoff_start": Phase.KV_TRANSFER,
+    "kv_handoff_end": Phase.KV_TRANSFER,
+    "kv_transfer_setup_start": Phase.KV_TRANSFER,
+    "kv_transfer_setup_end": Phase.KV_TRANSFER,
+    "kv_transfer_wait_start": Phase.KV_TRANSFER,
+    "kv_transfer_wait_end": Phase.KV_TRANSFER,
     "kv_transform_start": Phase.KV_TRANSFORM,
     "kv_transform_end": Phase.KV_TRANSFORM,
     "decode_loop_start": Phase.DECODE,
+    "decode_schedule_wait_start": Phase.DECODE,
+    "decode_schedule_wait_end": Phase.DECODE,
     "decode_step_start": Phase.DECODE,
     "decode_step_end": Phase.DECODE,
     "sampling_start": Phase.SAMPLING,
@@ -64,6 +72,7 @@ _OPTIONAL_FIELDS = frozenset(
         "remote_request_id_suffix",
         "transfer_id",
         "sequence",
+        "marker_version",
     }
 )
 _RESERVED_ATTRIBUTES = frozenset(
@@ -74,6 +83,7 @@ _RESERVED_ATTRIBUTES = frozenset(
         "hybrid.remote_request_id_suffix",
         "hybrid.transfer_id",
         "hybrid.marker_sequence",
+        "hybrid.marker_version",
         "hybrid.marker_file_index",
         "hybrid.marker_line_number",
     }
@@ -395,6 +405,20 @@ def _parse_marker(
             line_number=line_number,
             field="sequence",
         )
+    marker_version = row.get("marker_version")
+    if marker_version is not None:
+        marker_version = _nonempty_string(
+            marker_version,
+            path=path,
+            line_number=line_number,
+            field="marker_version",
+        )
+        if re.fullmatch(r"[1-9][0-9]*\.[0-9]+\.[0-9]+", marker_version) is None:
+            raise RuntimeMarkerIngestError(
+                path,
+                line_number,
+                "marker_version must be a semantic version",
+            )
 
     attributes = _validate_safe_attributes(
         row["attributes"],
@@ -417,6 +441,8 @@ def _parse_marker(
         attributes["hybrid.transfer_id"] = transfer_id
     if sequence is not None:
         attributes["hybrid.marker_sequence"] = sequence
+    if marker_version is not None:
+        attributes["hybrid.marker_version"] = marker_version
 
     device = process_devices.get(process_role)
     if device is not None and (

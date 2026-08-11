@@ -132,7 +132,10 @@ _TRANSFER_KPIS = {
     "transfer.duration",
     "transfer.effective_bandwidth",
     "transfer.transform_duration",
+    "transfer.handoff_duration",
+    "transfer.setup_duration",
     "transfer.wait_duration",
+    "decode.schedule_wait_duration",
     "transfer.e2e_share",
 }
 _COMPARISON_SECTION_CONTRACT = {

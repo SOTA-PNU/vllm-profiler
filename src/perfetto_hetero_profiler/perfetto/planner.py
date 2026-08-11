@@ -136,11 +136,38 @@ _PAIR_DEFINITIONS = (
         Phase.KV_EXPORT,
     ),
     _PairDefinition(
+        "kv_handoff_start",
+        "kv_handoff_end",
+        "kv_handoff",
+        "KV Handoff",
+        "KV Handoff",
+        Phase.KV_TRANSFER,
+        discriminator="transfer",
+    ),
+    _PairDefinition(
+        "kv_transfer_setup_start",
+        "kv_transfer_setup_end",
+        "kv_transfer_setup",
+        "KV Transfer Setup",
+        "KV Transfer Setup",
+        Phase.KV_TRANSFER,
+        discriminator="transfer",
+    ),
+    _PairDefinition(
         "kv_transfer_start",
         "kv_transfer_end",
         "kv_transfer",
         "KV Transfer",
         "KV Transfer",
+        Phase.KV_TRANSFER,
+        discriminator="transfer",
+    ),
+    _PairDefinition(
+        "kv_transfer_wait_start",
+        "kv_transfer_wait_end",
+        "kv_transfer_wait",
+        "KV Transfer Wait",
+        "KV Transfer Wait",
         Phase.KV_TRANSFER,
         discriminator="transfer",
     ),
@@ -151,6 +178,15 @@ _PAIR_DEFINITIONS = (
         "KV Transform",
         "KV Transform",
         Phase.KV_TRANSFORM,
+    ),
+    _PairDefinition(
+        "decode_schedule_wait_start",
+        "decode_schedule_wait_end",
+        "decode_schedule_wait",
+        "Decode Scheduling Wait",
+        "Decode Scheduling Wait",
+        Phase.DECODE,
+        discriminator="transfer",
     ),
     _PairDefinition(
         "decode_loop_start",
@@ -190,9 +226,13 @@ _TRACK_DESCRIPTIONS = {
     "request": "End-to-end request lifecycle on the canonical clock.",
     "gpu_prefill": "GPU prefill markers paired without timestamp inference.",
     "kv_export": "GPU KV export markers paired by explicit request identity.",
+    "kv_handoff": "Export-to-transfer handoff paired by explicit correlation identity.",
+    "kv_transfer_setup": "Host-side NIXL descriptor and handle preparation.",
     "kv_transfer": "GPU-to-NPU KV transfer paired by explicit transfer identity.",
+    "kv_transfer_wait": "Observed incomplete-to-done NIXL polling interval.",
     "kv_transform": "NPU KV transform markers on the canonical clock.",
     "npu_decode": "NPU decode loop markers on the canonical clock.",
+    "decode_schedule_wait": "Decode-ready to first model-step scheduling interval.",
     "npu_decode_step": "Ordered NPU decode steps with preserved step index.",
     "sampling": "Ordered sampling steps with preserved step index.",
     "response": "Canonical response completion point.",
@@ -219,6 +259,19 @@ _TIMELINE_SUMMARY_STAGE_TRACKS = (
     ("kv_transfer", "summary.pipeline.kv_transfer", "KV Transfer", 2),
     ("kv_transform", "summary.pipeline.kv_transform", "KV Transform", 3),
     ("npu_decode", "summary.pipeline.npu_decode", "NPU Decode", 4),
+    ("kv_handoff", "summary.pipeline.kv_handoff", "KV Handoff", 5),
+    ("kv_transfer_setup", "summary.pipeline.kv_transfer_setup", "KV Transfer Setup", 6),
+    ("kv_transfer_wait", "summary.pipeline.kv_transfer_wait", "KV Transfer Wait", 7),
+    ("decode_schedule_wait", "summary.pipeline.decode_schedule_wait", "Decode Scheduling Wait", 8),
+)
+
+_OPTIONAL_TIMELINE_SUMMARY_STAGE_TRACKS = frozenset(
+    {
+        "kv_handoff",
+        "kv_transfer_setup",
+        "kv_transfer_wait",
+        "decode_schedule_wait",
+    }
 )
 
 _KPI_ANCHOR_TRACKS = {
@@ -232,6 +285,10 @@ _KPI_ANCHOR_TRACKS = {
     ("transfer", "transfer.duration"): "kv_transfer",
     ("transfer", "transfer.effective_bandwidth"): "kv_transfer",
     ("transfer", "transfer.transform_duration"): "kv_transform",
+    ("transfer", "transfer.handoff_duration"): "kv_handoff",
+    ("transfer", "transfer.setup_duration"): "kv_transfer_setup",
+    ("transfer", "transfer.wait_duration"): "kv_transfer_wait",
+    ("transfer", "decode.schedule_wait_duration"): "decode_schedule_wait",
     ("transfer", "transfer.e2e_share"): "kv_transfer",
 }
 
@@ -754,7 +811,9 @@ def _timeline_summary_track_uuid(
     )
 
 
-def _timeline_summary_group_tracks() -> list[TrackSpec]:
+def _timeline_summary_group_tracks(
+    available_pipeline_keys: frozenset[str],
+) -> list[TrackSpec]:
     return [
         TrackSpec(
             key="summary.root",
@@ -805,6 +864,7 @@ def _timeline_summary_group_tracks() -> list[TrackSpec]:
                 sibling_order_rank=rank,
             )
             for _, timeline_summary_key, name, rank in _TIMELINE_SUMMARY_STAGE_TRACKS
+            if timeline_summary_key in available_pipeline_keys
         ],
         TrackSpec(
             key="summary.kpi.token_throughput",
@@ -957,7 +1017,16 @@ def _pipeline_summary_slices(
 ) -> list[SliceSpec]:
     summaries: list[SliceSpec] = []
     for detail_key, timeline_summary_key, _, _ in _TIMELINE_SUMMARY_STAGE_TRACKS:
-        detail = _pair_for_track(paired, detail_key)
+        matches = [
+            item for item in paired if item.definition.track_key == detail_key
+        ]
+        if not matches and detail_key in _OPTIONAL_TIMELINE_SUMMARY_STAGE_TRACKS:
+            continue
+        if len(matches) != 1:
+            raise PerfettoPlanningError(
+                f"timeline summary requires exactly one {detail_key!r} marker pair"
+            )
+        detail = matches[0]
         annotations = dict(detail.spec.annotations)
         annotations.update(
             {
@@ -1328,7 +1397,11 @@ def build_trace_plan(
         slices.extend((request_summary, *pipeline_summaries))
         timeline_summary_slice_count = 1 + len(pipeline_summaries)
 
-        timeline_summary_tracks.extend(_timeline_summary_group_tracks())
+        timeline_summary_tracks.extend(
+            _timeline_summary_group_tracks(
+                frozenset(item.track_key for item in pipeline_summaries)
+            )
+        )
         resource_groups, counter_tracks = _group_resource_tracks(
             counter_tracks,
             metric_rows,

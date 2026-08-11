@@ -334,6 +334,159 @@ class HybridBundleTests(unittest.TestCase):
                 Availability.NOT_AVAILABLE,
             )
 
+    def test_versioned_runtime_boundaries_produce_observability_metrics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gpu_markers = (
+                "request_received",
+                "prefill_start",
+                "prefill_end",
+                "kv_export_start",
+                "kv_export_end",
+                "kv_handoff_start",
+            )
+            npu_markers = (
+                "kv_handoff_end",
+                "kv_transfer_setup_start",
+                "kv_transfer_setup_end",
+                "kv_transfer_start",
+                "kv_transfer_wait_start",
+                "kv_transfer_wait_end",
+                "kv_transfer_end",
+                "kv_transform_start",
+                "kv_transform_end",
+                "decode_schedule_wait_start",
+                "decode_schedule_wait_end",
+                "decode_loop_start",
+                "decode_step_start",
+                "decode_step_end",
+                "sampling_start",
+                "sampling_end",
+                "decode_loop_end",
+                "response_done",
+            )
+            common = {
+                "hybrid.correlation_id": "request-1",
+                "hybrid.marker_version": "1.1.0",
+            }
+            gpu_attributes = {
+                name: {
+                    **common,
+                    "hybrid.transfer_id": "request-1-handoff",
+                }
+                for name in gpu_markers
+            }
+            npu_attributes = {
+                name: {
+                    **common,
+                    "hybrid.transfer_id": (
+                        "request-1-handoff"
+                        if name == "kv_handoff_end"
+                        else "request-1-decode-ready"
+                        if name.startswith("decode_schedule_wait_")
+                        else "request-1-read-1"
+                    ),
+                }
+                for name in npu_markers
+            }
+            case = HybridCase(
+                directory,
+                gpu_markers=gpu_markers,
+                npu_markers=npu_markers,
+                gpu_marker_attributes=gpu_attributes,
+                npu_marker_attributes=npu_attributes,
+            )
+            result = HybridBundleMerger(merge_config(case)).merge()
+            self.assertIs(result.status, RunStatus.SUCCEEDED)
+            metrics = [
+                row
+                for row in read_jsonl(case.output / "metrics/metrics.jsonl")
+                if isinstance(row, MetricSample)
+                and row.metric_name
+                in {
+                    "transfer.handoff_duration",
+                    "transfer.setup_duration",
+                    "transfer.wait_duration",
+                    "decode.schedule_wait_duration",
+                }
+            ]
+            by_name = {row.metric_name: row for row in metrics}
+            self.assertEqual(set(by_name), {
+                "transfer.handoff_duration",
+                "transfer.setup_duration",
+                "transfer.wait_duration",
+                "decode.schedule_wait_duration",
+            })
+            self.assertTrue(
+                all(row.availability is Availability.AVAILABLE for row in metrics)
+            )
+            self.assertEqual(by_name["transfer.handoff_duration"].value, 400_000)
+            self.assertEqual(by_name["transfer.setup_duration"].value, 100_000)
+            self.assertEqual(by_name["transfer.wait_duration"].value, 100_000)
+            self.assertEqual(
+                by_name["decode.schedule_wait_duration"].value,
+                100_000,
+            )
+
+    def test_observed_zero_wait_is_available_zero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gpu_markers = (
+                "request_received", "prefill_start", "prefill_end",
+                "kv_export_start", "kv_export_end", "kv_handoff_start",
+            )
+            npu_markers = (
+                "kv_handoff_end", "kv_transfer_setup_start",
+                "kv_transfer_setup_end", "kv_transfer_start",
+                "kv_transfer_end", "kv_transform_start", "kv_transform_end",
+                "decode_schedule_wait_start", "decode_schedule_wait_end",
+                "decode_loop_start", "decode_step_start", "decode_step_end",
+                "sampling_start", "sampling_end", "decode_loop_end",
+                "response_done",
+            )
+            common = {
+                "hybrid.correlation_id": "request-1",
+                "hybrid.marker_version": "1.1.0",
+            }
+            gpu_attributes = {
+                name: {**common, "hybrid.transfer_id": "request-1-handoff"}
+                for name in gpu_markers
+            }
+            npu_attributes = {
+                name: {
+                    **common,
+                    "hybrid.transfer_id": (
+                        "request-1-handoff"
+                        if name == "kv_handoff_end"
+                        else "request-1-decode-ready"
+                        if name.startswith("decode_schedule_wait_")
+                        else "request-1-read-1"
+                    ),
+                    **(
+                        {"kv.wait_observation": "done_on_first_poll"}
+                        if name == "kv_transfer_end"
+                        else {}
+                    ),
+                }
+                for name in npu_markers
+            }
+            case = HybridCase(
+                directory,
+                gpu_markers=gpu_markers,
+                npu_markers=npu_markers,
+                gpu_marker_attributes=gpu_attributes,
+                npu_marker_attributes=npu_attributes,
+            )
+            result = HybridBundleMerger(merge_config(case)).merge()
+            self.assertIs(result.status, RunStatus.SUCCEEDED)
+            wait = next(
+                row
+                for row in read_jsonl(case.output / "metrics/metrics.jsonl")
+                if isinstance(row, MetricSample)
+                and row.metric_name == "transfer.wait_duration"
+            )
+            self.assertIs(wait.availability, Availability.AVAILABLE)
+            self.assertEqual(wait.value, 0)
+            self.assertEqual(len(wait.source_event_ids or ()), 1)
+
     def test_transfer_bytes_are_unavailable_without_matching_pair(self):
         with tempfile.TemporaryDirectory() as directory:
             attributes = {

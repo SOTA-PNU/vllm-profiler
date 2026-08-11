@@ -145,9 +145,17 @@ _EVENT_PHASES = {
     "kv_export_end": Phase.KV_EXPORT,
     "kv_transfer_start": Phase.KV_TRANSFER,
     "kv_transfer_end": Phase.KV_TRANSFER,
+    "kv_handoff_start": Phase.KV_TRANSFER,
+    "kv_handoff_end": Phase.KV_TRANSFER,
+    "kv_transfer_setup_start": Phase.KV_TRANSFER,
+    "kv_transfer_setup_end": Phase.KV_TRANSFER,
+    "kv_transfer_wait_start": Phase.KV_TRANSFER,
+    "kv_transfer_wait_end": Phase.KV_TRANSFER,
     "kv_transform_start": Phase.KV_TRANSFORM,
     "kv_transform_end": Phase.KV_TRANSFORM,
     "decode_loop_start": Phase.DECODE,
+    "decode_schedule_wait_start": Phase.DECODE,
+    "decode_schedule_wait_end": Phase.DECODE,
     "decode_loop_end": Phase.DECODE,
     "decode_step_start": Phase.DECODE,
     "decode_step_end": Phase.DECODE,
@@ -315,6 +323,56 @@ def non_resource_metric() -> MetricSample:
 
 
 class PlannerTests(unittest.TestCase):
+    def test_observed_transfer_and_schedule_intervals_get_distinct_tracks(self):
+        details = (
+            instant_event(
+                "kv_handoff_start", 251, transfer_id="request-1-handoff"
+            ),
+            instant_event(
+                "kv_handoff_end", 255, transfer_id="request-1-handoff"
+            ),
+            instant_event(
+                "kv_transfer_setup_start", 256, transfer_id="transfer-1"
+            ),
+            instant_event(
+                "kv_transfer_setup_end", 259, transfer_id="transfer-1"
+            ),
+            instant_event(
+                "kv_transfer_wait_start", 270, transfer_id="transfer-1"
+            ),
+            instant_event(
+                "kv_transfer_wait_end", 315, transfer_id="transfer-1"
+            ),
+            instant_event(
+                "decode_schedule_wait_start",
+                381,
+                transfer_id="request-1-decode-ready",
+            ),
+            instant_event(
+                "decode_schedule_wait_end",
+                419,
+                transfer_id="request-1-decode-ready",
+            ),
+        )
+        first = build_trace_plan(
+            synthetic_manifest(),
+            (*canonical_events(), *details),
+            (),
+            canonical_clock_domain_id=CLOCK_ID,
+        )
+        second = build_trace_plan(
+            synthetic_manifest(),
+            tuple(reversed((*canonical_events(), *details))),
+            (),
+            canonical_clock_domain_id=CLOCK_ID,
+        )
+        slices = {item.name: item for item in first.plan.slices}
+        self.assertEqual(slices["KV Handoff"].duration_ns, 4)
+        self.assertEqual(slices["KV Transfer Setup"].duration_ns, 3)
+        self.assertEqual(slices["KV Transfer Wait"].duration_ns, 45)
+        self.assertEqual(slices["Decode Scheduling Wait"].duration_ns, 38)
+        self.assertEqual(first.plan, second.plan)
+
     def test_canonical_markers_form_nested_slices_and_preserve_step_index(self):
         result = build_trace_plan(
             synthetic_manifest(),

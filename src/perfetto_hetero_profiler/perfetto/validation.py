@@ -1362,8 +1362,24 @@ def _timeline_summary_plan_contract_mismatches(plan: TracePlan) -> list[str]:
         ("summary.request_summary", "request", "Hybrid Request"),
         ("summary.pipeline.gpu_prefill", "gpu_prefill", "GPU Prefill"),
         ("summary.pipeline.kv_export", "kv_export", "KV Export"),
+        ("summary.pipeline.kv_handoff", "kv_handoff", "KV Handoff"),
+        (
+            "summary.pipeline.kv_transfer_setup",
+            "kv_transfer_setup",
+            "KV Transfer Setup",
+        ),
         ("summary.pipeline.kv_transfer", "kv_transfer", "KV Transfer"),
+        (
+            "summary.pipeline.kv_transfer_wait",
+            "kv_transfer_wait",
+            "KV Transfer Wait",
+        ),
         ("summary.pipeline.kv_transform", "kv_transform", "KV Transform"),
+        (
+            "summary.pipeline.decode_schedule_wait",
+            "decode_schedule_wait",
+            "Decode Scheduling Wait",
+        ),
         ("summary.pipeline.npu_decode", "npu_decode", "NPU Decode"),
     )
     allowed_summary_keys = {timeline_summary_key for timeline_summary_key, _, _ in summary_pairs}

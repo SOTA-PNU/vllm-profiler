@@ -8,7 +8,7 @@ from perfetto_hetero_profiler.schema import METRIC_CATALOG, MetricKind, MetricSc
 
 class MetricCatalogTests(unittest.TestCase):
     def test_catalog_has_expected_size(self) -> None:
-        self.assertEqual(len(METRIC_CATALOG), 37)
+        self.assertEqual(len(METRIC_CATALOG), 40)
 
     def test_required_metric_groups_exist(self) -> None:
         for name in (

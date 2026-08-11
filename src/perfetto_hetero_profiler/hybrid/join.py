@@ -35,6 +35,29 @@ ITERATION_MARKERS = (
     "sampling_end",
 )
 REPEATABLE_MARKERS = {*ITERATION_MARKERS, "token_emitted"}
+OBSERVABILITY_MARKER_VERSION = "1.1.0"
+OBSERVABILITY_MARKERS = frozenset(
+    {
+        "kv_handoff_start",
+        "kv_handoff_end",
+        "kv_transfer_setup_start",
+        "kv_transfer_setup_end",
+        "kv_transfer_wait_start",
+        "kv_transfer_wait_end",
+        "decode_schedule_wait_start",
+        "decode_schedule_wait_end",
+    }
+)
+TRANSFER_REPEATABLE_MARKERS = frozenset(
+    {
+        "kv_transfer_start",
+        "kv_transfer_end",
+        "kv_transfer_setup_start",
+        "kv_transfer_setup_end",
+        "kv_transfer_wait_start",
+        "kv_transfer_wait_end",
+    }
+)
 TRANSFER_KEYS = (
     "hybrid.transfer_id",
     "kv.transfer_id",
@@ -94,6 +117,19 @@ def _step_index(event: EventRecord) -> int | None:
     return None
 
 
+def _transfer_id(event: EventRecord) -> str | None:
+    value = event.attributes.get("hybrid.transfer_id")
+    return value if isinstance(value, str) and value else None
+
+
+def _has_observability_capability(events: Iterable[EventRecord]) -> bool:
+    return any(
+        event.attributes.get("hybrid.marker_version")
+        == OBSERVABILITY_MARKER_VERSION
+        for event in events
+    )
+
+
 def _ordering_issue(
     before: EventRecord,
     after: EventRecord,
@@ -142,6 +178,16 @@ def validate_marker_order(events: Iterable[EventRecord]) -> MarkerValidation:
                 pairing_issues.append(
                     f"{name} requires a non-negative decode.step_index"
                 )
+            continue
+        if name in TRANSFER_REPEATABLE_MARKERS:
+            transfer_ids = [_transfer_id(event) for event in matches]
+            if any(value is None for value in transfer_ids):
+                pairing_issues.append(
+                    f"every repeated {name} requires hybrid.transfer_id"
+                )
+            concrete_ids = [value for value in transfer_ids if value is not None]
+            if len(set(concrete_ids)) != len(concrete_ids):
+                duplicates.append(name)
             continue
         if name not in REPEATABLE_MARKERS:
             duplicates.append(name)
@@ -251,6 +297,125 @@ def validate_marker_order(events: Iterable[EventRecord]) -> MarkerValidation:
                         issues.append(issue)
                 previous_sampling_end = sampling_end
 
+    if _has_observability_capability(rows):
+        observability_by_name: dict[str, list[EventRecord]] = defaultdict(list)
+        for event in rows:
+            if event.event_name in OBSERVABILITY_MARKERS:
+                observability_by_name[event.event_name].append(event)
+
+        def paired_by_transfer(start_name: str, end_name: str) -> None:
+            starts = observability_by_name[start_name]
+            ends = observability_by_name[end_name]
+            starts_by_id = {_transfer_id(event): event for event in starts}
+            ends_by_id = {_transfer_id(event): event for event in ends}
+            if None in starts_by_id or None in ends_by_id:
+                pairing_issues.append(
+                    f"{start_name}/{end_name} require hybrid.transfer_id"
+                )
+                return
+            if len(starts_by_id) != len(starts):
+                duplicates.append(start_name)
+            if len(ends_by_id) != len(ends):
+                duplicates.append(end_name)
+            if set(starts_by_id) != set(ends_by_id):
+                pairing_issues.append(
+                    f"{start_name}/{end_name} transfer IDs do not match"
+                )
+            for transfer_id in sorted(set(starts_by_id) & set(ends_by_id)):
+                start = starts_by_id[transfer_id]
+                end = ends_by_id[transfer_id]
+                if start.clock_domain_id != end.clock_domain_id:
+                    pairing_issues.append(
+                        f"{start_name}/{end_name} {transfer_id} use different clock domains"
+                    )
+                    continue
+                issue = _ordering_issue(
+                    start,
+                    end,
+                    context=f"{start_name}/{end_name} interval order",
+                )
+                if issue is not None:
+                    issues.append(issue)
+
+        for start_name, end_name in (
+            ("kv_handoff_start", "kv_handoff_end"),
+            ("kv_transfer_setup_start", "kv_transfer_setup_end"),
+            ("decode_schedule_wait_start", "decode_schedule_wait_end"),
+        ):
+            if not observability_by_name[start_name]:
+                pairing_issues.append(f"required capability marker missing: {start_name}")
+            if not observability_by_name[end_name]:
+                pairing_issues.append(f"required capability marker missing: {end_name}")
+            if observability_by_name[start_name] and observability_by_name[end_name]:
+                paired_by_transfer(start_name, end_name)
+
+        wait_starts = observability_by_name["kv_transfer_wait_start"]
+        wait_ends = observability_by_name["kv_transfer_wait_end"]
+        if wait_starts or wait_ends:
+            paired_by_transfer("kv_transfer_wait_start", "kv_transfer_wait_end")
+
+        transfer_ends = {
+            _transfer_id(event): event
+            for event in rows
+            if event.event_name == "kv_transfer_end"
+        }
+        transfer_starts = {
+            _transfer_id(event): event
+            for event in rows
+            if event.event_name == "kv_transfer_start"
+        }
+        wait_starts_by_id = {
+            _transfer_id(event): event for event in wait_starts
+        }
+        wait_ends_by_id = {
+            _transfer_id(event): event for event in wait_ends
+        }
+        for transfer_id in sorted(
+            value
+            for value in set(wait_starts_by_id) & set(wait_ends_by_id)
+            if value is not None
+        ):
+            transfer_start = transfer_starts.get(transfer_id)
+            transfer_end = transfer_ends.get(transfer_id)
+            if transfer_start is None or transfer_end is None:
+                pairing_issues.append(
+                    f"wait interval {transfer_id} lacks its transfer boundary"
+                )
+                continue
+            for before, after, context in (
+                (
+                    transfer_start,
+                    wait_starts_by_id[transfer_id],
+                    "wait starts before transfer submission",
+                ),
+                (
+                    wait_ends_by_id[transfer_id],
+                    transfer_end,
+                    "wait ends after transfer completion",
+                ),
+            ):
+                issue = _ordering_issue(before, after, context=context)
+                if issue is not None:
+                    issues.append(issue)
+        wait_ids = {_transfer_id(event) for event in wait_starts}
+        setup_ids = {
+            _transfer_id(event)
+            for event in observability_by_name["kv_transfer_setup_start"]
+        }
+        for transfer_id in sorted(value for value in setup_ids if value is not None):
+            transfer_end = transfer_ends.get(transfer_id)
+            if transfer_end is None:
+                pairing_issues.append(
+                    f"transfer {transfer_id} has setup markers but no kv_transfer_end"
+                )
+                continue
+            if transfer_id not in wait_ids and transfer_end.attributes.get(
+                "kv.wait_observation"
+            ) != "done_on_first_poll":
+                pairing_issues.append(
+                    f"transfer {transfer_id} lacks wait markers or observed-zero evidence"
+                )
+
     response_rows = by_name["response_done"]
     if len(response_rows) == 1:
         response = response_rows[0]
@@ -295,7 +460,12 @@ def validate_marker_groups(events: Iterable[EventRecord]) -> MarkerValidation:
     grouped: dict[str, list[EventRecord]] = defaultdict(list)
     uncorrelated: list[EventRecord] = []
     for event in rows:
-        if event.event_name not in {*MARKER_ORDER, "first_token_emitted", "token_emitted"}:
+        if event.event_name not in {
+            *MARKER_ORDER,
+            *OBSERVABILITY_MARKERS,
+            "first_token_emitted",
+            "token_emitted",
+        }:
             continue
         correlation = event.attributes.get("hybrid.correlation_id")
         if not isinstance(correlation, str) or not correlation:

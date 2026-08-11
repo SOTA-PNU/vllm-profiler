@@ -46,9 +46,17 @@ _EVENT_PHASE = {
     "kv_export_end": Phase.KV_EXPORT,
     "kv_transfer_start": Phase.KV_TRANSFER,
     "kv_transfer_end": Phase.KV_TRANSFER,
+    "kv_handoff_start": Phase.KV_TRANSFER,
+    "kv_handoff_end": Phase.KV_TRANSFER,
+    "kv_transfer_setup_start": Phase.KV_TRANSFER,
+    "kv_transfer_setup_end": Phase.KV_TRANSFER,
+    "kv_transfer_wait_start": Phase.KV_TRANSFER,
+    "kv_transfer_wait_end": Phase.KV_TRANSFER,
     "kv_transform_start": Phase.KV_TRANSFORM,
     "kv_transform_end": Phase.KV_TRANSFORM,
     "decode_loop_start": Phase.DECODE,
+    "decode_schedule_wait_start": Phase.DECODE,
+    "decode_schedule_wait_end": Phase.DECODE,
     "decode_loop_end": Phase.DECODE,
     "sampling_start": Phase.SAMPLING,
     "sampling_end": Phase.SAMPLING,
@@ -397,6 +405,55 @@ class OverviewCalculationTests(unittest.TestCase):
         self.assertEqual(
             transfer["transfer.wait_duration"]["availability"], "not_available"
         )
+
+    def test_explicit_transfer_id_join_is_pipeline_provenance(self) -> None:
+        loaded = _fixture()
+        loaded.metrics = tuple(
+            replace(
+                metric,
+                dimensions={**metric.dimensions, "hybrid.join_method": "transfer_id"},
+            )
+            if metric.dimensions.get("hybrid.join_method") == "correlation_id"
+            else metric
+            for metric in loaded.metrics
+        )
+        result = calculate_overview_kpis(loaded)
+        request = _section_by_name(result, "request_facing_latency")
+        pipeline = _section_by_name(result, "pipeline_latency")
+        self.assertEqual(request["latency.e2e"]["value"], 110)
+        self.assertEqual(pipeline["latency.e2e"]["value"], 100)
+
+    def test_runtime_boundary_kpis_preserve_values_samples_and_sources(self) -> None:
+        loaded = _fixture()
+        names_values = {
+            "transfer.handoff_duration": 4,
+            "transfer.setup_duration": 5,
+            "transfer.wait_duration": 6,
+            "decode.schedule_wait_duration": 7,
+        }
+        metrics = list(loaded.metrics)
+        for name, value in names_values.items():
+            metrics.append(
+                _metric(
+                    name,
+                    value,
+                    request_id=CORRELATION_ID,
+                    interval_ns=value,
+                    source_event_ids=[f"{name}-start", f"{name}-end"],
+                )
+            )
+        result = calculate_overview_kpis(replace_metric_list(loaded, metrics))
+        transfer = _section_by_name(result, "transfer")
+        for name, value in names_values.items():
+            with self.subTest(name=name):
+                self.assertEqual(transfer[name]["availability"], "available")
+                self.assertEqual(transfer[name]["value"], value)
+                self.assertEqual(transfer[name]["sample_count"], 1)
+                self.assertEqual(
+                    transfer[name]["sources"][0]["record_ids"],
+                    [f"{name}-end", f"{name}-start"],
+                )
+                self.assertTrue(transfer[name]["quality_warnings"])
 
     def test_multiple_requests_use_explicit_run_aggregates(self) -> None:
         result = calculate_overview_kpis(_two_request_fixture())

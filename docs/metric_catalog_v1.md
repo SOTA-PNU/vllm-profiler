@@ -37,10 +37,13 @@
 | `resource.npu.power` | W | device | NPU power |
 | `transfer.bytes` | bytes | request, transfer | 전송된 byte 수 |
 | `transfer.duration` | ns | request, transfer | Transfer 구간 |
+| `transfer.handoff_duration` | ns | request | KV export 완료 후 NPU transfer 준비 시작까지의 handoff |
 | `transfer.effective_bandwidth` | bytes/s | request, transfer | 실효 전송 bandwidth |
+| `transfer.setup_duration` | ns | transfer | NIXL handle 준비 시작부터 비동기 제출 직전까지 |
 | `transfer.transform_duration` | ns | request, transfer | Transfer 전 변환 구간 |
-| `transfer.wait_duration` | ns | request, transfer | Transfer 관련 wait 구간 |
+| `transfer.wait_duration` | ns | request, transfer | 첫 incomplete 관찰부터 같은 handle의 완료 관찰까지 |
 | `transfer.e2e_share` | ratio | request, transfer | E2E 중 transfer 비율 |
+| `decode.schedule_wait_duration` | ns | request | KV 사용 가능 후 첫 decode 실행 직전까지 |
 | `hybrid.joined_requests` | requests | run | 명시적 ID로 연결된 request 수 |
 | `hybrid.unjoined_requests` | requests | run | 연결되지 않거나 ambiguous한 request 수 |
 | `hybrid.alignment_offset` | ns | run, host | Source clock offset 추정값 |
@@ -55,6 +58,12 @@
 - Effective bandwidth: `transfer.bytes / transfer.duration`
 - Transfer E2E share: `transfer.duration / latency.e2e`
 - Throughput: 명시적인 measured window의 count를 elapsed time으로 나눈 값
+
+Handoff, setup, transfer와 wait은 서로 다른 runtime 경계를 나타내며 일부 구간은
+포함되거나 겹칠 수 있습니다. 따라서 이 값을 더해 전체 transfer latency로
+해석하지 않습니다. 첫 status poll에서 이미 완료가 명시적으로 관찰된 경우에만
+wait을 `0 ns`로 기록합니다. Marker capability가 없거나 경계가 불완전한 경우에는
+0으로 대체하지 않고 `not_available`로 기록합니다.
 
 Start/end pair, token 수, duration 또는 clock alignment 근거가 부족하면 값을
 계산하지 않습니다. 나눗셈의 분모가 `0`이거나 unavailable이면 파생 metric도

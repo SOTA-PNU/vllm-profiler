@@ -350,6 +350,15 @@ RBLN trace에 canonical clock anchor가 없으면
 `trace.rbln-native.pftrace`로 별도 생성되며 timestamp를 임의로 이동하지
 않습니다.
 
+Versioned transfer marker가 포함된 hybrid run에서는 request group 아래의
+`KV Handoff`, `KV Transfer Setup`, `KV Transfer Wait`,
+`Decode Scheduling Wait` track을 확인할 수 있습니다. Wait은 status polling으로
+관찰한 구간이므로 실제 device completion보다 최대 polling 간격만큼 늦게 끝날 수
+있습니다. Setup, transfer, wait은 중첩될 수 있어 합산 값이 아닙니다. 이전 run처럼
+marker capability가 없으면 가짜 slice를 만들지 않으며 해당 KPI를
+`not_available`로 표시합니다. 첫 poll에서 완료가 확인된 경우에만 wait은 관찰된
+`0 ns`입니다.
+
 ## HTML Overview
 
 Overview는 Perfetto UI와 별개인 JSON/HTML 결과 리포트입니다.
@@ -366,6 +375,11 @@ hetero-profiler overview generate \
 현재 Overview 입력은 native detail option 없이 만든 기본 Perfetto bundle이어야
 합니다. 결과에는 `overview.json`, `overview.html`, validation과 detached
 artifact manifest가 포함됩니다.
+
+Transfer 표에는 Handoff duration, Transfer setup duration, Transfer completion
+wait, Decode scheduling wait이 값, availability, sample 수와 source marker와
+함께 표시됩니다. 값이 `0`이면 명시적인 완료 관찰이며, `not_available`은 marker
+capability 또는 유효한 pair가 없다는 뜻입니다.
 
 여러 Overview를 비교할 수 있습니다.
 

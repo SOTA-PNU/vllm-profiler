@@ -322,6 +322,11 @@ def _metric_contract(metric: MetricSample, expected_name: str) -> int | float | 
     return None
 
 
+def _is_pipeline_metric(metric: MetricSample) -> bool:
+    method = metric.dimensions.get("hybrid.join_method")
+    return method in {"correlation_id", "transfer_id"}
+
+
 def _select_metric(
     metrics: Sequence[MetricSample],
     name: str,
@@ -342,17 +347,9 @@ def _select_metric(
             if metric.dimensions.get("window") == window
         ]
     if pipeline is True:
-        candidates = [
-            metric
-            for metric in candidates
-            if metric.dimensions.get("hybrid.join_method") == "correlation_id"
-        ]
+        candidates = [metric for metric in candidates if _is_pipeline_metric(metric)]
     elif pipeline is False:
-        candidates = [
-            metric
-            for metric in candidates
-            if metric.dimensions.get("hybrid.join_method") != "correlation_id"
-        ]
+        candidates = [metric for metric in candidates if not _is_pipeline_metric(metric)]
     if len(candidates) > 1:
         raise OverviewCalculationError(
             f"ambiguous normalized metric provenance for {name}"
@@ -512,7 +509,7 @@ def _request_facing_latency(
             metric.request_id
             for metric in metrics
             if metric.metric_name == "latency.e2e"
-            and metric.dimensions.get("hybrid.join_method") != "correlation_id"
+            and not _is_pipeline_metric(metric)
             and isinstance(metric.request_id, str)
         }
     )
@@ -531,7 +528,7 @@ def _request_facing_latency(
             metric
             for metric in metrics
             if metric.metric_name == "latency.e2e"
-            and metric.dimensions.get("hybrid.join_method") != "correlation_id"
+            and not _is_pipeline_metric(metric)
         ]
         if not candidates:
             return [
@@ -1641,25 +1638,6 @@ def _transfer_kpis(
         formula="kv_transform_end - kv_transform_start",
         clock=transform_latency["clock"],
     )
-    wait_kpi = _kpi(
-        name="transfer.wait_duration",
-        canonical_unit="ns",
-        value=None,
-        unavailable_reason=(
-            "no explicit transfer-scoped classified wait intervals are present"
-        ),
-        aggregation_method=(
-            "not_available_across_measured_requests_v1"
-            if aggregate_run
-            else "interval_union_v1"
-        ),
-        sample_count=0,
-        sources=[],
-        scope=scope,
-        calculation_method="wait_interval_union_v1",
-        formula="union duration of explicit transfer wait intervals",
-        clock=clock,
-    )
     e2e_value = pipeline_e2e["value"]
     if duration_value is None:
         share = None
@@ -1690,12 +1668,125 @@ def _transfer_kpis(
         formula="transfer_duration_ns / pipeline_e2e_ns",
         clock=clock,
     )
+    normalized_metrics = tuple(getattr(loaded, "metrics", ()))
+
+    def observability_kpi(
+        name: str,
+        formula: str,
+        *,
+        warning: str,
+    ) -> dict[str, object]:
+        candidates = [
+            metric
+            for metric in normalized_metrics
+            if metric.metric_name == name
+            and (
+                correlation is None
+                or metric.request_id == correlation
+            )
+        ]
+        available_values: list[int | float] = []
+        unavailable_reasons: list[str] = []
+        for metric in candidates:
+            value = _metric_contract(metric, name)
+            if value is None:
+                unavailable_reasons.append(
+                    metric.reason or "normalized interval is unavailable"
+                )
+            else:
+                available_values.append(value)
+        fully_available = bool(candidates) and not unavailable_reasons
+        value = (
+            math.fsum(available_values) / len(available_values)
+            if fully_available and available_values
+            else None
+        )
+        reason = None
+        if not candidates:
+            reason = (
+                "runtime marker capability transfer_wait_observability_v1 "
+                "or its normalized metric is absent"
+            )
+        elif unavailable_reasons:
+            reason = "; ".join(sorted(set(unavailable_reasons)))
+        kpi_scope = scope
+        if name == "decode.schedule_wait_duration" and not aggregate_run:
+            kpi_scope = _scope(
+                loaded,
+                scope_type="request",
+                observation_layer="hybrid_pipeline",
+                request_id=correlation,
+                phase="decode",
+            )
+        return _kpi(
+            name=name,
+            canonical_unit="ns",
+            value=value,
+            unavailable_reason=reason,
+            aggregation_method=(
+                "arithmetic_mean_across_measured_requests_v1"
+                if aggregate_run
+                else "arithmetic_mean_across_explicit_intervals_v1"
+                if len(candidates) > 1
+                else "canonical_marker_pair_v1"
+            ),
+            sample_count=len(available_values),
+            sources=(
+                [
+                    _source_metric(
+                        candidates,
+                        details={
+                            "source_markers": list(
+                                METRIC_CATALOG[name].source_events
+                            )
+                        },
+                    )
+                ]
+                if candidates
+                else []
+            ),
+            scope=kpi_scope,
+            calculation_method="explicit_runtime_boundary_duration_v1",
+            formula=formula,
+            clock=_clock(loaded, candidates) if candidates else clock,
+            warnings=(warning,),
+        )
+
+    handoff_kpi = observability_kpi(
+        "transfer.handoff_duration",
+        "kv_handoff_end - kv_handoff_start",
+        warning="Handoff covers exported metadata delivery to NIXL setup entry.",
+    )
+    setup_kpi = observability_kpi(
+        "transfer.setup_duration",
+        "kv_transfer_setup_end - kv_transfer_setup_start",
+        warning=(
+            "Setup and transfer/wait intervals can overlap by definition and "
+            "must not be summed as total transfer delay."
+        ),
+    )
+    wait_kpi = observability_kpi(
+        "transfer.wait_duration",
+        "kv_transfer_wait_end - kv_transfer_wait_start",
+        warning=(
+            "Wait is bounded by host status observations; polling cadence is "
+            "not exact device completion time."
+        ),
+    )
+    decode_wait_kpi = observability_kpi(
+        "decode.schedule_wait_duration",
+        "decode_schedule_wait_end - decode_schedule_wait_start",
+        warning="Decode scheduling wait ends at the first actual model step.",
+    )
     return [
         bytes_kpi,
         duration_kpi,
         bandwidth_kpi,
         transform_kpi,
+        handoff_kpi,
+        setup_kpi,
         wait_kpi,
+        decode_wait_kpi,
         share_kpi,
     ]
 

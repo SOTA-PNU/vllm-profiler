@@ -71,6 +71,7 @@ class HybridProxyTests(unittest.TestCase):
             self.assertEqual([row["sequence"] for row in rows], [1, 2])
             self.assertEqual({row["correlation_id"] for row in rows}, {"request-1"})
             self.assertEqual({row["request_id"] for row in rows}, {"request-1"})
+            self.assertEqual({row["marker_version"] for row in rows}, {"1.1.0"})
 
     def test_concurrent_markers_have_unique_contiguous_sequences(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -145,17 +146,22 @@ class HybridProxyTests(unittest.TestCase):
                         json.loads(line)
                         for line in marker_path.read_text().splitlines()
                     ]
-                    if len(rows) == 6:
+                    if len(rows) == 7:
                         break
                     time.sleep(0.01)
                 self.assertEqual(
                     [row["event_name"] for row in rows],
                     [
                         "request_received", "prefill_start", "prefill_end",
-                        "kv_export_start", "kv_export_end", "response_done",
+                        "kv_export_start", "kv_export_end", "kv_handoff_start",
+                        "response_done",
                     ],
                 )
                 self.assertEqual({row["correlation_id"] for row in rows}, {"request-1"})
+                handoff = next(
+                    row for row in rows if row["event_name"] == "kv_handoff_start"
+                )
+                self.assertEqual(handoff["transfer_id"], "request-1-handoff")
             finally:
                 for server in reversed(servers):
                     server.shutdown()

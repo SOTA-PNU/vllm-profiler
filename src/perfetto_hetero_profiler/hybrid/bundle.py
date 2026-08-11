@@ -17,6 +17,7 @@ from ..schema import (
     ClockTransform,
     ClockType,
     DeviceType,
+    EventRecord,
     MetricKind,
     MetricSample,
     MetricScope,
@@ -579,6 +580,12 @@ class HybridBundleMerger:
                     alignment_accepted=alignment_accepted,
                 )
             )
+            metrics.extend(
+                self._observability_metrics(
+                    result,
+                    alignment_accepted=alignment_accepted,
+                )
+            )
         joined_count = sum(
             result.status in {"joined", "partial"} for result in joins
         )
@@ -777,12 +784,215 @@ class HybridBundleMerger:
                 "transfer.transform_duration", MetricKind.DURATION, "ns",
                 transform_duration, transform_reason, ids=transform_ids,
             ),
-            metric(
-                "transfer.wait_duration", MetricKind.DURATION, "ns", None,
-                "no explicit transfer-scoped wait interval marker is available",
-                ids=None,
-            ),
         ]
+
+    def _observability_metrics(
+        self,
+        result: JoinResult,
+        *,
+        alignment_accepted: bool,
+    ) -> list[MetricSample]:
+        """Derive setup/wait KPIs only from versioned runtime boundaries."""
+        events = tuple(result.events)
+        capable = any(
+            event.attributes.get("hybrid.marker_version") == "1.1.0"
+            for event in events
+        )
+        request_start = next(
+            (event for event in events if event.event_name == "request_received"),
+            None,
+        )
+        request_end = next(
+            (event for event in events if event.event_name == "response_done"),
+            None,
+        )
+        e2e = (
+            request_end.timestamp_ns - request_start.timestamp_ns
+            if request_start is not None
+            and request_end is not None
+            and request_end.timestamp_ns >= request_start.timestamp_ns
+            else None
+        )
+
+        def transfer_id(event: EventRecord) -> str | None:
+            value = event.attributes.get("hybrid.transfer_id")
+            return value if isinstance(value, str) and value else None
+
+        by_name: dict[str, list[EventRecord]] = {}
+        for event in events:
+            by_name.setdefault(event.event_name, []).append(event)
+
+        def rows_by_id(name: str) -> dict[str, EventRecord]:
+            return {
+                value: event
+                for event in by_name.get(name, ())
+                if (value := transfer_id(event)) is not None
+            }
+
+        def sample(
+            name: str,
+            start: EventRecord | None,
+            end: EventRecord | None,
+            *,
+            scope: MetricScope,
+            phase: Phase,
+            transfer_identity: str | None,
+            zero_evidence: EventRecord | None = None,
+        ) -> MetricSample:
+            reason: str | None = None
+            value: int | None = None
+            sources: list[str] | None = None
+            if not capable:
+                reason = "runtime marker capability transfer_wait_observability_v1 is absent"
+            elif not alignment_accepted:
+                reason = "alignment uncertainty exceeds the accepted threshold"
+            elif zero_evidence is not None:
+                value = 0
+                sources = [zero_evidence.event_id]
+            elif start is None or end is None:
+                reason = "required runtime boundary marker pair is unavailable"
+            elif start.clock_domain_id != end.clock_domain_id:
+                reason = "runtime boundary markers use different clock domains"
+            elif end.timestamp_ns < start.timestamp_ns:
+                reason = "runtime boundary marker order is reversed"
+            else:
+                value = end.timestamp_ns - start.timestamp_ns
+                sources = [start.event_id, end.event_id]
+            if value is not None and e2e is not None and value > e2e:
+                value = None
+                reason = "derived interval exceeds request E2E duration"
+            timestamp = (
+                end.timestamp_ns
+                if end is not None
+                else zero_evidence.timestamp_ns
+                if zero_evidence is not None
+                else max((event.timestamp_ns for event in events), default=0)
+            )
+            return MetricSample(
+                run_id=self.config.run_id,
+                metric_name=name,
+                metric_kind=MetricKind.DURATION,
+                scope=scope,
+                host_id=self.config.coordinator_host_id,
+                clock_domain_id=self.config.canonical_clock_domain_id,
+                timestamp_ns=timestamp,
+                availability=(
+                    Availability.AVAILABLE
+                    if value is not None
+                    else Availability.NOT_AVAILABLE
+                ),
+                origin=ValueOrigin.DERIVED,
+                unit="ns",
+                value=value,
+                request_id=result.request_id,
+                phase=phase,
+                interval_ns=value,
+                reason=reason,
+                source_event_ids=sources,
+                dimensions={
+                    "hybrid.join_method": result.join_method,
+                    **(
+                        {"hybrid.transfer_id": transfer_identity}
+                        if transfer_identity is not None
+                        else {}
+                    ),
+                },
+                attributes={
+                    "hybrid.confidence": result.confidence,
+                    "hybrid.runtime_marker_capability": (
+                        "transfer_wait_observability_v1"
+                        if capable
+                        else "absent"
+                    ),
+                },
+            )
+
+        metrics: list[MetricSample] = []
+        for metric_name, start_name, end_name, scope, phase in (
+            (
+                "transfer.handoff_duration",
+                "kv_handoff_start",
+                "kv_handoff_end",
+                MetricScope.REQUEST,
+                Phase.KV_TRANSFER,
+            ),
+            (
+                "decode.schedule_wait_duration",
+                "decode_schedule_wait_start",
+                "decode_schedule_wait_end",
+                MetricScope.REQUEST,
+                Phase.DECODE,
+            ),
+        ):
+            starts = rows_by_id(start_name)
+            ends = rows_by_id(end_name)
+            identities = sorted(set(starts) | set(ends))
+            identity = identities[0] if len(identities) == 1 else None
+            metrics.append(
+                sample(
+                    metric_name,
+                    starts.get(identity) if identity is not None else None,
+                    ends.get(identity) if identity is not None else None,
+                    scope=scope,
+                    phase=phase,
+                    transfer_identity=identity,
+                )
+            )
+
+        setup_starts = rows_by_id("kv_transfer_setup_start")
+        setup_ends = rows_by_id("kv_transfer_setup_end")
+        setup_ids: list[str | None] = sorted(
+            set(setup_starts) | set(setup_ends)
+        )
+        if not setup_ids:
+            setup_ids = [None]
+        for identity in setup_ids:
+            metrics.append(
+                sample(
+                    "transfer.setup_duration",
+                    setup_starts.get(identity) if identity is not None else None,
+                    setup_ends.get(identity) if identity is not None else None,
+                    scope=MetricScope.TRANSFER,
+                    phase=Phase.KV_TRANSFER,
+                    transfer_identity=identity,
+                )
+            )
+
+        wait_starts = rows_by_id("kv_transfer_wait_start")
+        wait_ends = rows_by_id("kv_transfer_wait_end")
+        transfer_ends = rows_by_id("kv_transfer_end")
+        wait_ids: list[str | None] = sorted(
+            {
+                identity
+                for identity in (
+                    set(setup_ids) | set(wait_starts) | set(wait_ends)
+                )
+                if identity is not None
+            }
+        )
+        if not wait_ids:
+            wait_ids = [None]
+        for identity in wait_ids:
+            completed = transfer_ends.get(identity) if identity is not None else None
+            observed_zero = (
+                completed
+                if completed is not None
+                and completed.attributes.get("kv.wait_observation")
+                == "done_on_first_poll"
+                else None
+            )
+            metrics.append(
+                sample(
+                    "transfer.wait_duration",
+                    wait_starts.get(identity) if identity is not None else None,
+                    wait_ends.get(identity) if identity is not None else None,
+                    scope=MetricScope.TRANSFER,
+                    phase=Phase.KV_TRANSFER,
+                    transfer_identity=identity,
+                    zero_evidence=observed_zero,
+                )
+            )
+        return metrics
 
     def _manifest(
         self,
@@ -848,6 +1058,18 @@ class HybridBundleMerger:
                 "hybrid.alignment_offset_ns": estimate.offset_ns,
                 "hybrid.alignment_uncertainty_ns": estimate.uncertainty_ns,
                 "hybrid.status_reasons": list(reasons),
+                "hybrid.runtime_marker_capabilities": sorted(
+                    set(
+                        gpu.manifest.attributes.get(
+                            "hybrid.runtime_marker_capabilities", []
+                        )
+                    )
+                    & set(
+                        npu.manifest.attributes.get(
+                            "hybrid.runtime_marker_capabilities", []
+                        )
+                    )
+                ),
                 "hybrid.profiler_alignment_status": (
                     "partial"
                     if ProfileMode.DETAILED_PROFILE

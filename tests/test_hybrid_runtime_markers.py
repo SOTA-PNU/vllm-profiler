@@ -48,6 +48,7 @@ def marker(
     correlation_id: str | None = "correlation-1",
     transfer_id: str | None = "transfer-1",
     sequence: int | None = None,
+    marker_version: str | None = None,
 ) -> dict[str, object]:
     row: dict[str, object] = {
         "schema_version": "1.0.0",
@@ -69,6 +70,8 @@ def marker(
         row["transfer_id"] = transfer_id
     if sequence is not None:
         row["sequence"] = sequence
+    if marker_version is not None:
+        row["marker_version"] = marker_version
     return row
 
 
@@ -81,6 +84,40 @@ def write_markers(path: Path, rows: list[dict[str, object]]) -> Path:
 
 
 class RuntimeMarkerIngestTests(unittest.TestCase):
+    def test_marker_version_is_preserved_as_capability_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_markers(
+                Path(directory) / "markers.jsonl",
+                [
+                    marker(
+                        "kv_transfer_setup_start",
+                        10,
+                        marker_version="1.1.0",
+                    )
+                ],
+            )
+            events = ingest_runtime_marker_files(
+                [path],
+                run_id="npu-source",
+                expected_host_id=HOST_ID,
+                expected_clock_domain_id=CLOCK_DOMAIN_ID,
+            )
+        self.assertEqual(events[0].attributes["hybrid.marker_version"], "1.1.0")
+
+    def test_invalid_marker_version_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_markers(
+                Path(directory) / "markers.jsonl",
+                [marker("prefill_start", 10, marker_version="latest")],
+            )
+            with self.assertRaisesRegex(RuntimeMarkerIngestError, "semantic version"):
+                ingest_runtime_marker_files(
+                    [path],
+                    run_id="gpu-source",
+                    expected_host_id=HOST_ID,
+                    expected_clock_domain_id=CLOCK_DOMAIN_ID,
+                )
+
     def test_multiple_process_files_are_normalized_and_sorted(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

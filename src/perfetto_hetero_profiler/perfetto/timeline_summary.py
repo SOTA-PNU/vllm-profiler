@@ -60,6 +60,9 @@ _DISPLAY_NAMES = {
     ("transfer", "transfer.effective_bandwidth"): "Effective bandwidth",
     ("transfer", "transfer.transform_duration"): "Transform duration",
     ("transfer", "transfer.wait_duration"): "Transfer wait",
+    ("transfer", "transfer.handoff_duration"): "KV handoff",
+    ("transfer", "transfer.setup_duration"): "Transfer setup",
+    ("transfer", "decode.schedule_wait_duration"): "Decode scheduling wait",
     ("transfer", "transfer.e2e_share"): "Transfer E2E share",
 }
 
