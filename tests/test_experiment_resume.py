@@ -23,7 +23,7 @@ from perfetto_hetero_profiler.phase7.failure import (
 from perfetto_hetero_profiler.phase7.paths import ExperimentPaths
 from perfetto_hetero_profiler.phase7.schedule import canonical_schedule_bytes
 
-from tests.test_phase7_contract import write_config
+from tests.test_experiment_contract import write_config
 
 
 class ResumeTests(unittest.TestCase):
