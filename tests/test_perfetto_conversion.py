@@ -30,6 +30,7 @@ from perfetto_hetero_profiler.perfetto.converter import (
     RBLN_NATIVE_TRACE_NAME,
     RBLN_NATIVE_VALIDATION_NAME,
     TRACE_NAME,
+    TRACE_ATTRIBUTE_VALIDATION_NAME,
     TRACE_VALIDATION_NAME,
     PerfettoConversionConfig,
     convert_perfetto,
@@ -97,6 +98,7 @@ _OUTPUT_NAMES = {
     TRACE_NAME,
     CONVERSION_MANIFEST_NAME,
     TRACE_VALIDATION_NAME,
+    TRACE_ATTRIBUTE_VALIDATION_NAME,
     DETACHED_MANIFEST_NAME,
     DETACHED_VALIDATION_NAME,
 }
@@ -654,6 +656,7 @@ class PerfettoConversionIntegrationTests(unittest.TestCase):
                 TRACE_NAME,
                 CONVERSION_MANIFEST_NAME,
                 TRACE_VALIDATION_NAME,
+                TRACE_ATTRIBUTE_VALIDATION_NAME,
             ):
                 self.assertEqual(
                     (first_output / name).read_bytes(),

@@ -329,10 +329,25 @@ hetero-profiler convert perfetto \
 ```text
 trace.pftrace
 trace_validation.json
+trace_attributes_validation.json
 conversion_manifest.json
 artifact_manifest.json
 artifact_manifest_validation.json
 ```
+
+`trace.pftrace`를 Perfetto UI에서 연 뒤 **Overview → Info and Stats
+(advanced)**를 선택하면 `kr.ac.pusan.sota.vllm_profiler.*` namespace의 필수
+성능 요약을 볼 수 있습니다. Timeline은 시간에 따른 event와 resource counter를,
+별도 `overview.html`은 전체 KPI 근거, warning, availability와 artifact 정보를
+담습니다. Info and Stats는 HTML Overview를 대체하지 않습니다.
+
+Trace Attribute는 공식 protobuf가 지원하는 string과 signed int64만 사용합니다.
+Rate는 원래 값을 1,000배 한 `milli-per-second`, utilization은 1,000배 한
+`milli_percent`, E2E share는 ratio를 percent로 바꾼 뒤 1,000배 한
+`milli_percent`로 기록합니다. 정수 변환은 decimal half-even 반올림입니다.
+Unavailable KPI에는 numeric value를 만들지 않고 availability와 reason을
+기록합니다. Prefill/Decode resource는 canonical 계산 계층에 해당 stage window가
+이미 존재할 때만 기록하며, capture 전체 값을 단계 값으로 복사하지 않습니다.
 
 상세 profiler event와 요청 중심 trace가 필요하면 옵션을 추가합니다.
 

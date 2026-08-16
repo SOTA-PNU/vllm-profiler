@@ -30,6 +30,7 @@ from ..perfetto.converter import (
     RBLN_NATIVE_TRACE_NAME,
     RBLN_NATIVE_VALIDATION_NAME,
     TRACE_NAME,
+    TRACE_ATTRIBUTE_VALIDATION_NAME,
     TRACE_VALIDATION_NAME,
 )
 from ..perfetto.loader import LoadedHybridRun
@@ -45,6 +46,7 @@ from ..perfetto.timeline_summary import (
     TIMELINE_SUMMARY_MAPPING_VERSION,
     build_timeline_summary_context,
 )
+from ..perfetto.trace_attributes import TRACE_ATTRIBUTE_NAMESPACE
 from ..perfetto.validation import validate_trace
 
 
@@ -63,6 +65,12 @@ _EXPECTED_RBLN_PERFETTO_FILES = frozenset(
         RBLN_NATIVE_TRACE_NAME,
         RBLN_NATIVE_VALIDATION_NAME,
     }
+)
+_EXPECTED_ATTRIBUTE_PERFETTO_FILES = frozenset(
+    {*_EXPECTED_PERFETTO_FILES, TRACE_ATTRIBUTE_VALIDATION_NAME}
+)
+_EXPECTED_ATTRIBUTE_RBLN_PERFETTO_FILES = frozenset(
+    {*_EXPECTED_RBLN_PERFETTO_FILES, TRACE_ATTRIBUTE_VALIDATION_NAME}
 )
 _JSON_VALUE = TypeVar("_JSON_VALUE")
 
@@ -94,7 +102,7 @@ class FileIdentity:
 
 @dataclass(frozen=True, slots=True)
 class PerfettoBundleIdentity:
-    """Path-free identity for an exact five-file Phase 5 output."""
+    """Path-free identity for one exact supported Perfetto output."""
 
     files: tuple[FileIdentity, ...]
     inventory_sha256: str
@@ -254,13 +262,20 @@ def _exact_perfetto_files(root: Path) -> tuple[FileIdentity, ...]:
     if actual_names not in {
         _EXPECTED_PERFETTO_FILES,
         _EXPECTED_RBLN_PERFETTO_FILES,
+        _EXPECTED_ATTRIBUTE_PERFETTO_FILES,
+        _EXPECTED_ATTRIBUTE_RBLN_PERFETTO_FILES,
     }:
-        expected = (
-            _EXPECTED_RBLN_PERFETTO_FILES
-            if RBLN_NATIVE_TRACE_NAME in actual_names
+        has_rbln = (
+            RBLN_NATIVE_TRACE_NAME in actual_names
             or RBLN_NATIVE_VALIDATION_NAME in actual_names
-            else _EXPECTED_PERFETTO_FILES
         )
+        has_attributes = TRACE_ATTRIBUTE_VALIDATION_NAME in actual_names
+        expected = {
+            (False, False): _EXPECTED_PERFETTO_FILES,
+            (True, False): _EXPECTED_RBLN_PERFETTO_FILES,
+            (False, True): _EXPECTED_ATTRIBUTE_PERFETTO_FILES,
+            (True, True): _EXPECTED_ATTRIBUTE_RBLN_PERFETTO_FILES,
+        }[(has_rbln, has_attributes)]
         missing = sorted(expected - actual_names)
         unexpected = sorted(actual_names - expected)
         raise OverviewInputError(
@@ -499,6 +514,18 @@ def _require_manifest_match(
         raise OverviewInputError(
             "Perfetto conversion trace-validation summary is invalid"
         )
+    attribute_validation = manifest.get("trace_attribute_validation")
+    if attribute_validation is not None and (
+        not isinstance(attribute_validation, dict)
+        or attribute_validation.get("root_id") != PERFETTO_ROOT_ID
+        or attribute_validation.get("relative_path")
+        != TRACE_ATTRIBUTE_VALIDATION_NAME
+        or attribute_validation.get("valid") is not True
+        or attribute_validation.get("mismatches") != []
+    ):
+        raise OverviewInputError(
+            "Perfetto trace-attribute validation summary is invalid"
+        )
 
 
 def _require_trace_identity(
@@ -572,7 +599,30 @@ def load_matching_perfetto(
         root / TRACE_VALIDATION_NAME,
         description="stored Perfetto trace validation",
     )
+    has_attribute_validation = TRACE_ATTRIBUTE_VALIDATION_NAME in {
+        item.name for item in root.iterdir()
+    }
+    if has_attribute_validation:
+        attribute_validation = _read_json_object(
+            root / TRACE_ATTRIBUTE_VALIDATION_NAME,
+            description="stored Perfetto trace attribute validation",
+        )
+        if (
+            attribute_validation.get("valid") is not True
+            or attribute_validation.get("mismatches") != []
+            or attribute_validation.get("namespace")
+            != TRACE_ATTRIBUTE_NAMESPACE
+        ):
+            raise OverviewInputError(
+                "stored Perfetto trace attribute validation is invalid"
+            )
     _require_manifest_match(loaded, manifest)
+    if has_attribute_validation != (
+        manifest.get("trace_attribute_validation") is not None
+    ):
+        raise OverviewInputError(
+            "Perfetto trace-attribute validation file and manifest differ"
+        )
     _require_trace_identity(root, manifest)
     _require_stored_trace_validation(
         loaded,

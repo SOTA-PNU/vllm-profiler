@@ -30,6 +30,7 @@ from perfetto_hetero_profiler.perfetto.artifacts import (
 from perfetto_hetero_profiler.perfetto.converter import (
     CONVERSION_MANIFEST_NAME,
     TRACE_NAME,
+    TRACE_ATTRIBUTE_VALIDATION_NAME,
     TRACE_VALIDATION_NAME,
     PerfettoConversionConfig,
     convert_perfetto,
@@ -52,6 +53,7 @@ _PERFETTO_FILES = {
     CONVERSION_MANIFEST_NAME,
     TRACE_NAME,
     TRACE_VALIDATION_NAME,
+    TRACE_ATTRIBUTE_VALIDATION_NAME,
 }
 
 
@@ -143,12 +145,12 @@ class PerfettoIdentityFilesystemTests(unittest.TestCase):
         for index, name in enumerate(sorted(_PERFETTO_FILES)):
             (root / name).write_bytes(f"fixture-{index}\n".encode())
 
-    def test_exact_five_file_contract(self) -> None:
+    def test_exact_current_file_contract(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "perfetto"
             self._dummy_bundle(root)
             identity = perfetto_identity(root)
-            self.assertEqual(len(identity.files), 5)
+            self.assertEqual(len(identity.files), len(_PERFETTO_FILES))
             self.assertEqual(
                 {item.relative_path for item in identity.files},
                 _PERFETTO_FILES,
@@ -257,7 +259,7 @@ class OverviewLoaderIntegrationTests(unittest.TestCase):
             bundle.fresh_trace_validation,
         )
         self.assertEqual(bundle.identity, self.perfetto_identity_before)
-        self.assertEqual(len(bundle.identity.files), 5)
+        self.assertEqual(len(bundle.identity.files), len(_PERFETTO_FILES))
         self.assertEqual(
             {item.relative_path for item in bundle.identity.files},
             _PERFETTO_FILES,

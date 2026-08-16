@@ -18,6 +18,7 @@ from ..hybrid.join import validate_marker_groups
 from ..overview.calculation import calculate_overview_kpis
 from ..schema import Availability
 from .model import TraceAttributeSpec
+from .trace_attributes import build_performance_trace_attributes
 
 
 LEGACY_MAPPING_VERSION = "legacy-unversioned-phase5-v1"
@@ -186,82 +187,6 @@ def _source_identity(loaded: object) -> str:
         "roots": roots,
     }
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
-
-
-def _model_display_name(model_id: object) -> str:
-    value = _nonempty_string(model_id, "model_id").replace("\\", "/").rstrip("/")
-    display = value.rsplit("/", 1)[-1]
-    if not display or display in {".", ".."}:
-        raise TimelineSummaryInputError("model_id has no safe display name")
-    return display
-
-
-def _trace_attributes(
-    loaded: object,
-    *,
-    source_identity_sha256: str,
-) -> tuple[TraceAttributeSpec, ...]:
-    """Return official, path-free trace attributes without KPI masquerading."""
-
-    manifest = getattr(loaded, "manifest", None)
-    attributes = getattr(manifest, "attributes", None)
-    configuration = getattr(manifest, "configuration", None)
-    if not isinstance(attributes, dict) or not isinstance(configuration, dict):
-        raise TimelineSummaryInputError("manifest attributes/configuration are invalid")
-    models = [
-        {
-            "display_name": _model_display_name(getattr(model, "model_id", None)),
-            "role": _nonempty_string(getattr(model, "role", None), "model role"),
-        }
-        for model in getattr(manifest, "models", ())
-    ]
-    models.sort(key=lambda item: (item["role"], item["display_name"]))
-    if not models:
-        raise TimelineSummaryInputError("manifest has no model display identity")
-    values: dict[str, int | str] = {
-        "hetero.alignment_method": _nonempty_string(
-            configuration.get("alignment_method"),
-            "alignment_method",
-        ),
-        "hetero.clock_status": "canonical_aligned",
-        "hetero.canonical_clock_domain": _nonempty_string(
-            getattr(loaded, "canonical_clock_domain_id", None),
-            "canonical clock domain",
-        ),
-        "hetero.models": _canonical_json(models),
-        "hetero.native_profiler_alignment": _nonempty_string(
-            attributes.get("hybrid.profiler_alignment_status", "not_applicable"),
-            "hybrid.profiler_alignment_status",
-        ),
-        "hetero.profile_kind": (
-            attributes.get("hybrid.phase4b2b_profile_kind")
-            if isinstance(attributes.get("hybrid.phase4b2b_profile_kind"), str)
-            and attributes["hybrid.phase4b2b_profile_kind"]
-            else "unknown"
-        ),
-        "hetero.profile_mode": _nonempty_string(
-            getattr(getattr(manifest, "profile_mode", None), "value", None),
-            "profile_mode",
-        ),
-        "hetero.run_id": _nonempty_string(
-            getattr(manifest, "run_id", None),
-            "run_id",
-        ),
-        "hetero.run_mode": _nonempty_string(
-            getattr(getattr(manifest, "mode", None), "value", None),
-            "run mode",
-        ),
-        "hetero.run_status": _nonempty_string(
-            getattr(getattr(manifest, "status", None), "value", None),
-            "run status",
-        ),
-        "hetero.source_identity_sha256": source_identity_sha256,
-        "hetero.trace_mapping_version": TIMELINE_SUMMARY_MAPPING_VERSION,
-    }
-    return tuple(
-        TraceAttributeSpec(key=key, value=value)
-        for key, value in sorted(values.items())
-    )
 
 
 def _source_event_ids(value: Mapping[str, Any]) -> tuple[str, ...]:
@@ -537,10 +462,7 @@ def build_timeline_summary_context(loaded: object) -> TimelineSummaryContext:
             source_identity_sha256=source_identity_sha256,
             kpis=kpis,
         ),
-        trace_attributes=_trace_attributes(
-            loaded,
-            source_identity_sha256=source_identity_sha256,
-        ),
+        trace_attributes=build_performance_trace_attributes(loaded, calculated),
     )
 
 

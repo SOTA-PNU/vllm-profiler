@@ -22,6 +22,7 @@ from perfetto.trace_processor import (
 
 from ..schema.constants import SCHEMA_VERSION
 from .model import AnnotationValue, SliceSpec, TracePlan
+from .trace_attributes import TRACE_ATTRIBUTE_NAMESPACE
 from .tooling import (
     PERFETTO_PACKAGE_VERSION,
     PROTOBUF_PACKAGE_VERSION,
@@ -281,22 +282,6 @@ _TIMELINE_SUMMARY_DATA_QUALITY_NAME: Final = "Data Quality status"
 _TIMELINE_SUMMARY_RESOURCE_TRACK_PREFIX: Final = "telemetry.resources"
 _RESOURCE_TELEMETRY_ROOT_KEY: Final = "telemetry.resources"
 _RESOURCE_TELEMETRY_ROOT_NAME: Final = "Resource telemetry (full capture window)"
-_TRACE_ATTRIBUTE_KEYS: Final = frozenset(
-    {
-        "hetero.alignment_method",
-        "hetero.clock_status",
-        "hetero.canonical_clock_domain",
-        "hetero.models",
-        "hetero.native_profiler_alignment",
-        "hetero.profile_kind",
-        "hetero.profile_mode",
-        "hetero.run_id",
-        "hetero.run_mode",
-        "hetero.run_status",
-        "hetero.source_identity_sha256",
-        "hetero.trace_mapping_version",
-    }
-)
 _REPORT_ROW_QUERIES: Final = frozenset(
     {
         # Overview reconciliation consumes these two evidence tables. Other
@@ -307,10 +292,10 @@ _REPORT_ROW_QUERIES: Final = frozenset(
     }
 )
 
-_TRACE_ATTRIBUTE_SQL: Final = """
+_TRACE_ATTRIBUTE_SQL: Final = f"""
 SELECT name, key_type, int_value, str_value
 FROM metadata
-WHERE name GLOB 'trace_attribute.hetero.*'
+WHERE name GLOB 'trace_attribute.{TRACE_ATTRIBUTE_NAMESPACE}*'
 ORDER BY name, int_value, str_value
 """.strip()
 

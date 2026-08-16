@@ -50,12 +50,14 @@ from .tooling import (
 from .validation import validate_native_perfetto_trace, validate_trace
 from .writer import write_trace
 from .timeline_summary import build_timeline_summary_context
+from .trace_attributes import trace_attribute_validation_report
 
 
 TRACE_NAME = "trace.pftrace"
 REQUEST_FOCUSED_TRACE_NAME = "trace.request-focused.pftrace"
 CONVERSION_MANIFEST_NAME = "conversion_manifest.json"
 TRACE_VALIDATION_NAME = "trace_validation.json"
+TRACE_ATTRIBUTE_VALIDATION_NAME = "trace_attributes_validation.json"
 REQUEST_FOCUSED_VALIDATION_NAME = "trace.request-focused.validation.json"
 RBLN_NATIVE_TRACE_NAME = "trace.rbln-native.pftrace"
 RBLN_NATIVE_VALIDATION_NAME = "trace.rbln-native.validation.json"
@@ -179,6 +181,18 @@ def convert_perfetto(
             staging / TRACE_VALIDATION_NAME,
             trace_validation,
         )
+        attribute_validation = trace_attribute_validation_report(
+            planning.plan.trace_attributes,
+            trace_validation,
+        )
+        if attribute_validation["valid"] is not True:
+            raise PerfettoConversionError(
+                "trace attribute metadata validation failed"
+            )
+        write_json_exclusive(
+            staging / TRACE_ATTRIBUTE_VALIDATION_NAME,
+            attribute_validation,
+        )
 
         request_trace: dict[str, object] | None = None
         request_validation: dict[str, Any] | None = None
@@ -286,6 +300,7 @@ def convert_perfetto(
             trace_size=trace_size,
             trace_sha256=trace_sha256,
             trace_validation=trace_validation,
+            attribute_validation=attribute_validation,
             request_trace=request_trace,
             request_validation=request_validation,
             separate_native_traces=separate_native_traces,
@@ -372,6 +387,13 @@ def convert_perfetto(
                 "valid": trace_validation["valid"],
                 "query_count": len(trace_validation["queries"]),
                 "mismatches": trace_validation["mismatches"],
+            },
+            "trace_attribute_validation": {
+                "valid": attribute_validation["valid"],
+                "attribute_count": attribute_validation["attribute_count"],
+                "integer_count": attribute_validation["integer_count"],
+                "string_count": attribute_validation["string_count"],
+                "mismatches": attribute_validation["mismatches"],
             },
             "artifact_validation": {
                 "valid": published_validation["valid"],
@@ -670,6 +692,7 @@ def _conversion_manifest(
     trace_size: int,
     trace_sha256: str,
     trace_validation: Mapping[str, Any],
+    attribute_validation: Mapping[str, Any],
     request_trace: Mapping[str, object] | None,
     request_validation: Mapping[str, Any] | None,
     separate_native_traces: list[dict[str, object]],
@@ -766,6 +789,15 @@ def _conversion_manifest(
             "valid": trace_validation["valid"],
             "query_count": len(trace_validation["queries"]),
             "mismatches": trace_validation["mismatches"],
+        },
+        "trace_attribute_validation": {
+            "root_id": OUTPUT_ROOT_ID,
+            "relative_path": TRACE_ATTRIBUTE_VALIDATION_NAME,
+            "valid": attribute_validation["valid"],
+            "attribute_count": attribute_validation["attribute_count"],
+            "integer_count": attribute_validation["integer_count"],
+            "string_count": attribute_validation["string_count"],
+            "mismatches": attribute_validation["mismatches"],
         },
         "toolchain": _toolchain_metadata(toolchain),
         "request_focused_trace": request_trace,
@@ -1022,6 +1054,7 @@ def _required_artifacts(
         (OUTPUT_ROOT_ID, CONVERSION_MANIFEST_NAME),
         (OUTPUT_ROOT_ID, TRACE_NAME),
         (OUTPUT_ROOT_ID, TRACE_VALIDATION_NAME),
+        (OUTPUT_ROOT_ID, TRACE_ATTRIBUTE_VALIDATION_NAME),
         ("gpu", "manifest.json"),
         ("hybrid", "artifacts/artifacts.jsonl"),
         ("hybrid", "clocks/clock_domains.jsonl"),

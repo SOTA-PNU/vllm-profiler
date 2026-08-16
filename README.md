@@ -108,6 +108,11 @@ hetero-profiler phase7 run \
 | `overview.json` | machine-readable KPI와 provenance |
 | `overview.html` | 브라우저에서 여는 self-contained 결과 리포트 |
 
+`trace.pftrace`의 Perfetto **Overview → Info and Stats (advanced)**에는
+`kr.ac.pusan.sota.vllm_profiler.*` Trace Attribute로 필수 latency, throughput,
+GPU–NPU transfer와 단계별 resource availability 요약이 표시됩니다. 상세 계산
+근거, warning과 artifact 목록은 독립 `overview.html`에 유지됩니다.
+
 `overview.html`은 Perfetto UI의 내장 Overview나 plugin이 아닙니다.
 `trace.pftrace`는 [Perfetto UI](https://ui.perfetto.dev/)에서 열고,
 `overview.html`은 일반 브라우저에서 엽니다.

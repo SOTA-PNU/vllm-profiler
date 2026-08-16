@@ -19,6 +19,7 @@ from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import (
 from perfetto.trace_builder.proto_builder import TraceProtoBuilder
 
 from .model import AnnotationValue, TracePlan, TrackSpec
+from .trace_attributes import TRACE_ATTRIBUTE_NAMESPACE
 
 
 _INT32_MIN: Final = -(2**31)
@@ -328,11 +329,11 @@ def _validate_trace_attributes(plan: TracePlan) -> None:
     for spec in plan.trace_attributes:
         if (
             not isinstance(spec.key, str)
-            or not spec.key.startswith("hetero.")
+            or not spec.key.startswith(TRACE_ATTRIBUTE_NAMESPACE)
             or spec.key in keys
         ):
             raise ValueError(
-                "trace attribute keys must be unique non-empty hetero.* names"
+                "trace attribute keys must be unique names in the public namespace"
             )
         keys.add(spec.key)
         value = spec.value
