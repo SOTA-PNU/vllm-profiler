@@ -15,7 +15,8 @@ from .model import TraceAttributeSpec
 
 
 TRACE_ATTRIBUTE_NAMESPACE: Final = "kr.ac.pusan.sota.vllm_profiler."
-TRACE_ATTRIBUTE_SCHEMA_VERSION: Final = "1.0.0"
+TRACE_ATTRIBUTE_SCHEMA_VERSION: Final = "1.1.0"
+_LEGACY_TRACE_ATTRIBUTE_SCHEMA_VERSION: Final = "1.0.0"
 TRACE_ATTRIBUTE_RECORD_TYPE: Final = "perfetto_trace_attribute_validation"
 
 _INT64_MIN: Final = -(2**63)
@@ -222,7 +223,6 @@ def _emit_metric(
         expected_name=expected_name,
         expected_unit=expected_unit,
     )
-    _add(values, f"{base}.availability", availability)
     _add(values, f"{base}.sample_count", count)
     _add(values, f"{base}.aggregation", aggregation)
     if availability == Availability.AVAILABLE.value:
@@ -237,6 +237,7 @@ def _emit_metric(
         )
     else:
         assert reason is not None
+        _add(values, f"{base}.{value_suffix}", Availability.NOT_AVAILABLE.value)
         _add(values, f"{base}.reason", reason)
 
 
@@ -333,6 +334,7 @@ def _emit_resource(
     statistic: str,
     unit: str,
 ) -> None:
+    value_suffix = "value_milli_percent" if unit == "percent" else "value_bytes"
     aggregate = _stage_resource_aggregate(
         calculated,
         stage=stage,
@@ -342,12 +344,11 @@ def _emit_resource(
         statistic=statistic,
     )
     if aggregate is None:
-        _add(values, f"{base}.availability", Availability.NOT_AVAILABLE.value)
+        _add(values, f"{base}.{value_suffix}", Availability.NOT_AVAILABLE.value)
         _add(values, f"{base}.sample_count", 0)
         _add(values, f"{base}.aggregation", "not_available")
         _add(values, f"{base}.reason", "no canonical stage-window resource aggregate")
         return
-    value_suffix = "value_milli_percent" if unit == "percent" else "value_bytes"
     multiplier = 1_000 if unit == "percent" else 1
     _emit_metric(
         values,
@@ -544,12 +545,34 @@ def trace_attribute_validation_report(
         mismatches.append("attribute keys are not sorted")
     if len(keys) != len(set(keys)):
         mismatches.append("attribute keys are not unique")
+    schema_key = f"{TRACE_ATTRIBUTE_NAMESPACE}schema_version"
+    schema_values = [item.value for item in attributes if item.key == schema_key]
+    attribute_schema_version = (
+        schema_values[0] if len(schema_values) == 1 else None
+    )
+    if attribute_schema_version not in {
+        _LEGACY_TRACE_ATTRIBUTE_SCHEMA_VERSION,
+        TRACE_ATTRIBUTE_SCHEMA_VERSION,
+    }:
+        mismatches.append("trace attribute schema version is unsupported")
+    if (
+        attribute_schema_version == TRACE_ATTRIBUTE_SCHEMA_VERSION
+        and any(key.endswith(".availability") for key in keys)
+    ):
+        mismatches.append("schema 1.1.0 must not contain availability keys")
+    for item in attributes:
+        if isinstance(item.value, bool) or not isinstance(item.value, (int, str)):
+            mismatches.append(f"unsupported value type for {item.key}")
     if query.get("matched") is not True:
         mismatches.append("Trace Processor metadata rows differ")
-    integer_count = sum(isinstance(item.value, int) for item in attributes)
-    string_count = sum(isinstance(item.value, str) for item in attributes)
+    integer_count = sum(type(item.value) is int for item in attributes)
+    string_count = sum(type(item.value) is str for item in attributes)
     return {
-        "schema_version": TRACE_ATTRIBUTE_SCHEMA_VERSION,
+        "schema_version": (
+            attribute_schema_version
+            if isinstance(attribute_schema_version, str)
+            else TRACE_ATTRIBUTE_SCHEMA_VERSION
+        ),
         "record_type": TRACE_ATTRIBUTE_RECORD_TYPE,
         "valid": not mismatches,
         "namespace": TRACE_ATTRIBUTE_NAMESPACE,

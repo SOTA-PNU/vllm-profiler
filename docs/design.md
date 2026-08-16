@@ -185,6 +185,13 @@ JSON/HTML 리포트입니다. Perfetto UI의 내장 Overview 또는 plugin이 �
 리포트는 KPI의 availability, 계산식, sample count와 provenance를 보존합니다.
 비교 조건이 맞지 않으면 성능 순위나 승자를 생성하지 않습니다.
 
+Perfetto Info and Stats의 Trace Attribute schema `1.1.0`은 중복된 KPI별
+`availability` 행을 출력하지 않습니다. 숫자 value는 available을 의미하고,
+동일한 value key의 `not_available` 문자열은 측정 근거가 없음을 의미합니다.
+정수 `0`은 실제 관측값으로 그대로 유지됩니다. sample count와 aggregation은
+Trace Attribute에 유지되며, canonical availability와 상세 provenance는
+normalized metric 및 외부 HTML/JSON Overview에 그대로 남습니다.
+
 ## 제한사항
 
 - Public `merge hybrid` 명령은 synthetic source 검증용입니다.

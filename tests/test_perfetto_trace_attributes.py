@@ -11,6 +11,7 @@ import unittest
 
 from perfetto_hetero_profiler.overview.calculation import calculate_overview_kpis
 from perfetto_hetero_profiler.perfetto.loader import load_hybrid_run
+from perfetto_hetero_profiler.perfetto.model import TraceAttributeSpec
 from perfetto_hetero_profiler.perfetto.planner import build_trace_plan
 from perfetto_hetero_profiler.perfetto.timeline_summary import (
     build_timeline_summary_context,
@@ -70,10 +71,7 @@ class PerfettoTraceAttributeTests(unittest.TestCase):
             f"{TRACE_ATTRIBUTE_NAMESPACE}kpi.latency.e2e.value_ns",
             values,
         )
-        self.assertIn(
-            f"{TRACE_ATTRIBUTE_NAMESPACE}transfer.bytes.availability",
-            values,
-        )
+        self.assertFalse(any(key.endswith(".availability") for key in keys))
         required_bases = (
             "kpi.latency.e2e",
             "kpi.latency.ttft",
@@ -102,9 +100,12 @@ class PerfettoTraceAttributeTests(unittest.TestCase):
             "resource.decode.system_memory_peak",
         )
         for base in required_bases:
-            self.assertIn(
-                f"{TRACE_ATTRIBUTE_NAMESPACE}{base}.availability",
-                values,
+            self.assertTrue(
+                any(
+                    key.startswith(f"{TRACE_ATTRIBUTE_NAMESPACE}{base}.value_")
+                    for key in values
+                ),
+                base,
             )
         exported = json.dumps(values, sort_keys=True)
         for forbidden in (
@@ -133,7 +134,7 @@ class PerfettoTraceAttributeTests(unittest.TestCase):
             42_498,
         )
 
-    def test_unavailable_omits_value_but_real_zero_is_preserved(self) -> None:
+    def test_unavailable_uses_value_key_but_real_zero_is_preserved(self) -> None:
         unavailable = copy.deepcopy(self.calculated)
         transfer = next(
             item for item in unavailable["transfer"] if item["name"] == "transfer.bytes"
@@ -142,15 +143,20 @@ class PerfettoTraceAttributeTests(unittest.TestCase):
             availability="not_available",
             value=None,
             unavailable_reason="canonical transfer size is unavailable",
-            sample_count=0,
+            sample_count=3,
         )
         values = _attribute_map(
             build_performance_trace_attributes(self.loaded, unavailable)
         )
         base = f"{TRACE_ATTRIBUTE_NAMESPACE}transfer.bytes"
-        self.assertEqual(values[f"{base}.availability"], "not_available")
-        self.assertNotIn(f"{base}.value_bytes", values)
+        self.assertNotIn(f"{base}.availability", values)
+        self.assertEqual(values[f"{base}.value_bytes"], "not_available")
         self.assertIn(f"{base}.reason", values)
+        self.assertEqual(values[f"{base}.sample_count"], 3)
+        self.assertEqual(
+            values[f"{base}.aggregation"],
+            transfer["aggregation_method"],
+        )
 
         zero = copy.deepcopy(self.calculated)
         transfer = next(
@@ -163,7 +169,7 @@ class PerfettoTraceAttributeTests(unittest.TestCase):
             sample_count=1,
         )
         values = _attribute_map(build_performance_trace_attributes(self.loaded, zero))
-        self.assertEqual(values[f"{base}.availability"], "available")
+        self.assertNotIn(f"{base}.availability", values)
         self.assertEqual(values[f"{base}.value_bytes"], 0)
         self.assertNotIn(f"{base}.reason", values)
 
@@ -247,8 +253,8 @@ class PerfettoTraceAttributeTests(unittest.TestCase):
         self.assertEqual(values[f"{npu}.value_bytes"], 4096)
         self.assertEqual(values[f"{npu}.sample_count"], 3)
         npu0 = f"{TRACE_ATTRIBUTE_NAMESPACE}resource.decode.npu_0.memory_peak"
-        self.assertEqual(values[f"{npu0}.availability"], "not_available")
-        self.assertNotIn(f"{npu0}.value_bytes", values)
+        self.assertNotIn(f"{npu0}.availability", values)
+        self.assertEqual(values[f"{npu0}.value_bytes"], "not_available")
 
     def test_official_packet_is_sorted_and_duplicate_keys_are_rejected(self) -> None:
         context = build_timeline_summary_context(self.loaded)
@@ -273,6 +279,35 @@ class PerfettoTraceAttributeTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "unique"):
             serialize_trace(duplicate)
+
+        same_key_different_oneof = replace(
+            plan,
+            trace_attributes=(
+                TraceAttributeSpec(
+                    key=f"{TRACE_ATTRIBUTE_NAMESPACE}test.value_ns",
+                    value=0,
+                ),
+                TraceAttributeSpec(
+                    key=f"{TRACE_ATTRIBUTE_NAMESPACE}test.value_ns",
+                    value="not_available",
+                ),
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "unique"):
+            serialize_trace(same_key_different_oneof)
+
+        for invalid in (True, 1.5, float("nan"), float("inf")):
+            invalid_type = replace(
+                plan,
+                trace_attributes=(
+                    TraceAttributeSpec(
+                        key=f"{TRACE_ATTRIBUTE_NAMESPACE}test.value_ns",
+                        value=invalid,  # type: ignore[arg-type]
+                    ),
+                ),
+            )
+            with self.assertRaisesRegex(TypeError, "integer or string"):
+                serialize_trace(invalid_type)
 
     def test_detached_validation_counts_exact_sql_result(self) -> None:
         attributes = build_performance_trace_attributes(
@@ -306,6 +341,78 @@ class PerfettoTraceAttributeTests(unittest.TestCase):
         self.assertEqual(
             report["trace_processor_query_matched"],
             "not_applicable_legacy_trace",
+        )
+
+    def test_schema_1_0_availability_rows_remain_validation_compatible(self) -> None:
+        attributes = tuple(
+            sorted(
+                (
+                    TraceAttributeSpec(
+                        key=f"{TRACE_ATTRIBUTE_NAMESPACE}schema_version",
+                        value="1.0.0",
+                    ),
+                    TraceAttributeSpec(
+                        key=(
+                            f"{TRACE_ATTRIBUTE_NAMESPACE}"
+                            "kpi.latency.e2e.availability"
+                        ),
+                        value="available",
+                    ),
+                    TraceAttributeSpec(
+                        key=(
+                            f"{TRACE_ATTRIBUTE_NAMESPACE}"
+                            "kpi.latency.e2e.value_ns"
+                        ),
+                        value=1,
+                    ),
+                ),
+                key=lambda item: item.key,
+            ),
+        )
+        report = trace_attribute_validation_report(
+            attributes,
+            {
+                "queries": [
+                    {
+                        "name": "trace_attributes",
+                        "matched": True,
+                        "row_count": len(attributes),
+                        "rows_sha256": "a" * 64,
+                    }
+                ]
+            },
+        )
+        self.assertTrue(report["valid"])
+        self.assertEqual(report["schema_version"], "1.0.0")
+
+    def test_schema_1_1_rejects_availability_rows(self) -> None:
+        attributes = (
+            TraceAttributeSpec(
+                key=f"{TRACE_ATTRIBUTE_NAMESPACE}schema_version",
+                value=TRACE_ATTRIBUTE_SCHEMA_VERSION,
+            ),
+            TraceAttributeSpec(
+                key=f"{TRACE_ATTRIBUTE_NAMESPACE}kpi.latency.e2e.availability",
+                value="available",
+            ),
+        )
+        report = trace_attribute_validation_report(
+            attributes,
+            {
+                "queries": [
+                    {
+                        "name": "trace_attributes",
+                        "matched": True,
+                        "row_count": len(attributes),
+                        "rows_sha256": "a" * 64,
+                    }
+                ]
+            },
+        )
+        self.assertFalse(report["valid"])
+        self.assertIn(
+            "schema 1.1.0 must not contain availability keys",
+            report["mismatches"],
         )
 
 

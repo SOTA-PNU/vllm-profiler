@@ -345,9 +345,14 @@ Trace Attribute는 공식 protobuf가 지원하는 string과 signed int64만 사
 Rate는 원래 값을 1,000배 한 `milli-per-second`, utilization은 1,000배 한
 `milli_percent`, E2E share는 ratio를 percent로 바꾼 뒤 1,000배 한
 `milli_percent`로 기록합니다. 정수 변환은 decimal half-even 반올림입니다.
-Unavailable KPI에는 numeric value를 만들지 않고 availability와 reason을
-기록합니다. Prefill/Decode resource는 canonical 계산 계층에 해당 stage window가
+Trace Attribute schema `1.1.0`에서는 KPI마다 별도의 `availability` 행을 만들지
+않습니다. 숫자 value는 측정 가능한 값이고, 같은 value key의 문자열
+`not_available`은 측정 근거가 없다는 뜻입니다. 따라서 실제 정수 `0`과
+`not_available`은 서로 다른 상태입니다. 필요한 unavailable reason은 함께
+표시합니다. Prefill/Decode resource는 canonical 계산 계층에 해당 stage window가
 이미 존재할 때만 기록하며, capture 전체 값을 단계 값으로 복사하지 않습니다.
+상세 availability, sample count, aggregation과 provenance는 외부 HTML/JSON
+Overview에서 확인할 수 있습니다.
 
 상세 profiler event와 요청 중심 trace가 필요하면 옵션을 추가합니다.
 
