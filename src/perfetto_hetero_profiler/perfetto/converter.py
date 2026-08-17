@@ -116,6 +116,7 @@ def plan_perfetto_conversion(
             "flow_count": len(focused.flows),
             "resource_telemetry_included": False,
             "timestamp_rebased": False,
+            "presentation_policy": _presentation_policy(focused),
             **_native_request_membership_metadata(native),
             "native_validation": focused_native_validation,
         }
@@ -233,6 +234,12 @@ def convert_perfetto(
                 "sha256": focused_sha256,
                 "timestamp_rebased": False,
                 "resource_telemetry_included": False,
+                "track_count": len(focused_plan.tracks),
+                "slice_count": len(focused_plan.slices),
+                "instant_count": len(focused_plan.instants),
+                "counter_count": len(focused_plan.counters),
+                "flow_count": len(focused_plan.flows),
+                "presentation_policy": _presentation_policy(focused_plan),
                 **_native_request_membership_metadata(native),
             }
 
@@ -731,6 +738,18 @@ def _conversion_manifest(
             "emitted_flow_count": len(planning.plan.flows),
             "representative_location": "detailed_tracks_only",
             "timeline_summary_flow_copy_count": 0,
+            "endpoints": [
+                {
+                    "source": flow.source_slice_name,
+                    "destination": flow.destination_slice_name,
+                    "correlation_id": flow.correlation_id,
+                    "source_event_id": flow.source_event_id,
+                    "destination_event_id": flow.destination_event_id,
+                    "evidence_kind": flow.evidence_kind,
+                    "evidence_id": flow.evidence_id,
+                }
+                for flow in planning.plan.flows
+            ],
         },
         "trace_mapping": _timeline_summary_mapping_metadata(planning, native),
         "trace": {
@@ -903,46 +922,8 @@ def _timeline_summary_mapping_metadata(
                 ),
             },
         }
-    kpi_mappings: list[dict[str, Any]] = []
-    for counter in sorted(
-        (
-            item
-            for item in plan.counters
-            if item.track_key.startswith("summary.kpi:")
-        ),
-        key=lambda item: item.track_key,
-    ):
-        track = tracks[counter.track_key]
-        annotations = dict(counter.annotations)
-        kpi_mappings.append(
-            {
-                "identity": annotations["hetero.kpi_identity"],
-                "canonical_name": annotations["hetero.kpi_name"],
-                "track_key": track.key,
-                "track_uuid": track.uuid,
-                "track_name": track.name,
-                "parent_key": track.parent_key,
-                "canonical_unit": track.unit,
-                "availability": annotations["hetero.availability"],
-                "anchor_event_id": annotations["hetero.anchor_event_id"],
-                "source_event_ids_json": annotations[
-                    "hetero.source_event_ids_json"
-                ],
-            }
-        )
-    data_quality = [
-        item
-        for item in plan.instants
-        if item.track_key == "summary.data_quality"
-        and item.name == "Data Quality status"
-    ]
-    if len(data_quality) != 1:
-        raise PerfettoConversionError(
-            "timeline summary plan must have one Data Quality status instant"
-        )
-    quality = dict(data_quality[0].annotations)
     return {
-        "kind": "timeline_summary",
+        "kind": "processing_timeline",
         "mapping_version": plan.mapping_version,
         "source_identity_sha256": plan.source_identity_sha256,
         "root_track": {
@@ -955,6 +936,7 @@ def _timeline_summary_mapping_metadata(
                 "NUL track_key) first_8_bytes_big_endian signed_63_bit_nonzero"
             ),
         },
+        "processing_timeline_hierarchy": summary_tracks,
         "timeline_summary_hierarchy": summary_tracks,
         "resource_telemetry_hierarchy": resource_tracks,
         "trace_attributes": [
@@ -967,31 +949,43 @@ def _timeline_summary_mapping_metadata(
             ),
             "ui_guarantee": "hint_not_absolute_cross_version_order",
         },
-        "kpi_counter_mapping": kpi_mappings,
+        "kpi_counter_mapping": [],
+        "kpi_presentation": "info_and_stats_trace_attributes_only",
         "unavailable_handling": {
-            "counter_policy": "omitted_not_zero_filled",
-            "count": quality["hetero.unavailable_kpi_count"],
-            "reasons_json": quality["hetero.unavailable_kpis_json"],
+            "timeline_counter_policy": "not_emitted",
+            "trace_attribute_policy": "availability_without_fabricated_value",
+            "details_location": "external_overview_and_validation",
         },
         "resource_grouping": {
-            "policy": quality["hetero.resource_grouping"],
+            "policy": "full_capture_diagnostic_trace_only",
             "device_identity_preserved": True,
             "counter_samples_copied": False,
-            "time_scope": quality["hetero.resource_time_scope"],
-            "pre_request_sample_count": quality[
-                "hetero.pre_request_resource_sample_count"
-            ],
-            "pre_request_duration_ns": quality[
-                "hetero.pre_request_resource_duration_ns"
-            ],
-            "warmup_interval_status": quality[
-                "hetero.warmup_interval_status"
-            ],
+            "time_scope": "full_capture_not_request_scoped",
         },
         "flow_policy": {
             "representative_location": "detailed_tracks_only",
             "explicit_correlation_required": True,
             "timestamp_proximity_fallback": False,
+            "full_trace_endpoints": [
+                {
+                    "source": flow.source_slice_name,
+                    "destination": flow.destination_slice_name,
+                    "correlation_id": flow.correlation_id,
+                    "source_event_id": flow.source_event_id,
+                    "destination_event_id": flow.destination_event_id,
+                    "evidence_kind": flow.evidence_kind,
+                    "evidence_id": flow.evidence_id,
+                }
+                for flow in plan.flows
+            ],
+        },
+        "unclassified_gaps": [asdict(gap) for gap in plan.unclassified_gaps],
+        "gap_policy": "reported_in_manifest_not_fabricated_as_timeline_wait",
+        "full_trace_role": {
+            "request_lifecycle_retained": True,
+            "full_window_resource_telemetry_retained": True,
+            "kpi_counters_emitted": False,
+            "data_quality_timeline_slice_emitted": False,
         },
         "native_clock_policy": {
             "native_details_emitted": bool(
@@ -1004,10 +998,52 @@ def _timeline_summary_mapping_metadata(
             "host_api_boundary_only": not bool(
                 native is not None and native.emitted_event_count
             ),
-            "rbln_pb_structure_analysis": quality[
-                "hetero.rbln_pb_structure_analysis"
-            ],
+            "rbln_pb_structure_analysis": (
+                "official_perfetto_protobuf_schema"
+                if native is not None
+                and any(
+                    item.profiler_type == "npu_rbln"
+                    for item in native.summaries
+                )
+                else "not_applicable_or_deferred"
+            ),
         },
+    }
+
+
+def _presentation_policy(plan: TracePlan) -> dict[str, object]:
+    return {
+        "role": "request_focused_processing_timeline",
+        "request_window_source": "canonical_request_received_response_done_pair",
+        "request_lifecycle_slice_included": False,
+        "kpi_counters_included": False,
+        "data_quality_slice_included": False,
+        "clock_metadata_slice_included": False,
+        "full_window_resource_telemetry_included": False,
+        "capture_envelope_included": False,
+        "timestamp_rebased": False,
+        "flow_endpoints": [
+            {
+                "source": flow.source_slice_name,
+                "destination": flow.destination_slice_name,
+                "correlation_id": flow.correlation_id,
+                "source_event_id": flow.source_event_id,
+                "destination_event_id": flow.destination_event_id,
+                "evidence_kind": flow.evidence_kind,
+                "evidence_id": flow.evidence_id,
+            }
+            for flow in plan.flows
+        ],
+        "request_to_prefill_flow": (
+            "omitted_no_safe_instant_flow_endpoint"
+            if not any(
+                flow.source_slice_name == "Request"
+                and flow.destination_slice_name == "GPU Prefill"
+                for flow in plan.flows
+            )
+            else "retained"
+        ),
+        "unclassified_gaps": [asdict(gap) for gap in plan.unclassified_gaps],
     }
 
 

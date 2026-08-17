@@ -789,7 +789,7 @@ def phase_duration_reconciliation(
     }
     for item in bundle.planning.plan.slices:
         slice_name = detail_keys.get(item.track_key)
-        if slice_name is not None and item.name == slice_name:
+        if slice_name is not None:
             expected[slice_name].append(item.duration_ns)
     slice_query = next(
         query
@@ -811,19 +811,21 @@ def phase_duration_reconciliation(
         ),
         None,
     )
-    summary_rows = Counter(
-        (
-            row.get("track_name"),
-            row.get("slice_name"),
-            row.get("ts"),
-            row.get("dur"),
+    duplicated_summary_rows = Counter()
+    if bundle.planning.plan.mapping_version != TIMELINE_SUMMARY_MAPPING_VERSION:
+        duplicated_summary_rows.update(
+            (
+                row.get("track_name"),
+                row.get("slice_name"),
+                row.get("ts"),
+                row.get("dur"),
+            )
+            for row in (
+                summary_query.get("rows", [])
+                if isinstance(summary_query, dict)
+                else []
+            )
         )
-        for row in (
-            summary_query.get("rows", [])
-            if isinstance(summary_query, dict)
-            else []
-        )
-    )
     for row in slice_query["rows"]:
         identity = (
             row.get("track_name"),
@@ -831,8 +833,8 @@ def phase_duration_reconciliation(
             row.get("ts"),
             row.get("dur"),
         )
-        if summary_rows[identity]:
-            summary_rows[identity] -= 1
+        if duplicated_summary_rows[identity]:
+            duplicated_summary_rows[identity] -= 1
             continue
         name = detail_track_names.get(row.get("track_name"))
         duration = row.get("dur")

@@ -102,16 +102,25 @@ hetero-profiler phase7 run \
 
 | 결과 | 설명 |
 | --- | --- |
-| `trace.pftrace` | Perfetto UI에서 여는 전체 timeline |
-| `trace.request-focused.pftrace` | 선택적으로 생성하는 요청 중심 timeline |
+| `trace.pftrace` | 처리 단계와 전체 진단 정보를 함께 담는 Perfetto timeline |
+| `trace.request-focused.pftrace` | 처리 단계·token boundary·in-window native event만 담는 발표용 timeline |
 | `trace.rbln-native.pftrace` | canonical clock에 정렬되지 않은 RBLN native timeline |
 | `overview.json` | machine-readable KPI와 provenance |
 | `overview.html` | 브라우저에서 여는 self-contained 결과 리포트 |
 
 `trace.pftrace`의 Perfetto **Overview → Info and Stats (advanced)**에는
-`kr.ac.pusan.sota.vllm_profiler.*` Trace Attribute로 필수 latency, throughput,
-GPU–NPU transfer와 단계별 resource availability 요약이 표시됩니다. 상세 계산
+`vllm_profiler.*` Trace Attribute로 필수 latency, throughput, GPU–NPU
+transfer와 resource 요약이 표시됩니다. 측정할 수 없는 단계별 값은 숫자 대신
+`not_available`과 reason으로 표시됩니다. 상세 계산
 근거, warning과 artifact 목록은 독립 `overview.html`에 유지됩니다.
+
+Perfetto timeline의 `Heterogeneous LLM Processing` 그룹은 실제 marker pair로
+관찰한 GPU Prefill, KV 처리·전송, NPU Decode, decode step과 sampling만
+표시합니다. E2E/TTFT/TPOT 같은 KPI, Data Quality와 clock 요약을 긴 slice나
+counter로 복제하지 않습니다. marker 사이의 근거 없는 간격에도 임의의 work/wait
+이름을 붙이지 않습니다. 전체 trace에는 Request lifecycle, resource telemetry,
+capture envelope와 native detail을 진단 정보로 유지하고, request-focused trace는
+이를 제외하되 원본 timestamp를 바꾸지 않습니다.
 
 `overview.html`은 Perfetto UI의 내장 Overview나 plugin이 아닙니다.
 `trace.pftrace`는 [Perfetto UI](https://ui.perfetto.dev/)에서 열고,

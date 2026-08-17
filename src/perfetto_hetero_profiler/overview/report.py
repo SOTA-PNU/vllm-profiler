@@ -521,7 +521,7 @@ def _interpretation() -> dict[str, Any]:
                 (
                     "this external KPI report is not the Perfetto UI; the "
                     "matching trace.pftrace contains a separate timeline "
-                    "Heterogeneous LLM Summary, not the built-in Overview"
+                    "Heterogeneous LLM Processing, not the built-in Overview"
                 ),
             }
         ),

@@ -17,6 +17,7 @@ from perfetto_hetero_profiler.perfetto.timeline_summary import (
     build_timeline_summary_context,
 )
 from perfetto_hetero_profiler.perfetto.trace_attributes import (
+    LEGACY_TRACE_ATTRIBUTE_NAMESPACE,
     TRACE_ATTRIBUTE_NAMESPACE,
     TRACE_ATTRIBUTE_SCHEMA_VERSION,
     TraceAttributeExportError,
@@ -59,6 +60,10 @@ class PerfettoTraceAttributeTests(unittest.TestCase):
         self.assertEqual(keys, sorted(keys))
         self.assertEqual(len(keys), len(set(keys)))
         self.assertTrue(all(key.startswith(TRACE_ATTRIBUTE_NAMESPACE) for key in keys))
+        self.assertEqual(TRACE_ATTRIBUTE_NAMESPACE, "vllm_profiler.")
+        self.assertFalse(
+            any(key.startswith(LEGACY_TRACE_ATTRIBUTE_NAMESPACE) for key in keys)
+        )
         self.assertTrue(
             all(isinstance(item.value, (int, str)) and not isinstance(item.value, bool)
                 for item in attributes)
@@ -119,6 +124,34 @@ class PerfettoTraceAttributeTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, exported)
         self.assertFalse(any(key.startswith("hetero.") for key in keys))
+
+    def test_fatal_shutdown_is_explicitly_labeled_as_demo_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            family = _build_monitor_family(
+                Path(directory),
+                overview_metrics=True,
+                fatal_shutdown=True,
+            )
+            loaded = load_hybrid_run(family["hybrid"])
+            values = _attribute_map(
+                build_performance_trace_attributes(
+                    loaded,
+                    calculate_overview_kpis(loaded),
+                )
+            )
+        self.assertEqual(values[f"{TRACE_ATTRIBUTE_NAMESPACE}demo_only"], "true")
+        self.assertEqual(
+            values[f"{TRACE_ATTRIBUTE_NAMESPACE}source.inference_status"],
+            "succeeded",
+        )
+        self.assertEqual(
+            values[f"{TRACE_ATTRIBUTE_NAMESPACE}source.shutdown_integrity"],
+            "invalid",
+        )
+        self.assertEqual(
+            values[f"{TRACE_ATTRIBUTE_NAMESPACE}source.shutdown_reason"],
+            "native_sigsegv_rtnl_tc_unregister",
+        )
 
     def test_fixed_point_uses_decimal_half_even(self) -> None:
         self.assertEqual(
@@ -384,6 +417,36 @@ class PerfettoTraceAttributeTests(unittest.TestCase):
         )
         self.assertTrue(report["valid"])
         self.assertEqual(report["schema_version"], "1.0.0")
+
+    def test_legacy_namespace_schema_1_0_remains_validation_compatible(self) -> None:
+        attributes = tuple(sorted((
+            TraceAttributeSpec(
+                key=f"{LEGACY_TRACE_ATTRIBUTE_NAMESPACE}schema_version",
+                value="1.0.0",
+            ),
+            TraceAttributeSpec(
+                key=(
+                    f"{LEGACY_TRACE_ATTRIBUTE_NAMESPACE}"
+                    "kpi.latency.e2e.availability"
+                ),
+                value="available",
+            ),
+        ), key=lambda item: item.key))
+        report = trace_attribute_validation_report(
+            attributes,
+            {
+                "queries": [
+                    {
+                        "name": "trace_attributes",
+                        "matched": True,
+                        "row_count": len(attributes),
+                        "rows_sha256": "a" * 64,
+                    }
+                ]
+            },
+        )
+        self.assertTrue(report["valid"])
+        self.assertEqual(report["namespace"], LEGACY_TRACE_ATTRIBUTE_NAMESPACE)
 
     def test_schema_1_1_rejects_availability_rows(self) -> None:
         attributes = (

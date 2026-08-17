@@ -6,15 +6,17 @@ from collections.abc import Mapping, Sequence
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 import hashlib
 import math
-from pathlib import PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
+import stat
 from typing import Final
 
 from ..schema import Availability
 from .model import TraceAttributeSpec
 
 
-TRACE_ATTRIBUTE_NAMESPACE: Final = "kr.ac.pusan.sota.vllm_profiler."
+TRACE_ATTRIBUTE_NAMESPACE: Final = "vllm_profiler."
+LEGACY_TRACE_ATTRIBUTE_NAMESPACE: Final = "kr.ac.pusan.sota.vllm_profiler."
 TRACE_ATTRIBUTE_SCHEMA_VERSION: Final = "1.1.0"
 _LEGACY_TRACE_ATTRIBUTE_SCHEMA_VERSION: Final = "1.0.0"
 TRACE_ATTRIBUTE_RECORD_TYPE: Final = "perfetto_trace_attribute_validation"
@@ -27,8 +29,21 @@ _LATENCY_EXPORTS: Final = (
     ("request_facing_latency", "latency.e2e", "kpi.latency.e2e"),
     ("request_facing_latency", "latency.ttft", "kpi.latency.ttft"),
     ("request_facing_latency", "latency.tpot", "kpi.latency.tpot"),
+    ("pipeline_latency", "latency.e2e", "pipeline.latency.e2e"),
     ("pipeline_latency", "latency.prefill", "kpi.latency.prefill"),
+    ("pipeline_latency", "latency.kv_export", "kpi.latency.kv_export"),
+    ("transfer", "transfer.handoff_duration", "kpi.latency.kv_handoff"),
+    ("transfer", "transfer.setup_duration", "kpi.latency.kv_transfer_setup"),
+    ("pipeline_latency", "latency.kv_transfer", "kpi.latency.kv_transfer"),
+    ("transfer", "transfer.wait_duration", "kpi.latency.kv_transfer_wait"),
+    ("pipeline_latency", "latency.kv_transform", "kpi.latency.kv_transform"),
+    (
+        "transfer",
+        "decode.schedule_wait_duration",
+        "kpi.latency.decode_schedule_wait",
+    ),
     ("pipeline_latency", "latency.decode", "kpi.latency.decode"),
+    ("pipeline_latency", "latency.sampling", "kpi.latency.sampling"),
 )
 _THROUGHPUT_EXPORTS: Final = (
     (
@@ -38,26 +53,71 @@ _THROUGHPUT_EXPORTS: Final = (
         "value_requests_milli_per_second",
     ),
     (
+        "throughput.input_tokens",
+        "kpi.throughput.input_tokens",
+        "tokens/s",
+        "value_input_tokens_milli_per_second",
+    ),
+    (
         "throughput.output_tokens",
         "kpi.throughput.output_tokens",
         "tokens/s",
         "value_output_tokens_milli_per_second",
     ),
+    (
+        "throughput.total_tokens",
+        "kpi.throughput.total_tokens",
+        "tokens/s",
+        "value_total_tokens_milli_per_second",
+    ),
+)
+_TOKEN_EXPORTS: Final = (
+    ("request.count", "kpi.request.count", "requests", "value_requests"),
+    ("request.input_tokens", "kpi.tokens.input", "tokens", "value_tokens"),
+    ("request.output_tokens", "kpi.tokens.output", "tokens", "value_tokens"),
+    ("request.total_tokens", "kpi.tokens.total", "tokens", "value_tokens"),
 )
 _TRANSFER_EXPORTS: Final = (
     ("pipeline_latency", "latency.kv_export", "transfer.kv_export_duration", "ns", "value_ns", 1),
     (
-        "pipeline_latency",
-        "latency.kv_transfer",
+        "transfer",
+        "transfer.duration",
+        "transfer.duration",
+        "ns",
+        "value_ns",
+        1,
+    ),
+    (
+        "transfer",
+        "transfer.duration",
         "transfer.kv_transfer_duration",
         "ns",
         "value_ns",
         1,
     ),
     (
-        "pipeline_latency",
-        "latency.kv_transform",
+        "transfer",
+        "transfer.transform_duration",
+        "transfer.transform_duration",
+        "ns",
+        "value_ns",
+        1,
+    ),
+    (
+        "transfer",
+        "transfer.transform_duration",
         "transfer.kv_transform_duration",
+        "ns",
+        "value_ns",
+        1,
+    ),
+    ("transfer", "transfer.handoff_duration", "transfer.handoff_duration", "ns", "value_ns", 1),
+    ("transfer", "transfer.setup_duration", "transfer.setup_duration", "ns", "value_ns", 1),
+    ("transfer", "transfer.wait_duration", "transfer.wait_duration", "ns", "value_ns", 1),
+    (
+        "transfer",
+        "decode.schedule_wait_duration",
+        "transfer.decode_schedule_wait_duration",
         "ns",
         "value_ns",
         1,
@@ -149,6 +209,169 @@ def _section(calculated: Mapping[str, object], name: str) -> Sequence[Mapping[st
     if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
         raise TraceAttributeExportError(f"canonical KPI section {name!r} is invalid")
     return value
+
+
+def _read_source_artifact(
+    loaded: object,
+    *,
+    source_role: str,
+    relative_path: str,
+) -> bytes | None:
+    """Read one already-declared source artifact without weakening input integrity."""
+
+    sources = [
+        source
+        for source in getattr(loaded, "sources", ())
+        if getattr(source, "source_role", None) == source_role
+    ]
+    if len(sources) != 1:
+        raise TraceAttributeExportError(
+            f"source role {source_role!r} must occur exactly once"
+        )
+    source = sources[0]
+    artifacts = [
+        artifact
+        for artifact in getattr(source, "artifacts", ())
+        if getattr(artifact, "relative_path", None) == relative_path
+    ]
+    if not artifacts:
+        return None
+    if len(artifacts) != 1:
+        raise TraceAttributeExportError(
+            f"source artifact {source_role}:{relative_path} is ambiguous"
+        )
+    artifact = artifacts[0]
+    path = Path(getattr(source, "root")) / relative_path
+    try:
+        before = path.lstat()
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+            raise TraceAttributeExportError(
+                f"source artifact {source_role}:{relative_path} is not a regular file"
+            )
+        payload = path.read_bytes()
+        after = path.lstat()
+    except OSError as error:
+        raise TraceAttributeExportError(
+            f"source artifact {source_role}:{relative_path} cannot be read"
+        ) from error
+    state = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")
+    if any(getattr(before, field) != getattr(after, field) for field in state):
+        raise TraceAttributeExportError(
+            f"source artifact {source_role}:{relative_path} changed while read"
+        )
+    expected_size = getattr(artifact, "size_bytes", None)
+    expected_sha256 = getattr(artifact, "sha256", None)
+    if expected_size is not None and len(payload) != expected_size:
+        raise TraceAttributeExportError(
+            f"source artifact {source_role}:{relative_path} size mismatch"
+        )
+    if expected_sha256 is not None and hashlib.sha256(payload).hexdigest() != expected_sha256:
+        raise TraceAttributeExportError(
+            f"source artifact {source_role}:{relative_path} SHA-256 mismatch"
+        )
+    return payload
+
+
+def _source_status_attributes(loaded: object) -> dict[str, str]:
+    manifest = getattr(loaded, "manifest", None)
+    inference_status = _safe_string(
+        _enum_value(getattr(manifest, "status", None)),
+        field="source inference status",
+    )
+    stderr = _read_source_artifact(
+        loaded,
+        source_role="npu",
+        relative_path="raw/server/decode.stderr.log",
+    )
+    fatal = False
+    if stderr is not None:
+        try:
+            text = stderr.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise TraceAttributeExportError("decode stderr is not UTF-8") from error
+        fatal = "Segfault encountered" in text and "rtnl_tc_unregister" in text
+    if fatal:
+        return {
+            "demo_only": "true",
+            "source.inference_status": inference_status,
+            "source.shutdown_integrity": "invalid",
+            "source.shutdown_reason": "native_sigsegv_rtnl_tc_unregister",
+        }
+    return {
+        "demo_only": "false",
+        "source.inference_status": inference_status,
+        "source.shutdown_integrity": "not_available",
+        "source.shutdown_reason": "no validated shutdown-integrity classification",
+    }
+
+
+def _metric_source_ids(metric: Mapping[str, object]) -> tuple[str, ...]:
+    ids: set[str] = set()
+    sources = metric.get("sources")
+    if not isinstance(sources, list):
+        raise TraceAttributeExportError("KPI sources must be an array")
+    for source in sources:
+        if not isinstance(source, dict):
+            raise TraceAttributeExportError("KPI source must be an object")
+        raw = source.get("record_ids")
+        if not isinstance(raw, list):
+            raise TraceAttributeExportError("KPI source record_ids must be an array")
+        for item in raw:
+            ids.add(_safe_string(item, field="KPI source record id"))
+    return tuple(sorted(ids))
+
+
+def _validate_e2e_provenance(
+    loaded: object,
+    calculated: Mapping[str, object],
+) -> None:
+    request_kpi = _find_kpi(calculated, "request_facing_latency", "latency.e2e")
+    pipeline_kpi = _find_kpi(calculated, "pipeline_latency", "latency.e2e")
+    request_ids = _metric_source_ids(request_kpi)
+    pipeline_ids = _metric_source_ids(pipeline_kpi)
+    e2e_metrics = [
+        metric
+        for metric in getattr(loaded, "metrics", ())
+        if getattr(metric, "metric_name", None) == "latency.e2e"
+    ]
+    if len(e2e_metrics) == 1:
+        # Older normalized fixtures used one E2E record for both layers. Keep
+        # reading that shape; the strict split below applies as soon as two
+        # independently sourced records are present.
+        return
+    request_matches = []
+    pipeline_matches = []
+    for metric in e2e_metrics:
+        ids = tuple(sorted(getattr(metric, "source_event_ids", ()) or ()))
+        phase = _enum_value(getattr(metric, "phase", None))
+        attributes = getattr(metric, "attributes", {})
+        dimensions = getattr(metric, "dimensions", {})
+        if (
+            ids == request_ids
+            and phase is None
+            and attributes.get("vllm.measurement_window") == "measured_smoke"
+        ):
+            request_matches.append(metric)
+        if (
+            ids == pipeline_ids
+            and phase == "request"
+            and dimensions.get("hybrid.join_method") == "transfer_id"
+        ):
+            pipeline_matches.append(metric)
+    if len(request_matches) != 1:
+        raise TraceAttributeExportError(
+            "request-facing E2E lacks unique measured_smoke provenance"
+        )
+    if len(pipeline_matches) != 1:
+        raise TraceAttributeExportError(
+            "pipeline E2E lacks unique request/transfer_id provenance"
+        )
+    request_value = request_kpi.get("value")
+    pipeline_value = pipeline_kpi.get("value")
+    if request_matches[0].value != request_value:
+        raise TraceAttributeExportError("request-facing E2E value changed across provenance")
+    if pipeline_matches[0].value != pipeline_value:
+        raise TraceAttributeExportError("pipeline E2E value changed across provenance")
 
 
 def _find_kpi(
@@ -286,7 +509,7 @@ def _resource_summaries(calculated: Mapping[str, object]) -> Sequence[Mapping[st
 def _stage_resource_aggregate(
     calculated: Mapping[str, object],
     *,
-    stage: str,
+    stage: str | None,
     metric_name: str,
     device_type: str | None,
     device_id: str | None,
@@ -327,14 +550,20 @@ def _emit_resource(
     calculated: Mapping[str, object],
     *,
     base: str,
-    stage: str,
+    stage: str | None,
     metric_name: str,
     device_type: str | None,
     device_id: str | None,
     statistic: str,
     unit: str,
 ) -> None:
-    value_suffix = "value_milli_percent" if unit == "percent" else "value_bytes"
+    value_suffix = {
+        "percent": "value_milli_percent",
+        "bytes": "value_bytes",
+        "W": "value_milli_watts",
+    }.get(unit)
+    if value_suffix is None:
+        raise TraceAttributeExportError(f"unsupported resource unit: {unit}")
     aggregate = _stage_resource_aggregate(
         calculated,
         stage=stage,
@@ -349,7 +578,7 @@ def _emit_resource(
         _add(values, f"{base}.aggregation", "not_available")
         _add(values, f"{base}.reason", "no canonical stage-window resource aggregate")
         return
-    multiplier = 1_000 if unit == "percent" else 1
+    multiplier = 1_000 if unit in {"percent", "W"} else 1
     _emit_metric(
         values,
         base=base,
@@ -369,8 +598,11 @@ def build_performance_trace_attributes(
 
     if not isinstance(calculated, Mapping):
         raise TypeError("calculated must be a canonical KPI mapping")
+    _validate_e2e_provenance(loaded, calculated)
     values: dict[str, int | str] = {}
     _add(values, "schema_version", TRACE_ATTRIBUTE_SCHEMA_VERSION)
+    for suffix, value in sorted(_source_status_attributes(loaded).items()):
+        _add(values, suffix, value)
 
     count = _find_kpi(calculated, "throughput_and_tokens", "request.count")
     count_contract = _metric_contract(
@@ -406,6 +638,7 @@ def build_performance_trace_attributes(
         ("request.count", "request_count"),
         ("request.input_tokens", "input_tokens"),
         ("request.output_tokens", "output_tokens"),
+        ("request.total_tokens", "total_tokens"),
     ):
         metric = _find_kpi(calculated, "throughput_and_tokens", name)
         availability, _, _, raw_value, _ = _metric_contract(
@@ -435,6 +668,16 @@ def build_performance_trace_attributes(
             expected_unit=unit,
             value_suffix=suffix,
             multiplier=1_000,
+        )
+    for name, base, unit, suffix in _TOKEN_EXPORTS:
+        _emit_metric(
+            values,
+            base=base,
+            metric=_find_kpi(calculated, "throughput_and_tokens", name),
+            expected_name=name,
+            expected_unit=unit,
+            value_suffix=suffix,
+            multiplier=1,
         )
     for section, name, base, unit, suffix, multiplier in _TRANSFER_EXPORTS:
         _emit_metric(
@@ -501,6 +744,47 @@ def build_performance_trace_attributes(
                 device_id=physical, statistic=statistic, unit=unit,
             )
 
+    # Capture-wide aggregates are exported separately from stage-window values.
+    # This preserves real telemetry without pretending a stage aggregate exists.
+    for suffix, statistic, metric_name, unit in (
+        ("utilization_mean", "mean", "resource.cpu.utilization", "percent"),
+        ("utilization_peak", "max", "resource.cpu.utilization", "percent"),
+        ("system_memory_peak", "max", "resource.system.memory_used", "bytes"),
+    ):
+        _emit_resource(
+            values,
+            calculated,
+            base=f"resource.capture.cpu_system.{suffix}",
+            stage=None,
+            metric_name=metric_name,
+            device_type=None,
+            device_id=None,
+            statistic=statistic,
+            unit=unit,
+        )
+    for device_type in ("gpu", "npu"):
+        for physical, alias in sorted(
+            aliases[device_type].items(), key=lambda item: item[1]
+        ):
+            for suffix, statistic, metric_name, unit in (
+                ("utilization_mean", "mean", f"resource.{device_type}.utilization", "percent"),
+                ("utilization_peak", "max", f"resource.{device_type}.utilization", "percent"),
+                ("memory_peak", "max", f"resource.{device_type}.memory_used", "bytes"),
+                ("power_mean", "mean", f"resource.{device_type}.power", "W"),
+                ("power_peak", "max", f"resource.{device_type}.power", "W"),
+            ):
+                _emit_resource(
+                    values,
+                    calculated,
+                    base=f"resource.capture.{alias}.{suffix}",
+                    stage=None,
+                    metric_name=metric_name,
+                    device_type=device_type,
+                    device_id=physical,
+                    statistic=statistic,
+                    unit=unit,
+                )
+
     return tuple(
         TraceAttributeSpec(key=key, value=values[key]) for key in sorted(values)
     )
@@ -545,7 +829,24 @@ def trace_attribute_validation_report(
         mismatches.append("attribute keys are not sorted")
     if len(keys) != len(set(keys)):
         mismatches.append("attribute keys are not unique")
-    schema_key = f"{TRACE_ATTRIBUTE_NAMESPACE}schema_version"
+    namespaces = {
+        (
+            TRACE_ATTRIBUTE_NAMESPACE
+            if key.startswith(TRACE_ATTRIBUTE_NAMESPACE)
+            else (
+                LEGACY_TRACE_ATTRIBUTE_NAMESPACE
+                if key.startswith(LEGACY_TRACE_ATTRIBUTE_NAMESPACE)
+                else "unsupported"
+            )
+        )
+        for key in keys
+    }
+    if len(namespaces) != 1 or "unsupported" in namespaces:
+        mismatches.append("trace attribute namespace is mixed or unsupported")
+        effective_namespace = TRACE_ATTRIBUTE_NAMESPACE
+    else:
+        effective_namespace = next(iter(namespaces))
+    schema_key = f"{effective_namespace}schema_version"
     schema_values = [item.value for item in attributes if item.key == schema_key]
     attribute_schema_version = (
         schema_values[0] if len(schema_values) == 1 else None
@@ -575,7 +876,7 @@ def trace_attribute_validation_report(
         ),
         "record_type": TRACE_ATTRIBUTE_RECORD_TYPE,
         "valid": not mismatches,
-        "namespace": TRACE_ATTRIBUTE_NAMESPACE,
+        "namespace": effective_namespace,
         "attribute_count": len(attributes),
         "integer_count": integer_count,
         "string_count": string_count,
@@ -589,6 +890,7 @@ def trace_attribute_validation_report(
 
 
 __all__ = [
+    "LEGACY_TRACE_ATTRIBUTE_NAMESPACE",
     "TRACE_ATTRIBUTE_NAMESPACE",
     "TRACE_ATTRIBUTE_RECORD_TYPE",
     "TRACE_ATTRIBUTE_SCHEMA_VERSION",

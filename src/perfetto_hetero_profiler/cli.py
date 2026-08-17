@@ -252,9 +252,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--request-focused",
         action="store_true",
         help=(
-            "Also write trace.request-focused.pftrace without full-window "
-            "resource telemetry or native events outside the mapped Hybrid "
-            "Request window. Original timestamps are not rebased."
+            "Also write trace.request-focused.pftrace with observed processing "
+            "stages and canonical request/token boundaries, without full-window "
+            "resource telemetry, capture envelopes, or native events outside "
+            "the request_received/response_done window. Original timestamps "
+            "are not rebased."
         ),
     )
     perfetto_parser.add_argument("--dry-run", action="store_true")

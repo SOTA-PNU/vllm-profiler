@@ -191,6 +191,10 @@ Perfetto Info and Stats의 Trace Attribute schema `1.1.0`은 중복된 KPI별
 정수 `0`은 실제 관측값으로 그대로 유지됩니다. sample count와 aggregation은
 Trace Attribute에 유지되며, canonical availability와 상세 provenance는
 normalized metric 및 외부 HTML/JSON Overview에 그대로 남습니다.
+새 trace의 namespace는 정확히 `vllm_profiler.`입니다. 요청 측정 E2E와
+marker 기반 pipeline E2E는 각각 `kpi.latency.e2e`와
+`pipeline.latency.e2e` 아래에 분리합니다. Timeline은 실제 marker pair와 검증된
+token timestamp만 사용하고, KPI 숫자는 Info and Stats에만 기록합니다.
 
 ## 제한사항
 

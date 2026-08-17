@@ -76,6 +76,22 @@ class FlowSpec:
     source_slice_name: str
     destination_slice_name: str
     correlation_id: str
+    source_event_id: str | None = None
+    destination_event_id: str | None = None
+    evidence_kind: str | None = None
+    evidence_id: str | None = None
+
+
+@dataclass(frozen=True)
+class UnclassifiedGapSpec:
+    """One observed marker gap without an evidence-backed classification."""
+
+    start_timestamp_ns: int
+    end_timestamp_ns: int
+    duration_ns: int
+    preceding_marker: str
+    following_marker: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -95,6 +111,8 @@ class TracePlan:
     trace_attributes: tuple[TraceAttributeSpec, ...] = ()
     mapping_version: str = "legacy-unversioned-phase5-v1"
     source_identity_sha256: str | None = None
+    presentation_mode: bool = False
+    unclassified_gaps: tuple[UnclassifiedGapSpec, ...] = ()
 
     @property
     def track_by_key(self) -> dict[str, TrackSpec]:

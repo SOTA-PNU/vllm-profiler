@@ -272,9 +272,9 @@ ORDER BY category
 """.strip()
 
 _LEGACY_MAPPING_VERSION: Final = "legacy-unversioned-phase5-v1"
-_TIMELINE_SUMMARY_MAPPING_VERSION: Final = "phase6b-timeline-summary-v2"
+_TIMELINE_SUMMARY_MAPPING_VERSION: Final = "processing-timeline-info-stats-v1"
 _TIMELINE_SUMMARY_ROOT_KEY: Final = "summary.root"
-_TIMELINE_SUMMARY_ROOT_NAME: Final = "Heterogeneous LLM Summary"
+_TIMELINE_SUMMARY_ROOT_NAME: Final = "Heterogeneous LLM Processing"
 _TIMELINE_SUMMARY_TRACK_PREFIX: Final = "summary."
 _TIMELINE_SUMMARY_KPI_TRACK_PREFIX: Final = "summary.kpi:"
 _TIMELINE_SUMMARY_DATA_QUALITY_KEY: Final = "summary.data_quality"
@@ -327,7 +327,7 @@ _TIMELINE_SUMMARY_SLICE_SQL: Final = """
 WITH RECURSIVE timeline_summary_tracks(track_id) AS (
   SELECT t.id
   FROM track AS t
-  WHERE t.name = 'Heterogeneous LLM Summary'
+  WHERE t.name = 'Heterogeneous LLM Processing'
     AND t.type = 'process_merged_track_event'
   UNION
   SELECT child.id
@@ -351,7 +351,7 @@ _TIMELINE_SUMMARY_KPI_SQL: Final = """
 WITH RECURSIVE timeline_summary_tracks(track_id) AS (
   SELECT t.id
   FROM track AS t
-  WHERE t.name = 'Heterogeneous LLM Summary'
+  WHERE t.name = 'Heterogeneous LLM Processing'
     AND t.type = 'process_merged_track_event'
   UNION
   SELECT child.id
@@ -392,7 +392,7 @@ _TIMELINE_SUMMARY_DATA_QUALITY_SQL: Final = """
 WITH RECURSIVE timeline_summary_tracks(track_id) AS (
   SELECT t.id
   FROM track AS t
-  WHERE t.name = 'Heterogeneous LLM Summary'
+  WHERE t.name = 'Heterogeneous LLM Processing'
     AND t.type = 'process_merged_track_event'
   UNION
   SELECT child.id
@@ -611,6 +611,16 @@ def validate_trace(
             for name in sorted(actual_queries)
         },
         "flow_endpoint_reconciliation": _flow_endpoint_summary(plan),
+        "flow_evidence": [
+            {
+                "flow_id": flow.flow_id,
+                "source_event_id": flow.source_event_id,
+                "destination_event_id": flow.destination_event_id,
+                "evidence_kind": flow.evidence_kind,
+                "evidence_id": flow.evidence_id,
+            }
+            for flow in sorted(plan.flows, key=lambda item: item.flow_id)
+        ],
         "queries": query_reports,
         "mismatches": sorted(mismatches),
     }
@@ -1301,24 +1311,24 @@ def _timeline_summary_plan_contract_mismatches(plan: TracePlan) -> list[str]:
     mismatches: list[str] = []
     if plan.mapping_version != _TIMELINE_SUMMARY_MAPPING_VERSION:
         mismatches.append(
-            f"unsupported timeline summary mapping version {plan.mapping_version!r}"
+            f"unsupported processing timeline mapping version {plan.mapping_version!r}"
         )
 
     track_by_key = plan.track_by_key
-    timeline_summary_tracks = [
+    processing_tracks = [
         track
         for track in plan.tracks
         if track.key.startswith(_TIMELINE_SUMMARY_TRACK_PREFIX)
     ]
-    roots = [track for track in timeline_summary_tracks if track.parent_key is None]
+    roots = [track for track in processing_tracks if track.parent_key is None]
     if len(roots) != 1 or roots[0].key != _TIMELINE_SUMMARY_ROOT_KEY:
-        mismatches.append("timeline summary must contain exactly one summary.root")
+        mismatches.append("processing timeline must contain exactly one summary.root")
     else:
         root = roots[0]
         if root.name != _TIMELINE_SUMMARY_ROOT_NAME:
-            mismatches.append("timeline summary root track name differs")
+            mismatches.append("processing timeline root track name differs")
 
-    for track in timeline_summary_tracks:
+    for track in processing_tracks:
         if track.key == _TIMELINE_SUMMARY_ROOT_KEY:
             continue
         current = track
@@ -1326,107 +1336,74 @@ def _timeline_summary_plan_contract_mismatches(plan: TracePlan) -> list[str]:
         while current.parent_key is not None:
             if current.key in seen:
                 mismatches.append(
-                    f"timeline summary track {track.key!r} has a parent cycle"
+                    f"processing track {track.key!r} has a parent cycle"
                 )
                 break
             seen.add(current.key)
             parent = track_by_key.get(current.parent_key)
             if parent is None:
                 mismatches.append(
-                    f"timeline summary track {track.key!r} has an unknown parent"
+                    f"processing track {track.key!r} has an unknown parent"
                 )
                 break
             current = parent
         else:
             if current.key != _TIMELINE_SUMMARY_ROOT_KEY:
                 mismatches.append(
-                    f"timeline summary track {track.key!r} is outside summary.root"
+                    f"processing track {track.key!r} is outside summary.root"
                 )
 
-    summary_pairs = (
-        ("summary.request_summary", "request", "Hybrid Request"),
-        ("summary.pipeline.gpu_prefill", "gpu_prefill", "GPU Prefill"),
-        ("summary.pipeline.kv_export", "kv_export", "KV Export"),
-        ("summary.pipeline.kv_handoff", "kv_handoff", "KV Handoff"),
-        (
-            "summary.pipeline.kv_transfer_setup",
-            "kv_transfer_setup",
-            "KV Transfer Setup",
+    required_groups = {
+        "summary.boundaries": ("summary.root", "Request Boundaries and Token Output"),
+        "summary.boundaries.events": (
+            "summary.boundaries",
+            "Request and token boundaries",
         ),
-        ("summary.pipeline.kv_transfer", "kv_transfer", "KV Transfer"),
-        (
-            "summary.pipeline.kv_transfer_wait",
-            "kv_transfer_wait",
-            "KV Transfer Wait",
-        ),
-        ("summary.pipeline.kv_transform", "kv_transform", "KV Transform"),
-        (
-            "summary.pipeline.decode_schedule_wait",
-            "decode_schedule_wait",
-            "Decode Scheduling Wait",
-        ),
-        ("summary.pipeline.npu_decode", "npu_decode", "NPU Decode"),
-    )
-    allowed_summary_keys = {timeline_summary_key for timeline_summary_key, _, _ in summary_pairs}
-    for timeline_summary_key, detail_key, expected_name in summary_pairs:
-        timeline_summary_rows = sorted(
-            (spec.timestamp_ns, spec.duration_ns)
-            for spec in plan.slices
-            if spec.track_key == timeline_summary_key
-            and spec.name == expected_name
+        "summary.pipeline": ("summary.root", "Pipeline Stages"),
+        "summary.decode_details": ("summary.root", "Decode Details"),
+    }
+    if "profiler" in track_by_key or any(
+        track.key.startswith("native.") for track in plan.tracks
+    ):
+        required_groups["summary.native_details"] = (
+            "summary.root",
+            "Native Profiler Details",
         )
-        detail_rows = sorted(
-            (spec.timestamp_ns, spec.duration_ns)
-            for spec in plan.slices
-            if spec.track_key == detail_key
-        )
-        if timeline_summary_rows != detail_rows:
-            mismatches.append(
-                f"{timeline_summary_key} timing does not exactly match {detail_key}"
-            )
+    for key, (parent, name) in required_groups.items():
+        track = track_by_key.get(key)
+        if track is None or track.parent_key != parent or track.name != name:
+            mismatches.append(f"processing group {key!r} differs")
 
-    timeline_summary_slices = [
-        spec
+    forbidden_track_names = {
+        "Request Summary",
+        "Token & Throughput KPI",
+        "Transfer KPI",
+        "Data Quality",
+        "Clock/alignment metadata",
+    }
+    if any(track.name in forbidden_track_names for track in plan.tracks):
+        mismatches.append("timeline contains a removed summary or quality track")
+    if any(
+        track.key.startswith(_TIMELINE_SUMMARY_KPI_TRACK_PREFIX)
+        or track.key == _TIMELINE_SUMMARY_DATA_QUALITY_KEY
+        for track in plan.tracks
+    ):
+        mismatches.append("timeline contains a KPI or Data Quality track")
+    if any(
+        spec.name in {"Hybrid Request", "Request Summary"}
         for spec in plan.slices
-        if spec.track_key.startswith(_TIMELINE_SUMMARY_TRACK_PREFIX)
-    ]
-    for spec in timeline_summary_slices:
-        if spec.track_key not in allowed_summary_keys:
-            mismatches.append(
-                f"timeline summary contains non-summary slice {spec.name!r}"
-            )
-        if (
-            spec.begin_flow_ids
-            or spec.end_flow_ids
-            or spec.begin_terminating_flow_ids
-            or spec.end_terminating_flow_ids
-        ):
-            mismatches.append(
-                f"timeline summary slice {spec.name!r} duplicates detail flow"
-            )
-
-    kpi_counters = [
-        spec
+    ):
+        mismatches.append("timeline contains a duplicate request summary slice")
+    if any(
+        spec.track_key.startswith(_TIMELINE_SUMMARY_KPI_TRACK_PREFIX)
         for spec in plan.counters
-        if spec.track_key.startswith(_TIMELINE_SUMMARY_KPI_TRACK_PREFIX)
-    ]
-    kpi_identities: set[str] = set()
-    for spec in kpi_counters:
-        annotations = dict(spec.annotations)
-        identity = annotations.get("hetero.kpi_identity")
-        expected_identity = spec.track_key.removeprefix(
-            _TIMELINE_SUMMARY_KPI_TRACK_PREFIX
-        )
-        if identity != expected_identity:
-            mismatches.append(
-                f"KPI counter {spec.track_key!r} identity annotation differs"
-            )
-        elif isinstance(identity, str):
-            kpi_identities.add(identity)
-        if annotations.get("hetero.availability") != "available":
-            mismatches.append(
-                f"KPI counter {spec.track_key!r} is not explicitly available"
-            )
+    ):
+        mismatches.append("timeline contains KPI counters")
+    if any(
+        spec.name in {"Data Quality status", "Clock/alignment metadata"}
+        for spec in plan.instants
+    ):
+        mismatches.append("timeline contains explanatory metadata instants")
 
     duplicated_resource_samples = [
         spec
@@ -1435,45 +1412,100 @@ def _timeline_summary_plan_contract_mismatches(plan: TracePlan) -> list[str]:
     ]
     if duplicated_resource_samples:
         mismatches.append(
-            "timeline summary duplicates resource counter samples inside "
-            "Heterogeneous LLM Summary"
+            "processing timeline duplicates resource counter samples"
         )
 
-    data_quality = [
-        spec
+    pipeline_keys = {
+        "gpu_prefill",
+        "kv_export",
+        "kv_handoff",
+        "kv_transfer_setup",
+        "kv_transfer",
+        "kv_transfer_wait",
+        "kv_transform",
+        "decode_schedule_wait",
+        "npu_decode",
+    }
+    for key in pipeline_keys & set(track_by_key):
+        if track_by_key[key].parent_key != "summary.pipeline":
+            mismatches.append(f"pipeline track {key!r} is outside Pipeline Stages")
+    for key in {"npu_decode_step", "sampling"} & set(track_by_key):
+        if track_by_key[key].parent_key != "summary.decode_details":
+            mismatches.append(f"decode detail track {key!r} is outside Decode Details")
+
+    boundaries = [
+        (dict(spec.annotations).get("hetero.boundary_kind"), spec)
         for spec in plan.instants
-        if spec.track_key == _TIMELINE_SUMMARY_DATA_QUALITY_KEY
+        if spec.track_key == "summary.boundaries.events"
     ]
-    if (
-        len(data_quality) != 1
-        or data_quality[0].name != _TIMELINE_SUMMARY_DATA_QUALITY_NAME
+    for required in ("request_received", "response_done"):
+        if sum(kind == required for kind, _ in boundaries) != 1:
+            mismatches.append(f"boundary instant {required!r} count differs")
+    for _, spec in boundaries:
+        annotations = dict(spec.annotations)
+        if any(
+            sensitive in key.casefold()
+            for key in annotations
+            for sensitive in ("prompt", "response_text", "token_text", "sha256", "path")
+        ):
+            mismatches.append(f"boundary instant {spec.name!r} exposes sensitive data")
+
+    step_rows = [
+        spec for spec in plan.slices if spec.track_key == "npu_decode_step"
+    ]
+    step_indices = [dict(spec.annotations).get("hetero.step_index") for spec in step_rows]
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in step_indices):
+        mismatches.append("decode step index is not a non-boolean integer")
+    elif sorted(step_indices) != list(range(len(step_indices))):
+        mismatches.append("decode step indices are duplicated or non-contiguous")
+    decode_by_index = {
+        dict(spec.annotations).get("hetero.step_index"): dict(spec.annotations).get(
+            "hetero.correlation_id"
+        )
+        for spec in step_rows
+    }
+    for spec in (row for row in plan.slices if row.track_key == "sampling"):
+        annotations = dict(spec.annotations)
+        index = annotations.get("hetero.step_index")
+        if decode_by_index.get(index) != annotations.get("hetero.correlation_id"):
+            mismatches.append("sampling/decode correlation or step index differs")
+
+    wait_rows = [
+        spec for spec in plan.slices if spec.track_key == "kv_transfer_wait"
+    ]
+    if any(
+        dict(spec.annotations).get("hetero.wait_observation")
+        != "polling_incomplete_to_done"
+        for spec in wait_rows
     ):
-        mismatches.append(
-            "timeline summary must contain exactly one Data Quality status instant"
-        )
-    else:
-        annotations = dict(data_quality[0].annotations)
-        if (
-            annotations.get("hetero.trace_mapping_version")
-            != plan.mapping_version
+        mismatches.append("KV Transfer Wait lacks polling observation evidence")
+
+    if plan.presentation_mode:
+        if any(spec.track_key in {"request", "profiler"} for spec in plan.slices):
+            mismatches.append("presentation trace contains request summary or capture envelope")
+        if plan.counters:
+            mismatches.append("presentation trace contains counters")
+        if any(
+            track.key.startswith(_RESOURCE_TELEMETRY_ROOT_KEY)
+            for track in plan.tracks
         ):
-            mismatches.append("Data Quality mapping version differs")
+            mismatches.append("presentation trace contains full-window telemetry")
+    elif sum(spec.track_key == "request" for spec in plan.slices) != 1:
+        mismatches.append("full trace must retain one diagnostic Request lifecycle")
+
+    for gap in plan.unclassified_gaps:
         if (
-            annotations.get("hetero.source_identity_sha256")
-            != plan.source_identity_sha256
+            gap.end_timestamp_ns < gap.start_timestamp_ns
+            or gap.duration_ns != gap.end_timestamp_ns - gap.start_timestamp_ns
+            or not gap.preceding_marker
+            or not gap.following_marker
+            or not gap.reason
         ):
-            mismatches.append("Data Quality source identity differs")
-        _validate_unavailable_kpi_annotations(
-            annotations,
-            kpi_identities,
-            mismatches,
-        )
+            mismatches.append("unclassified gap metadata is invalid")
 
     detail_sources: list[int] = []
     detail_destinations: list[int] = []
     for spec in plan.slices:
-        if spec.track_key.startswith(_TIMELINE_SUMMARY_TRACK_PREFIX):
-            continue
         detail_sources.extend(spec.begin_flow_ids)
         detail_sources.extend(spec.end_flow_ids)
         detail_destinations.extend(spec.begin_terminating_flow_ids)

@@ -545,13 +545,18 @@ class RequestFocusedTests(unittest.TestCase):
     def test_focus_preserves_timestamps_and_prunes_telemetry_and_half_flows(self):
         tracks = (
             _track("summary.root", 2, ordering="explicit"),
-            _track("summary.request_summary", 3, parent="summary.root", rank=0),
-            _track("native.test", 4, parent="summary.root", rank=5),
-            _track("native.test.lane", 5, parent="native.test"),
-            _track("telemetry.resources", 6),
+            _track("summary.boundaries", 3, parent="summary.root", rank=0),
+            _track(
+                "summary.boundaries.events",
+                4,
+                parent="summary.boundaries",
+            ),
+            _track("native.test", 5, parent="summary.root", rank=3),
+            _track("native.test.lane", 6, parent="native.test"),
+            _track("telemetry.resources", 7),
             _track(
                 "counter.cpu",
-                7,
+                8,
                 parent="telemetry.resources",
                 kind="counter",
             ),
@@ -578,17 +583,27 @@ class RequestFocusedTests(unittest.TestCase):
             process_id=1,
             packet_sequence_id=1,
             tracks=tracks,
-            slices=(
-                SliceSpec(
-                    track_key="summary.request_summary",
-                    name="Hybrid Request",
+            slices=(inside, outside),
+            instants=(
+                InstantSpec(
+                    track_key="summary.boundaries.events",
+                    name="Request Received",
                     timestamp_ns=100,
-                    duration_ns=100,
+                    annotations=(
+                        ("hetero.boundary_kind", "request_received"),
+                        ("hetero.correlation_id", "one"),
+                    ),
                 ),
-                inside,
-                outside,
+                InstantSpec(
+                    track_key="summary.boundaries.events",
+                    name="Response Completion",
+                    timestamp_ns=200,
+                    annotations=(
+                        ("hetero.boundary_kind", "response_done"),
+                        ("hetero.correlation_id", "one"),
+                    ),
+                ),
             ),
-            instants=(),
             counters=(
                 CounterSpec(
                     track_key="counter.cpu",
@@ -608,8 +623,10 @@ class RequestFocusedTests(unittest.TestCase):
         focused = request_focused_plan(plan)
         self.assertEqual(
             [(item.name, item.timestamp_ns) for item in focused.slices],
-            [("Hybrid Request", 100), ("inside", 120)],
+            [("inside", 120)],
         )
+        self.assertTrue(focused.presentation_mode)
+        self.assertEqual(len(focused.instants), 2)
         self.assertFalse(focused.counters)
         self.assertFalse(focused.flows)
         retained_inside = next(
@@ -621,11 +638,15 @@ class RequestFocusedTests(unittest.TestCase):
             {item.key for item in focused.tracks},
         )
 
-    def test_touching_boundary_is_not_overlap_and_policy_is_downgraded(self):
+    def test_touching_boundary_and_profiler_envelope_are_excluded(self):
         tracks = (
             _track("summary.root", 2, ordering="explicit"),
-            _track("summary.request_summary", 3, parent="summary.root"),
-            _track("summary.data_quality", 4, parent="summary.root"),
+            _track("summary.boundaries", 3, parent="summary.root"),
+            _track(
+                "summary.boundaries.events",
+                4,
+                parent="summary.boundaries",
+            ),
             _track("profiler", 5),
             _track("native.gpu_torch", 6, parent="summary.root"),
             _track("native.gpu_torch.lane", 7, parent="native.gpu_torch"),
@@ -638,12 +659,6 @@ class RequestFocusedTests(unittest.TestCase):
             packet_sequence_id=1,
             tracks=tracks,
             slices=(
-                SliceSpec(
-                    track_key="summary.request_summary",
-                    name="Hybrid Request",
-                    timestamp_ns=100,
-                    duration_ns=100,
-                ),
                 SliceSpec(
                     track_key="profiler",
                     name="GPU profiler capture",
@@ -664,29 +679,21 @@ class RequestFocusedTests(unittest.TestCase):
             ),
             instants=(
                 InstantSpec(
-                    track_key="summary.data_quality",
-                    name="Data Quality status",
+                    track_key="summary.boundaries.events",
+                    name="Request Received",
                     timestamp_ns=100,
                     annotations=(
-                        ("hetero.native_details_emitted", True),
-                        (
-                            "hetero.native_profiler_alignment",
-                            "partial_derived",
-                        ),
-                        ("hetero.resource_metric_count", 7),
-                        ("hetero.available_resource_sample_count", 6),
-                        ("hetero.unavailable_resource_sample_count", 1),
-                        (
-                            "hetero.resource_grouping",
-                            "top_level_full_capture_tracks_without_sample_duplication",
-                        ),
-                        (
-                            "hetero.resource_time_scope",
-                            "full_capture_not_request_scoped",
-                        ),
-                        ("hetero.resource_first_timestamp_ns", 50),
-                        ("hetero.pre_request_resource_sample_count", 3),
-                        ("hetero.pre_request_resource_duration_ns", 50),
+                        ("hetero.boundary_kind", "request_received"),
+                        ("hetero.correlation_id", "one"),
+                    ),
+                ),
+                InstantSpec(
+                    track_key="summary.boundaries.events",
+                    name="Response Completion",
+                    timestamp_ns=200,
+                    annotations=(
+                        ("hetero.boundary_kind", "response_done"),
+                        ("hetero.correlation_id", "one"),
                     ),
                 ),
                 InstantSpec(
@@ -699,27 +706,6 @@ class RequestFocusedTests(unittest.TestCase):
             flows=(),
         )
         focused = request_focused_plan(plan)
-        quality = next(
-            item
-            for item in focused.instants
-            if item.track_key == "summary.data_quality"
-        )
-        quality_annotations = dict(quality.annotations)
-        self.assertFalse(
-            quality_annotations["hetero.resource_telemetry_included"]
-        )
-        self.assertEqual(
-            quality_annotations["hetero.resource_grouping"],
-            "omitted_from_request_focused_trace",
-        )
-        self.assertEqual(
-            quality_annotations["hetero.resource_metric_count"],
-            0,
-        )
-        self.assertEqual(
-            quality_annotations["hetero.source_resource_metric_count"],
-            7,
-        )
         self.assertNotIn(
             "native.gpu_torch",
             {item.key for item in focused.tracks},
@@ -728,17 +714,10 @@ class RequestFocusedTests(unittest.TestCase):
             "instant touches request end",
             {item.name for item in focused.instants},
         )
-        envelope = next(
-            item for item in focused.slices if item.track_key == "profiler"
-        )
-        self.assertFalse(
-            dict(envelope.annotations)["hetero.native_details_emitted"]
-        )
-        quality = dict(focused.instants[0].annotations)
-        self.assertFalse(quality["hetero.native_details_emitted"])
+        self.assertNotIn("profiler", {item.key for item in focused.tracks})
         self.assertEqual(
-            quality["hetero.native_profiler_alignment"],
-            "partial_or_unaligned",
+            {item.name for item in focused.instants},
+            {"Request Received", "Response Completion"},
         )
 
 
@@ -836,16 +815,33 @@ class NativeValidationTests(unittest.TestCase):
         report = native_validation_metadata(missing, native)
         self.assertFalse(report["valid"])
         self.assertFalse(report["native_counts_reconciled"])
-        request_track = _track("summary.request_summary", 4)
+        boundary_group = _track("summary.boundaries", 4)
+        boundary_track = _track(
+            "summary.boundaries.events",
+            5,
+            parent="summary.boundaries",
+        )
         missing = replace(
-            plan,
-            tracks=(*plan.tracks, request_track),
-            slices=(
-                SliceSpec(
-                    track_key=request_track.key,
-                    name="Hybrid Request",
+            missing,
+            tracks=(*missing.tracks, boundary_group, boundary_track),
+            instants=(
+                InstantSpec(
+                    track_key=boundary_track.key,
+                    name="Request Received",
                     timestamp_ns=0,
-                    duration_ns=100,
+                    annotations=(
+                        ("hetero.boundary_kind", "request_received"),
+                        ("hetero.correlation_id", "one"),
+                    ),
+                ),
+                InstantSpec(
+                    track_key=boundary_track.key,
+                    name="Response Completion",
+                    timestamp_ns=100,
+                    annotations=(
+                        ("hetero.boundary_kind", "response_done"),
+                        ("hetero.correlation_id", "one"),
+                    ),
                 ),
             ),
         )

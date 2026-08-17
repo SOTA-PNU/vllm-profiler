@@ -143,7 +143,7 @@ class OverviewHTMLTests(unittest.TestCase):
         self.assertIn("normalized_metric", html)
         self.assertIn("request_facing_client", html)
         self.assertIn("No randomized repeated trial was performed.", html)
-        self.assertIn("Opaque vendor captures are not parsed.", html)
+        self.assertIn("RBLN Perfetto payloads are validated", html)
 
     def test_perfetto_ui_boundary_is_versioned_by_report_semantics(self):
         legacy = self.rich_report()
@@ -156,12 +156,12 @@ class OverviewHTMLTests(unittest.TestCase):
         current["interpretation"]["limitations"].append(
             "this external KPI report is not the Perfetto UI; the matching "
             "trace.pftrace contains a separate timeline Heterogeneous LLM "
-            "Summary, not the built-in Overview"
+            "Processing, not the built-in Overview"
         )
         current_html = render_overview_html(current)
         self.assertIn("not the Perfetto UI", current_html)
         self.assertIn("<code>trace.pftrace</code>", current_html)
-        self.assertIn("<code>Heterogeneous LLM Summary</code>", current_html)
+        self.assertIn("<code>Heterogeneous LLM Processing</code>", current_html)
         self.assertIn("not Perfetto's built-in Overview", current_html)
 
     def test_all_input_strings_are_escaped_and_sensitive_locations_redacted(self):

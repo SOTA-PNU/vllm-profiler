@@ -271,7 +271,7 @@ def _artifact(
 ) -> ArtifactReference:
     path = root / relative_path
     return ArtifactReference(
-        run_id=NPU_RUN_ID,
+        run_id=root.name,
         artifact_id=artifact_id,
         artifact_kind=artifact_kind,
         relative_path=relative_path,
@@ -437,6 +437,8 @@ def _build_monitor_family(
     rbln_profile: bool = False,
     drop_hybrid_marker: str | None = None,
     overview_metrics: bool = False,
+    measured_token_timestamps: tuple[int, ...] | None = None,
+    fatal_shutdown: bool = False,
     run_id: str = RUN_ID,
     gpu_run_id: str = GPU_RUN_ID,
     npu_run_id: str = NPU_RUN_ID,
@@ -482,6 +484,63 @@ def _build_monitor_family(
             for name in NPU_MARKERS
         },
     )
+    if measured_token_timestamps is not None:
+        measured = gpu / "raw/client/measured_requests.jsonl"
+        measured.parent.mkdir(parents=True, exist_ok=True)
+        measured.write_text(
+            json.dumps(
+                {
+                    "request_id": "request-1",
+                    "request_start_ns": 1_000_000,
+                    "stream_end_ns": 2_500_000,
+                    "output_tokens": len(measured_token_timestamps),
+                    "valid_token_timestamps_ns": list(measured_token_timestamps),
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        artifacts_path = gpu / "artifacts/artifacts.jsonl"
+        write_jsonl(
+            artifacts_path,
+            [
+                *read_jsonl(artifacts_path),
+                _artifact(
+                    gpu,
+                    artifact_id="measured-requests",
+                    artifact_kind=ArtifactKind.RAW_LOG,
+                    relative_path="raw/client/measured_requests.jsonl",
+                    format_name="jsonl",
+                    clock_domain_id=CLOCK_ID,
+                ),
+            ],
+            overwrite=True,
+        )
+    if fatal_shutdown:
+        stderr = npu / "raw/server/decode.stderr.log"
+        stderr.parent.mkdir(parents=True, exist_ok=True)
+        stderr.write_text(
+            "Segfault encountered\nrtnl_tc_unregister\n",
+            encoding="utf-8",
+        )
+        artifacts_path = npu / "artifacts/artifacts.jsonl"
+        write_jsonl(
+            artifacts_path,
+            [
+                *read_jsonl(artifacts_path),
+                _artifact(
+                    npu,
+                    artifact_id="decode-stderr",
+                    artifact_kind=ArtifactKind.RAW_LOG,
+                    relative_path="raw/server/decode.stderr.log",
+                    format_name="text",
+                    clock_domain_id=None,
+                ),
+            ],
+            overwrite=True,
+        )
     if rbln_profile:
         _add_rbln_profile(npu)
     result = HybridBundleMerger(
@@ -684,13 +743,13 @@ class PerfettoConversionIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(
                 validation["counts"]["timeline_summary_slices"],
-                7,
+                10,
             )
-            self.assertGreater(
+            self.assertEqual(
                 validation["counts"]["timeline_summary_kpis"],
                 0,
             )
-            self.assertGreater(
+            self.assertEqual(
                 validation["counts"]["timeline_summary_data_quality"],
                 0,
             )
@@ -714,11 +773,19 @@ class PerfettoConversionIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(
                 manifest["trace_mapping"]["mapping_version"],
-                "phase6b-timeline-summary-v2",
+                "processing-timeline-info-stats-v1",
             )
             self.assertEqual(
                 manifest["trace_mapping"]["root_track"]["name"],
-                "Heterogeneous LLM Summary",
+                "Heterogeneous LLM Processing",
+            )
+            self.assertEqual(
+                manifest["trace_mapping"]["kpi_presentation"],
+                "info_and_stats_trace_attributes_only",
+            )
+            self.assertEqual(
+                manifest["trace_mapping"]["kpi_counter_mapping"],
+                [],
             )
             self.assertEqual(
                 manifest["trace_mapping"]["flow_policy"][
@@ -728,9 +795,9 @@ class PerfettoConversionIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(
                 manifest["trace_mapping"]["unavailable_handling"][
-                    "counter_policy"
+                    "timeline_counter_policy"
                 ],
-                "omitted_not_zero_filled",
+                "not_emitted",
             )
             self.assertFalse(
                 manifest["trace_mapping"]["resource_grouping"][

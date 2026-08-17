@@ -451,9 +451,19 @@ def augment_trace_plan(
         )
 
     base_track_keys = {track.key for track in base_plan.tracks}
+    native_parent = (
+        "summary.native_details"
+        if "summary.native_details" in base_track_keys
+        else None
+    )
     native_tracks = tuple(
-        replace(track, parent_key=None, sibling_order_rank=None)
-        if track.parent_key == "summary.root" and "summary.root" not in base_track_keys
+        replace(
+            track,
+            parent_key=native_parent,
+            # Rank 0 is reserved for the diagnostic capture envelope.
+            sibling_order_rank=(1 if native_parent is not None else None),
+        )
+        if track.parent_key == "summary.root"
         else track
         for track in native.tracks
     )
@@ -489,23 +499,40 @@ def augment_trace_plan(
     )
 
 
-def request_focused_plan(plan: TracePlan) -> TracePlan:
-    """Drop full-window telemetry and native events outside the measured request."""
-
-    request_rows = [
-        spec
-        for spec in plan.slices
-        if spec.track_key in {"summary.request_summary", "request"}
-        and spec.name in {"Hybrid Request", "Request"}
-    ]
-    if not request_rows:
+def _request_window_from_boundaries(plan: TracePlan) -> tuple[int, int, str]:
+    boundary_rows: dict[str, list[InstantSpec]] = {
+        "request_received": [],
+        "response_done": [],
+    }
+    for spec in plan.instants:
+        kind = dict(spec.annotations).get("hetero.boundary_kind")
+        if kind in boundary_rows:
+            boundary_rows[str(kind)].append(spec)
+    if any(len(rows) != 1 for rows in boundary_rows.values()):
         raise NativeDetailError(
-            "request-focused trace requires at least one Hybrid Request slice"
+            "request-focused trace requires one canonical request/response boundary pair"
         )
-    start = min(request.timestamp_ns for request in request_rows)
-    end = max(
-        request.timestamp_ns + request.duration_ns for request in request_rows
-    )
+    received = boundary_rows["request_received"][0]
+    completed = boundary_rows["response_done"][0]
+    received_annotations = dict(received.annotations)
+    completed_annotations = dict(completed.annotations)
+    correlation = received_annotations.get("hetero.correlation_id")
+    if (
+        not isinstance(correlation, str)
+        or not correlation
+        or completed_annotations.get("hetero.correlation_id") != correlation
+        or completed.timestamp_ns < received.timestamp_ns
+    ):
+        raise NativeDetailError(
+            "canonical request/response boundary identity or order is invalid"
+        )
+    return received.timestamp_ns, completed.timestamp_ns, correlation
+
+
+def request_focused_plan(plan: TracePlan) -> TracePlan:
+    """Keep observed request processing without summary bars or telemetry."""
+
+    start, end, _ = _request_window_from_boundaries(plan)
     by_key = plan.track_by_key
 
     def is_under(track_key: str, root_key: str) -> bool:
@@ -525,6 +552,8 @@ def request_focused_plan(plan: TracePlan) -> TracePlan:
         spec
         for spec in plan.slices
         if not is_under(spec.track_key, "telemetry.resources")
+        and spec.track_key not in {"request", "profiler"}
+        and spec.name not in {"Hybrid Request", "Request Summary"}
         and (
             not spec.track_key.startswith("native.")
             or overlaps(spec)
@@ -535,15 +564,14 @@ def request_focused_plan(plan: TracePlan) -> TracePlan:
         for spec in plan.instants
         if not is_under(spec.track_key, "telemetry.resources")
         and (
-            not spec.track_key.startswith("native.")
-            or start <= spec.timestamp_ns < end
+            spec.track_key == "summary.boundaries.events"
+            or (
+                spec.track_key.startswith("native.")
+                and start <= spec.timestamp_ns < end
+            )
         )
     )
-    counters = tuple(
-        spec
-        for spec in plan.counters
-        if not is_under(spec.track_key, "telemetry.resources")
-    )
+    counters: tuple[CounterSpec, ...] = ()
     endpoint_counts = Counter(
         flow_id
         for spec in candidate_slices
@@ -593,81 +621,14 @@ def request_focused_plan(plan: TracePlan) -> TracePlan:
             used_keys.add(current.parent_key)
             current = by_key[current.parent_key]
     tracks = tuple(track for track in plan.tracks if track.key in used_keys)
-    native_types = {
-        track.key.split(".", 2)[1]
-        for track in tracks
-        if track.key.startswith("native.")
-    }
-    adjusted_slices: list[SliceSpec] = []
-    for spec in slices:
-        if spec.track_key != "profiler":
-            adjusted_slices.append(spec)
-            continue
-        annotations = dict(spec.annotations)
-        profiler_type = annotations.get("hetero.profiler_type")
-        emitted = profiler_type in native_types
-        annotations["hetero.native_details_emitted"] = emitted
-        annotations["hetero.unaligned_profiler_events"] = not emitted
-        adjusted_slices.append(
-            replace(spec, annotations=tuple(sorted(annotations.items())))
-        )
-    adjusted_instants: list[InstantSpec] = []
-    for spec in instants:
-        if spec.track_key == "clock_metadata":
-            annotations = dict(spec.annotations)
-            annotations["hetero.native_details_emitted"] = bool(native_types)
-            adjusted_instants.append(
-                replace(spec, annotations=tuple(sorted(annotations.items())))
-            )
-            continue
-        if spec.track_key != "summary.data_quality":
-            adjusted_instants.append(spec)
-            continue
-        annotations = dict(spec.annotations)
-        for key in (
-            "resource_metric_count",
-            "available_resource_sample_count",
-            "unavailable_resource_sample_count",
-            "pre_request_resource_sample_count",
-            "pre_request_resource_duration_ns",
-        ):
-            original_key = f"hetero.{key}"
-            value = annotations.get(original_key)
-            if value is not None:
-                annotations[f"hetero.source_{key}"] = value
-        annotations.update(
-            {
-                "hetero.resource_telemetry_included": False,
-                "hetero.resource_metric_count": 0,
-                "hetero.available_resource_sample_count": 0,
-                "hetero.unavailable_resource_sample_count": 0,
-                "hetero.resource_grouping": (
-                    "omitted_from_request_focused_trace"
-                ),
-                "hetero.resource_time_scope": (
-                    "not_applicable_request_focused_trace"
-                ),
-                "hetero.resource_first_timestamp_ns": start,
-                "hetero.pre_request_resource_sample_count": 0,
-                "hetero.pre_request_resource_duration_ns": 0,
-            }
-        )
-        annotations["hetero.native_details_emitted"] = bool(native_types)
-        annotations["hetero.native_profiler_alignment"] = (
-            "partial_derived"
-            if native_types
-            else "partial_or_unaligned"
-        )
-        adjusted_instants.append(
-            replace(spec, annotations=tuple(sorted(annotations.items())))
-        )
     return replace(
         plan,
         tracks=tracks,
-        slices=tuple(adjusted_slices),
-        instants=tuple(adjusted_instants),
+        slices=slices,
+        instants=instants,
         counters=counters,
         flows=flows,
+        presentation_mode=True,
     )
 
 
@@ -822,21 +783,7 @@ def _expected_native_subset(
     set[int],
 ]:
     if filtered_subset:
-        requests = [
-            spec
-            for spec in plan.slices
-            if spec.track_key in {"summary.request_summary", "request"}
-            and spec.name in {"Hybrid Request", "Request"}
-        ]
-        if not requests:
-            raise NativeDetailError(
-                "focused native validation requires a request slice"
-            )
-        start = min(request.timestamp_ns for request in requests)
-        end = max(
-            request.timestamp_ns + request.duration_ns
-            for request in requests
-        )
+        start, end, _ = _request_window_from_boundaries(plan)
         slices = tuple(
             spec
             for spec in native.slices

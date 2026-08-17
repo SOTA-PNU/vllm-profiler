@@ -1,10 +1,8 @@
-"""Trace-native Perfetto timeline-summary planning and protobuf contracts."""
+"""Perfetto processing-timeline planning and protobuf contracts."""
 
 from __future__ import annotations
 
 from dataclasses import replace
-import json
-import math
 from pathlib import Path
 import tempfile
 import unittest
@@ -20,11 +18,9 @@ from perfetto_hetero_profiler.perfetto.timeline_summary import (
     TIMELINE_SUMMARY_MAPPING_VERSION,
     TIMELINE_SUMMARY_ROOT_NAME,
     build_timeline_summary_context,
+    TimelineSummaryInputError,
 )
-from perfetto_hetero_profiler.perfetto.writer import (
-    build_trace,
-    serialize_trace,
-)
+from perfetto_hetero_profiler.perfetto.writer import build_trace, serialize_trace
 from tests.test_perfetto_conversion import _build_monitor_family
 
 
@@ -51,7 +47,7 @@ class PerfettoTimelineSummaryTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls._temporary.cleanup()
 
-    def test_root_hierarchy_ordering_and_versioned_uuid_are_deterministic(self):
+    def test_processing_hierarchy_and_versioned_uuid_are_deterministic(self):
         plan = self.result.plan
         tracks = plan.track_by_key
         root = tracks["summary.root"]
@@ -61,24 +57,19 @@ class PerfettoTimelineSummaryTests(unittest.TestCase):
         self.assertEqual(root.child_ordering, "explicit")
         self.assertEqual(
             [
-                (
-                    tracks[key].parent_key,
-                    tracks[key].sibling_order_rank,
-                )
+                (tracks[key].parent_key, tracks[key].sibling_order_rank)
                 for key in (
-                    "summary.request_summary",
+                    "summary.boundaries",
                     "summary.pipeline",
-                    "summary.kpi.token_throughput",
-                    "summary.kpi.transfer",
-                    "summary.data_quality",
+                    "summary.decode_details",
                 )
             ],
-            [("summary.root", index) for index in range(5)],
+            [("summary.root", index) for index in range(3)],
         )
         self.assertEqual(
             [
-                tracks[f"summary.pipeline.{name}"].sibling_order_rank
-                for name in (
+                tracks[key].sibling_order_rank
+                for key in (
                     "gpu_prefill",
                     "kv_export",
                     "kv_transfer",
@@ -86,7 +77,7 @@ class PerfettoTimelineSummaryTests(unittest.TestCase):
                     "npu_decode",
                 )
             ],
-            list(range(5)),
+            [0, 1, 4, 6, 8],
         )
         rebuilt = build_trace_plan(
             self.loaded.manifest,
@@ -99,185 +90,123 @@ class PerfettoTimelineSummaryTests(unittest.TestCase):
         self.assertEqual(serialize_trace(plan), serialize_trace(rebuilt.plan))
         self.assertEqual(root.uuid, rebuilt.plan.track_by_key[root.key].uuid)
 
-        changed_identity = replace(
-            self.context,
-            source_identity_sha256="f" * 64,
-        )
         changed = build_trace_plan(
             self.loaded.manifest,
             self.loaded.events,
             self.loaded.metrics,
             canonical_clock_domain_id=self.loaded.canonical_clock_domain_id,
             native_envelopes=self.loaded.native_envelopes,
-            timeline_summary=changed_identity,
+            timeline_summary=replace(
+                self.context,
+                source_identity_sha256="f" * 64,
+            ),
         ).plan
-        self.assertNotEqual(
-            root.uuid,
-            changed.track_by_key["summary.root"].uuid,
-        )
+        self.assertNotEqual(root.uuid, changed.track_by_key[root.key].uuid)
         self.assertEqual(
             tracks["gpu_prefill"].uuid,
             changed.track_by_key["gpu_prefill"].uuid,
         )
 
-    def test_summary_intervals_copy_detail_and_never_copy_flow(self):
+    def test_timeline_contains_each_observed_processing_interval_once(self):
         plan = self.result.plan
-        summary_to_detail = {
-            "summary.request_summary": "request",
-            "summary.pipeline.gpu_prefill": "gpu_prefill",
-            "summary.pipeline.kv_export": "kv_export",
-            "summary.pipeline.kv_transfer": "kv_transfer",
-            "summary.pipeline.kv_transform": "kv_transform",
-            "summary.pipeline.npu_decode": "npu_decode",
+        expected = {
+            "GPU Prefill": "gpu_prefill",
+            "KV Export": "kv_export",
+            "KV Transfer": "kv_transfer",
+            "KV Transform": "kv_transform",
+            "NPU Decode": "npu_decode",
+            "Decode Step 0": "npu_decode_step",
+            "Sampling 0": "sampling",
         }
-        for summary_key, detail_key in summary_to_detail.items():
-            summary = [row for row in plan.slices if row.track_key == summary_key]
-            detail = [row for row in plan.slices if row.track_key == detail_key]
-            self.assertEqual(len(summary), 1)
-            self.assertEqual(len(detail), 1)
-            self.assertEqual(
-                (summary[0].timestamp_ns, summary[0].duration_ns),
-                (detail[0].timestamp_ns, detail[0].duration_ns),
-            )
-            self.assertFalse(summary[0].begin_flow_ids)
-            self.assertFalse(summary[0].end_flow_ids)
-            self.assertFalse(summary[0].begin_terminating_flow_ids)
-            self.assertFalse(summary[0].end_terminating_flow_ids)
-
-        request = next(
-            row
-            for row in plan.slices
-            if row.track_key == "summary.request_summary"
-        )
-        annotations = dict(request.annotations)
-        self.assertIn("hetero.request_facing_e2e_ns", annotations)
-        self.assertIn("hetero.pipeline_e2e_ns", annotations)
-        self.assertEqual(
-            request.duration_ns,
-            annotations["hetero.pipeline_e2e_ns"],
-        )
-        self.assertIn("hetero.ttft_ns", annotations)
-        tpot = next(
-            item
-            for item in self.context.kpis
-            if item.identity == "request_facing_latency:latency.tpot"
-        )
-        if tpot.available:
-            self.assertEqual(annotations["hetero.tpot_ns"], tpot.value)
-        else:
-            self.assertNotIn("hetero.tpot_ns", annotations)
-        self.assertIn("hetero.request_id", annotations)
-        self.assertIn("hetero.correlation_id", annotations)
-        self.assertEqual(
-            len(json.loads(annotations["hetero.source_event_ids_json"])),
-            2,
-        )
+        for name, track_key in expected.items():
+            rows = [row for row in plan.slices if row.name == name]
+            self.assertEqual(len(rows), 1, name)
+            self.assertEqual(rows[0].track_key, track_key)
         self.assertFalse(
             any(
-                row.name in {"TPOT", "Sampling total"}
+                row.name in {"Hybrid Request", "Request Summary"}
                 for row in plan.slices
             )
         )
+        self.assertFalse(
+            any(row.track_key.startswith("summary.kpi") for row in plan.counters)
+        )
+        self.assertFalse(any("Data Quality" in row.name for row in plan.instants))
         self.assertEqual(len(plan.flows), 5)
-        self.assertFalse(
-            any(
-                row.track_key.startswith("summary.")
-                and (
-                    row.begin_flow_ids
-                    or row.end_flow_ids
-                    or row.begin_terminating_flow_ids
-                    or row.end_terminating_flow_ids
-                )
-                for row in plan.slices
-            )
-        )
 
-    def test_kpis_omit_unavailable_values_and_preserve_units(self):
+    def test_boundary_instants_are_evidence_only_and_non_sensitive(self):
         plan = self.result.plan
-        kpi_counters = [
-            row
-            for row in plan.counters
-            if row.track_key.startswith("summary.kpi:")
-        ]
-        available = [item for item in self.context.kpis if item.available]
-        unavailable = [item for item in self.context.kpis if not item.available]
-        self.assertEqual(len(kpi_counters), len(available))
-        self.assertEqual(
-            {row.track_key.removeprefix("summary.kpi:") for row in kpi_counters},
-            {item.identity for item in available},
-        )
-        for row in kpi_counters:
-            self.assertNotIsInstance(row.value, bool)
-            self.assertTrue(math.isfinite(float(row.value)))
-            annotations = dict(row.annotations)
-            self.assertEqual(annotations["hetero.availability"], "available")
-            self.assertEqual(
-                annotations["hetero.canonical_unit"],
-                plan.track_by_key[row.track_key].unit,
-            )
-            self.assertIn("hetero.anchor_event_id", annotations)
-            self.assertIn("hetero.source_event_ids_json", annotations)
-
-        quality = next(
-            row
+        boundaries = {
+            dict(row.annotations)["hetero.boundary_kind"]: row
             for row in plan.instants
-            if row.track_key == "summary.data_quality"
-        )
-        quality_annotations = dict(quality.annotations)
-        reasons = json.loads(
-            quality_annotations["hetero.unavailable_kpis_json"]
-        )
+            if row.track_key == "summary.boundaries.events"
+        }
+        self.assertEqual(set(boundaries), {"request_received", "response_done"})
+        self.assertEqual(boundaries["request_received"].name, "Request Received")
+        self.assertEqual(boundaries["response_done"].name, "Response Completion")
+        for row in boundaries.values():
+            annotations = dict(row.annotations)
+            self.assertEqual(
+                annotations["hetero.correlation_id"],
+                "correlation-1",
+            )
+            self.assertNotIn("prompt", annotations)
+            self.assertNotIn("response", annotations)
+            self.assertNotIn("token_text", annotations)
+
+    def test_unclassified_gaps_are_metadata_not_fabricated_slices(self):
+        gaps = self.result.plan.unclassified_gaps
+        self.assertEqual(len(gaps), 2)
         self.assertEqual(
-            quality_annotations["hetero.unavailable_kpi_count"],
-            len(unavailable),
+            [(gap.preceding_marker, gap.following_marker) for gap in gaps],
+            [
+                ("request_received", "prefill_start"),
+                ("sampling_end", "response_done"),
+            ],
         )
-        self.assertEqual(set(reasons), {item.identity for item in unavailable})
-        self.assertTrue(all(reasons.values()))
-        self.assertEqual(
-            quality_annotations["hetero.perfetto_validation"],
-            "required_pinned_official_trace_processor_before_publication",
+        self.assertTrue(all(gap.duration_ns > 0 and gap.reason for gap in gaps))
+        self.assertFalse(
+            any("Unclassified" in row.name for row in self.result.plan.slices)
         )
 
-    def test_resources_are_reparented_without_copying_samples(self):
+    def test_kpis_stay_in_official_trace_attributes(self):
+        plan = self.result.plan
+        self.assertTrue(plan.trace_attributes)
+        self.assertEqual(
+            plan.trace_attributes,
+            tuple(sorted(plan.trace_attributes, key=lambda row: row.key)),
+        )
+        self.assertEqual(
+            self.result.metadata.timeline_summary_kpi_counter_count,
+            0,
+        )
+        self.assertFalse(
+            any(row.track_key.startswith("summary.kpi") for row in plan.counters)
+        )
+
+    def test_resources_are_full_capture_diagnostics_without_copies(self):
         plan = self.result.plan
         resource_counters = [
-            row
-            for row in plan.counters
-            if row.track_key.startswith("counter:")
+            row for row in plan.counters if row.track_key.startswith("counter:")
         ]
         self.assertEqual(
             len(resource_counters),
             self.result.metadata.available_resource_metric_count,
         )
+        self.assertEqual(len(plan.counters), len(resource_counters))
         self.assertEqual(
-            len(plan.counters),
-            len(resource_counters)
-            + self.result.metadata.timeline_summary_kpi_counter_count,
-        )
-        parents = {
-            plan.track_by_key[row.track_key].parent_key
-            for row in resource_counters
-        }
-        self.assertEqual(
-            parents,
+            {
+                plan.track_by_key[row.track_key].parent_key
+                for row in resource_counters
+            },
             {
                 "telemetry.resources.gpu.gpu-0",
                 "telemetry.resources.npu.npu-0",
             },
         )
-        self.assertEqual(
-            plan.track_by_key["telemetry.resources.gpu.gpu-0"].name,
-            "GPU",
-        )
-        self.assertEqual(
-            plan.track_by_key["telemetry.resources.npu.npu-0"].name,
-            "NPU 0",
-        )
-        self.assertIsNone(
-            plan.track_by_key["telemetry.resources"].parent_key,
-        )
+        self.assertIsNone(plan.track_by_key["telemetry.resources"].parent_key)
 
-    def test_official_descriptors_encode_parent_chain_and_counter_units(self):
+    def test_official_descriptors_encode_processing_parent_chain(self):
         plan = self.result.plan
         trace = build_trace(plan)
         descriptors = {
@@ -287,7 +216,7 @@ class PerfettoTimelineSummaryTests(unittest.TestCase):
         }
         root = plan.track_by_key["summary.root"]
         pipeline = plan.track_by_key["summary.pipeline"]
-        stage = plan.track_by_key["summary.pipeline.gpu_prefill"]
+        stage = plan.track_by_key["gpu_prefill"]
         self.assertEqual(descriptors[root.uuid].parent_uuid, plan.process_uuid)
         self.assertEqual(
             descriptors[root.uuid].child_ordering,
@@ -297,11 +226,6 @@ class PerfettoTimelineSummaryTests(unittest.TestCase):
         self.assertEqual(descriptors[pipeline.uuid].sibling_order_rank, 1)
         self.assertEqual(descriptors[stage.uuid].parent_uuid, pipeline.uuid)
         self.assertEqual(descriptors[stage.uuid].sibling_order_rank, 0)
-        kpi = plan.track_by_key[
-            "summary.kpi:request_facing_latency:latency.e2e"
-        ]
-        self.assertEqual(descriptors[kpi.uuid].counter.unit_name, "")
-        self.assertNotEqual(descriptors[kpi.uuid].counter.unit, 0)
 
     def test_unknown_ui_mapping_is_rejected(self):
         with self.assertRaisesRegex(
@@ -319,6 +243,63 @@ class PerfettoTimelineSummaryTests(unittest.TestCase):
                     mapping_version="unknown-mapping",
                 ),
             )
+
+
+class MeasuredTokenInstantTests(unittest.TestCase):
+    def test_valid_measured_token_timestamps_create_indexed_instants(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            family = _build_monitor_family(
+                Path(directory),
+                overview_metrics=True,
+                measured_token_timestamps=(2_250_000, 2_350_000),
+            )
+            measured = (
+                family["gpu"] / "raw/client/measured_requests.jsonl"
+            )
+            before = (
+                measured.stat().st_size,
+                measured.stat().st_mtime_ns,
+                measured.read_bytes(),
+            )
+            loaded = load_hybrid_run(family["hybrid"])
+            context = build_timeline_summary_context(loaded)
+            plan = build_trace_plan(
+                loaded.manifest,
+                loaded.events,
+                loaded.metrics,
+                canonical_clock_domain_id=loaded.canonical_clock_domain_id,
+                timeline_summary=context,
+            ).plan
+            after = (
+                measured.stat().st_size,
+                measured.stat().st_mtime_ns,
+                measured.read_bytes(),
+            )
+        tokens = [row for row in plan.instants if row.name.startswith("Output Token ")]
+        self.assertEqual([row.name for row in tokens], ["Output Token 0", "Output Token 1"])
+        self.assertEqual([row.timestamp_ns for row in tokens], [2_250_000, 2_350_000])
+        self.assertTrue(
+            all(
+                dict(row.annotations)["hetero.timestamp_source"]
+                == "valid_token_timestamps_ns"
+                for row in tokens
+            )
+        )
+        self.assertEqual(before, after)
+
+    def test_non_monotonic_measured_token_timestamps_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            family = _build_monitor_family(
+                Path(directory),
+                overview_metrics=True,
+                measured_token_timestamps=(2_350_000, 2_250_000),
+            )
+            loaded = load_hybrid_run(family["hybrid"])
+            with self.assertRaisesRegex(
+                TimelineSummaryInputError,
+                "strictly increasing",
+            ):
+                build_timeline_summary_context(loaded)
 
 
 if __name__ == "__main__":

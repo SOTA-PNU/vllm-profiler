@@ -26,13 +26,14 @@ from .model import (
     SliceSpec,
     TrackSpec,
     TracePlan,
+    UnclassifiedGapSpec,
 )
 from .timeline_summary import (
     LEGACY_MAPPING_VERSION,
     TIMELINE_SUMMARY_MAPPING_VERSION,
     TIMELINE_SUMMARY_ROOT_NAME,
     TimelineSummaryContext,
-    TimelineSummaryKpi,
+    TokenInstantEvidence,
 )
 
 
@@ -253,44 +254,26 @@ _COUNTER_NAMES = {
     "resource.npu.power": "NPU power",
 }
 
-_TIMELINE_SUMMARY_STAGE_TRACKS = (
-    ("gpu_prefill", "summary.pipeline.gpu_prefill", "GPU Prefill", 0),
-    ("kv_export", "summary.pipeline.kv_export", "KV Export", 1),
-    ("kv_transfer", "summary.pipeline.kv_transfer", "KV Transfer", 2),
-    ("kv_transform", "summary.pipeline.kv_transform", "KV Transform", 3),
-    ("npu_decode", "summary.pipeline.npu_decode", "NPU Decode", 4),
-    ("kv_handoff", "summary.pipeline.kv_handoff", "KV Handoff", 5),
-    ("kv_transfer_setup", "summary.pipeline.kv_transfer_setup", "KV Transfer Setup", 6),
-    ("kv_transfer_wait", "summary.pipeline.kv_transfer_wait", "KV Transfer Wait", 7),
-    ("decode_schedule_wait", "summary.pipeline.decode_schedule_wait", "Decode Scheduling Wait", 8),
-)
-
-_OPTIONAL_TIMELINE_SUMMARY_STAGE_TRACKS = frozenset(
+_PIPELINE_TRACK_ORDER = {
+    "gpu_prefill": 0,
+    "kv_export": 1,
+    "kv_handoff": 2,
+    "kv_transfer_setup": 3,
+    "kv_transfer": 4,
+    "kv_transfer_wait": 5,
+    "kv_transform": 6,
+    "decode_schedule_wait": 7,
+    "npu_decode": 8,
+}
+_DECODE_DETAIL_TRACK_ORDER = {"npu_decode_step": 0, "sampling": 1}
+_BOUNDARY_EVENT_NAMES = frozenset(
     {
-        "kv_handoff",
-        "kv_transfer_setup",
-        "kv_transfer_wait",
-        "decode_schedule_wait",
+        "request_received",
+        "first_token_emitted",
+        "token_emitted",
+        "response_done",
     }
 )
-
-_KPI_ANCHOR_TRACKS = {
-    ("pipeline_latency", "latency.e2e"): "request",
-    ("pipeline_latency", "latency.prefill"): "gpu_prefill",
-    ("pipeline_latency", "latency.kv_export"): "kv_export",
-    ("pipeline_latency", "latency.kv_transfer"): "kv_transfer",
-    ("pipeline_latency", "latency.kv_transform"): "kv_transform",
-    ("pipeline_latency", "latency.decode"): "npu_decode",
-    ("transfer", "transfer.bytes"): "kv_transfer",
-    ("transfer", "transfer.duration"): "kv_transfer",
-    ("transfer", "transfer.effective_bandwidth"): "kv_transfer",
-    ("transfer", "transfer.transform_duration"): "kv_transform",
-    ("transfer", "transfer.handoff_duration"): "kv_handoff",
-    ("transfer", "transfer.setup_duration"): "kv_transfer_setup",
-    ("transfer", "transfer.wait_duration"): "kv_transfer_wait",
-    ("transfer", "decode.schedule_wait_duration"): "decode_schedule_wait",
-    ("transfer", "transfer.e2e_share"): "kv_transfer",
-}
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -384,12 +367,75 @@ def _event_annotations(
     }
     if start.request_id is not None:
         annotations["hetero.request_id"] = start.request_id
+    if start.request_id != end.request_id:
+        annotations["hetero.start_request_id"] = _required_string(
+            start.request_id,
+            f"event {start.event_id!r} request_id",
+        )
+        annotations["hetero.end_request_id"] = _required_string(
+            end.request_id,
+            f"event {end.event_id!r} request_id",
+        )
+    alignment_method = _optional_string(
+        start.attributes.get("hybrid.alignment_method"),
+        f"event {start.event_id!r} hybrid.alignment_method",
+    )
+    end_alignment_method = _optional_string(
+        end.attributes.get("hybrid.alignment_method"),
+        f"event {end.event_id!r} hybrid.alignment_method",
+    )
+    if alignment_method == end_alignment_method and alignment_method is not None:
+        annotations["hetero.alignment_method"] = alignment_method
+    elif alignment_method is not None and end_alignment_method is not None:
+        annotations["hetero.start_alignment_method"] = alignment_method
+        annotations["hetero.end_alignment_method"] = end_alignment_method
+    uncertainty = start.attributes.get("hybrid.alignment_uncertainty_ns")
+    end_uncertainty = end.attributes.get("hybrid.alignment_uncertainty_ns")
+    if uncertainty is not None:
+        if isinstance(uncertainty, bool) or not isinstance(uncertainty, int) or uncertainty < 0:
+            raise PerfettoPlanningError("paired marker alignment uncertainty is invalid")
+    if end_uncertainty is not None:
+        if (
+            isinstance(end_uncertainty, bool)
+            or not isinstance(end_uncertainty, int)
+            or end_uncertainty < 0
+        ):
+            raise PerfettoPlanningError("paired marker alignment uncertainty is invalid")
+    if uncertainty == end_uncertainty and uncertainty is not None:
+        annotations["hetero.alignment_uncertainty_ns"] = uncertainty
+    elif uncertainty is not None and end_uncertainty is not None:
+        annotations["hetero.start_alignment_uncertainty_ns"] = uncertainty
+        annotations["hetero.end_alignment_uncertainty_ns"] = end_uncertainty
     source_role = _optional_string(
         start.attributes.get("hybrid.source_role"),
         f"event {start.event_id!r} hybrid.source_role",
     )
     if source_role is not None:
         annotations["hetero.source_role"] = source_role
+    original_start = start.attributes.get(
+        "hybrid.original_timestamp_ns", start.timestamp_ns
+    )
+    original_end = end.attributes.get(
+        "hybrid.original_timestamp_ns", end.timestamp_ns
+    )
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in (original_start, original_end)
+    ):
+        raise PerfettoPlanningError(
+            f"{start.event_name} original timestamps are invalid"
+        )
+    if original_end < original_start:
+        raise PerfettoPlanningError(
+            f"{start.event_name} original duration is negative"
+        )
+    annotations.update(
+        {
+            "hetero.original_start_timestamp_ns": original_start,
+            "hetero.original_end_timestamp_ns": original_end,
+            "hetero.original_duration_ns": original_end - original_start,
+        }
+    )
     if discriminator == "step":
         annotations["hetero.step_index"] = _step_index(start)
     if discriminator == "transfer":
@@ -397,6 +443,30 @@ def _event_annotations(
             start.attributes.get("hybrid.transfer_id"),
             f"event {start.event_id!r} hybrid.transfer_id",
         )
+        if start.event_name == "kv_transfer_wait_start":
+            annotations["hetero.wait_observation"] = (
+                "polling_incomplete_to_done"
+            )
+            for source, suffix in ((start, "start"), (end, "end")):
+                poll_count = source.attributes.get("kv.poll_count")
+                if poll_count is not None:
+                    if (
+                        isinstance(poll_count, bool)
+                        or not isinstance(poll_count, int)
+                        or poll_count < 0
+                    ):
+                        raise PerfettoPlanningError(
+                            f"event {source.event_id!r} kv.poll_count is invalid"
+                        )
+                    annotations[f"hetero.{suffix}_poll_count"] = poll_count
+                status = source.attributes.get("kv.transfer_status")
+                if status is not None:
+                    annotations[f"hetero.{suffix}_transfer_status"] = (
+                        _required_string(
+                            status,
+                            f"event {source.event_id!r} kv.transfer_status",
+                        )
+                    )
     return tuple(sorted(annotations.items()))
 
 
@@ -474,9 +544,44 @@ def _pair_slices(
                 raise PerfettoPlanningError(
                     f"{definition.slice_name} correlation identity changed"
                 )
+            request_identity_changed = start.request_id != end.request_id
+            if (
+                not isinstance(start.request_id, str)
+                or not start.request_id
+                or not isinstance(end.request_id, str)
+                or not end.request_id
+            ):
+                raise PerfettoPlanningError(
+                    f"{definition.slice_name} request identity changed or is missing"
+                )
+            if request_identity_changed:
+                if definition.track_key != "kv_handoff":
+                    raise PerfettoPlanningError(
+                        f"{definition.slice_name} request identity changed or is missing"
+                    )
+                start_suffix = _required_string(
+                    start.attributes.get("hybrid.remote_request_id_suffix"),
+                    f"event {start.event_id!r} hybrid.remote_request_id_suffix",
+                )
+                end_suffix = _required_string(
+                    end.attributes.get("hybrid.remote_request_id_suffix"),
+                    f"event {end.event_id!r} hybrid.remote_request_id_suffix",
+                )
+                if start_suffix != end_suffix:
+                    raise PerfettoPlanningError(
+                        "KV Handoff remote request suffix changed"
+                    )
+            slice_name = definition.slice_name
+            if definition.discriminator == "step":
+                step_index = _step_index(start)
+                slice_name = (
+                    f"Decode Step {step_index}"
+                    if definition.track_key == "npu_decode_step"
+                    else f"Sampling {step_index}"
+                )
             spec = SliceSpec(
                 track_key=definition.track_key,
-                name=definition.slice_name,
+                name=slice_name,
                 timestamp_ns=start.timestamp_ns,
                 duration_ns=end.timestamp_ns - start.timestamp_ns,
                 annotations=_event_annotations(
@@ -497,6 +602,111 @@ def _pair_slices(
                 )
             )
     return paired
+
+
+def _validate_decode_details(paired: Iterable[_PairedSlice]) -> None:
+    decode = [
+        item for item in paired if item.definition.track_key == "npu_decode_step"
+    ]
+    sampling = [
+        item for item in paired if item.definition.track_key == "sampling"
+    ]
+    by_correlation: dict[str, dict[int, _PairedSlice]] = {}
+    for item in decode:
+        by_correlation.setdefault(item.correlation_id, {})[_step_index(item.start)] = item
+    for correlation_id, rows in by_correlation.items():
+        indices = sorted(rows)
+        if indices != list(range(len(indices))):
+            raise PerfettoPlanningError(
+                f"decode step indices are not contiguous for {correlation_id!r}"
+            )
+    for item in sampling:
+        index = _step_index(item.start)
+        decode_row = by_correlation.get(item.correlation_id, {}).get(index)
+        if decode_row is None:
+            raise PerfettoPlanningError(
+                "sampling has no decode step with the same correlation and index"
+            )
+        if item.start.timestamp_ns < decode_row.end.timestamp_ns:
+            raise PerfettoPlanningError(
+                "sampling begins before its decode step completes"
+            )
+
+
+def _boundary_instant(event: EventRecord, *, grouped: bool) -> InstantSpec:
+    names = {
+        "request_received": "Request Received",
+        "first_token_emitted": "First Token Emitted",
+        "response_done": "Response Completion",
+    }
+    sequence = event.attributes.get("vllm.token_sequence")
+    if sequence is not None and (
+        isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0
+    ):
+        raise PerfettoPlanningError(
+            f"event {event.event_id!r} token sequence is invalid"
+        )
+    name = names.get(event.event_name)
+    if name is None:
+        name = (
+            f"Token Emitted {sequence}"
+            if sequence is not None
+            else "Token Emitted"
+        )
+    annotations: dict[str, AnnotationValue] = {
+        "hetero.boundary_kind": event.event_name,
+        "hetero.event_id": event.event_id,
+        "hetero.correlation_id": _correlation_id(event),
+        "hetero.clock_domain_id": event.clock_domain_id,
+    }
+    if event.request_id is not None:
+        annotations["hetero.request_id"] = event.request_id
+    if sequence is not None:
+        annotations["hetero.token_sequence_index"] = sequence
+    return InstantSpec(
+        track_key=(
+            "summary.boundaries.events"
+            if grouped
+            else (
+                "response"
+                if event.phase is Phase.RESPONSE
+                else f"phase:{event.phase.value}"
+            )
+        ),
+        name=name,
+        timestamp_ns=event.timestamp_ns,
+        annotations=tuple(sorted(annotations.items())),
+    )
+
+
+def _token_output_instant(evidence: TokenInstantEvidence) -> InstantSpec:
+    if not isinstance(evidence, TokenInstantEvidence):
+        raise TypeError("token evidence must be TokenInstantEvidence")
+    return InstantSpec(
+        track_key="summary.boundaries.events",
+        name=f"Output Token {evidence.token_index}",
+        timestamp_ns=evidence.timestamp_ns,
+        annotations=tuple(
+            sorted(
+                {
+                    "hetero.request_id": evidence.request_id,
+                    "hetero.token_index": evidence.token_index,
+                    "hetero.timestamp_source": "valid_token_timestamps_ns",
+                    "hetero.original_timestamp_ns": evidence.source_timestamp_ns,
+                    "hetero.original_clock_domain_id": (
+                        evidence.source_clock_domain_id
+                    ),
+                    "hetero.aligned_clock_domain_id": (
+                        evidence.target_clock_domain_id
+                    ),
+                    "hetero.alignment_method": evidence.alignment_method,
+                    "hetero.alignment_uncertainty_ns": (
+                        evidence.alignment_uncertainty_ns
+                    ),
+                }.items()
+            )
+        ),
+    )
 
 
 def _annotation_dict(spec: SliceSpec) -> dict[str, AnnotationValue]:
@@ -541,14 +751,52 @@ def _build_flows(
     flows: list[FlowSpec] = []
     updated = list(paired)
 
-    transitions = (
-        ("request", "begin", "gpu_prefill", "begin", "request_to_prefill"),
-        ("gpu_prefill", "end", "kv_export", "begin", "prefill_to_kv_export"),
-        ("kv_export", "end", "kv_transfer", "begin", "kv_export_to_transfer"),
-        ("kv_transfer", "end", "kv_transform", "begin", "transfer_to_transform"),
-        ("kv_transform", "end", "npu_decode", "begin", "transform_to_decode"),
-    )
     for correlation_id in by_correlation:
+        transitions = [
+            ("request", "begin", "gpu_prefill", "begin", "request_to_prefill"),
+            ("gpu_prefill", "end", "kv_export", "begin", "prefill_to_kv_export"),
+        ]
+        if (
+            _matching_pair(updated, "kv_handoff", correlation_id) is not None
+            and _matching_pair(updated, "kv_transfer_setup", correlation_id) is not None
+        ):
+            transitions.extend(
+                (
+                    ("kv_export", "end", "kv_handoff", "begin", "kv_export_to_handoff"),
+                    ("kv_handoff", "end", "kv_transfer_setup", "begin", "handoff_to_setup"),
+                    ("kv_transfer_setup", "end", "kv_transfer", "begin", "setup_to_transfer"),
+                )
+            )
+        else:
+            transitions.append(
+                ("kv_export", "end", "kv_transfer", "begin", "kv_export_to_transfer")
+            )
+        transitions.append(
+            ("kv_transfer", "end", "kv_transform", "begin", "transfer_to_transform")
+        )
+        if _matching_pair(updated, "decode_schedule_wait", correlation_id) is not None:
+            transitions.extend(
+                (
+                    (
+                        "kv_transform",
+                        "end",
+                        "decode_schedule_wait",
+                        "begin",
+                        "transform_to_decode_schedule_wait",
+                    ),
+                    (
+                        "decode_schedule_wait",
+                        "begin",
+                        "npu_decode",
+                        "begin",
+                        "decode_schedule_wait_to_decode",
+                    ),
+                )
+            )
+        else:
+            transitions.append(
+                ("kv_transform", "end", "npu_decode", "begin", "transform_to_decode")
+            )
         for source_key, source_endpoint, destination_key, destination_endpoint, kind in transitions:
             source = _matching_pair(updated, source_key, correlation_id)
             destination = _matching_pair(updated, destination_key, correlation_id)
@@ -587,22 +835,65 @@ def _build_flows(
                 raise PerfettoPlanningError(
                     f"explicit correlation identity changed across {kind}"
                 )
+            evidence_kind = "hybrid.correlation_id"
+            evidence_id = correlation_id
             if kind == "kv_export_to_transfer":
                 source_suffix = _required_string(
-                    source.end.attributes.get("hybrid.remote_request_id_suffix"),
-                    f"event {source.end.event_id!r} hybrid.remote_request_id_suffix",
+                    source_event.attributes.get("hybrid.remote_request_id_suffix"),
+                    f"event {source_event.event_id!r} hybrid.remote_request_id_suffix",
                 )
                 destination_suffix = _required_string(
-                    destination.start.attributes.get(
+                    destination_event.attributes.get(
                         "hybrid.remote_request_id_suffix"
                     ),
-                    f"event {destination.start.event_id!r} "
+                    f"event {destination_event.event_id!r} "
                     "hybrid.remote_request_id_suffix",
                 )
                 if source_suffix != destination_suffix:
                     raise PerfettoPlanningError(
                         "cross-device flow remote request suffix mismatch"
                     )
+                evidence_kind = "hybrid.remote_request_id_suffix"
+                evidence_id = source_suffix
+            elif kind in {"kv_export_to_handoff", "handoff_to_setup"}:
+                raw_source_suffix = source_event.attributes.get(
+                    "hybrid.remote_request_id_suffix"
+                )
+                raw_destination_suffix = destination_event.attributes.get(
+                    "hybrid.remote_request_id_suffix"
+                )
+                if (raw_source_suffix is None) != (raw_destination_suffix is None):
+                    continue
+                if raw_source_suffix is not None:
+                    source_suffix = _required_string(
+                        raw_source_suffix,
+                        f"event {source_event.event_id!r} hybrid.remote_request_id_suffix",
+                    )
+                    destination_suffix = _required_string(
+                        raw_destination_suffix,
+                        f"event {destination_event.event_id!r} hybrid.remote_request_id_suffix",
+                    )
+                    if source_suffix != destination_suffix:
+                        raise PerfettoPlanningError(
+                            "cross-device flow remote request suffix mismatch"
+                        )
+                    evidence_kind = "hybrid.remote_request_id_suffix"
+                    evidence_id = source_suffix
+            elif kind == "setup_to_transfer":
+                source_transfer = _required_string(
+                    source_event.attributes.get("hybrid.transfer_id"),
+                    f"event {source_event.event_id!r} hybrid.transfer_id",
+                )
+                destination_transfer = _required_string(
+                    destination_event.attributes.get("hybrid.transfer_id"),
+                    f"event {destination_event.event_id!r} hybrid.transfer_id",
+                )
+                if source_transfer != destination_transfer:
+                    raise PerfettoPlanningError(
+                        "setup-to-transfer flow transfer identity mismatch"
+                    )
+                evidence_kind = "hybrid.transfer_id"
+                evidence_id = source_transfer
             flow_id = _stable_uint64(
                 run_id,
                 "flow",
@@ -633,6 +924,10 @@ def _build_flows(
                     source_slice_name=source.spec.name,
                     destination_slice_name=destination.spec.name,
                     correlation_id=correlation_id,
+                    source_event_id=source_event.event_id,
+                    destination_event_id=destination_event.event_id,
+                    evidence_kind=evidence_kind,
+                    evidence_id=evidence_id,
                 )
             )
     if len({flow.flow_id for flow in flows}) != len(flows):
@@ -811,31 +1106,39 @@ def _timeline_summary_track_uuid(
     )
 
 
-def _timeline_summary_group_tracks(
-    available_pipeline_keys: frozenset[str],
-) -> list[TrackSpec]:
-    return [
+def _processing_group_tracks(*, include_native: bool) -> list[TrackSpec]:
+    tracks = [
         TrackSpec(
             key="summary.root",
             uuid=0,
             name=TIMELINE_SUMMARY_ROOT_NAME,
             kind="group",
             description=(
-                "Trace-native request, pipeline, KPI, quality, and resource "
-                "summary. Ordering is an explicit UI hint."
+                "Observed request boundaries, processing stages, token-level "
+                "decode work, and selected native profiler events."
             ),
             child_ordering="explicit",
         ),
         TrackSpec(
-            key="summary.request_summary",
+            key="summary.boundaries",
             uuid=0,
-            name="Request Summary",
-            kind="slice",
+            name="Request Boundaries and Token Output",
+            kind="group",
             description=(
-                "Canonical hybrid request boundary with request-facing and "
-                "pipeline KPI annotations kept distinct."
+                "Canonical request, token-arrival, and response-completion "
+                "instants without prompt or token content."
             ),
             parent_key="summary.root",
+            child_ordering="explicit",
+            sibling_order_rank=0,
+        ),
+        TrackSpec(
+            key="summary.boundaries.events",
+            uuid=0,
+            name="Request and token boundaries",
+            kind="slice",
+            description="Observed canonical boundary instants.",
+            parent_key="summary.boundaries",
             sibling_order_rank=0,
         ),
         TrackSpec(
@@ -844,67 +1147,41 @@ def _timeline_summary_group_tracks(
             name="Pipeline Stages",
             kind="group",
             description=(
-                "Summary copies of evidence-backed canonical stage intervals."
+                "Evidence-backed canonical processing and observed wait intervals."
             ),
             parent_key="summary.root",
             child_ordering="explicit",
             sibling_order_rank=1,
         ),
-        *[
-            TrackSpec(
-                key=timeline_summary_key,
-                uuid=0,
-                name=name,
-                kind="slice",
-                description=(
-                    f"Timeline summary of the detailed {name} marker pair; "
-                    "timestamp and duration are unchanged."
-                ),
-                parent_key="summary.pipeline",
-                sibling_order_rank=rank,
-            )
-            for _, timeline_summary_key, name, rank in _TIMELINE_SUMMARY_STAGE_TRACKS
-            if timeline_summary_key in available_pipeline_keys
-        ],
         TrackSpec(
-            key="summary.kpi.token_throughput",
+            key="summary.decode_details",
             uuid=0,
-            name="Token & Throughput KPI",
+            name="Decode Details",
             kind="group",
             description=(
-                "Available request-facing, pipeline, token, and throughput "
-                "scalars; unavailable values are omitted from counters."
+                "Ordered token-level NPU decode and host-side sampling intervals."
             ),
             parent_key="summary.root",
-            child_ordering="lexicographic",
+            child_ordering="explicit",
             sibling_order_rank=2,
         ),
-        TrackSpec(
-            key="summary.kpi.transfer",
-            uuid=0,
-            name="Transfer KPI",
-            kind="group",
-            description=(
-                "Available transfer scalars with canonical units and explicit "
-                "calculation provenance."
-            ),
-            parent_key="summary.root",
-            child_ordering="lexicographic",
-            sibling_order_rank=3,
-        ),
-        TrackSpec(
-            key="summary.data_quality",
-            uuid=0,
-            name="Data Quality",
-            kind="slice",
-            description=(
-                "Input, marker, alignment, availability, native-profiler, and "
-                "publication-validation policy."
-            ),
-            parent_key="summary.root",
-            sibling_order_rank=4,
-        ),
     ]
+    if include_native:
+        tracks.append(
+            TrackSpec(
+                key="summary.native_details",
+                uuid=0,
+                name="Native Profiler Details",
+                kind="group",
+                description=(
+                    "Selected native profiler tracks with evidence-backed clock policy."
+                ),
+                parent_key="summary.root",
+                child_ordering="explicit",
+                sibling_order_rank=3,
+            )
+        )
+    return tracks
 
 
 def _request_pair(paired: Iterable[_PairedSlice]) -> _PairedSlice:
@@ -918,213 +1195,50 @@ def _request_pair(paired: Iterable[_PairedSlice]) -> _PairedSlice:
     return matches[0]
 
 
-def _pair_for_track(
+def _unclassified_gaps(
     paired: Iterable[_PairedSlice],
-    track_key: str,
-) -> _PairedSlice:
-    matches = [
-        item for item in paired if item.definition.track_key == track_key
+) -> tuple[UnclassifiedGapSpec, ...]:
+    rows = tuple(paired)
+    request = _request_pair(rows)
+    gaps: list[UnclassifiedGapSpec] = []
+
+    prefill = [item for item in rows if item.definition.track_key == "gpu_prefill"]
+    if len(prefill) == 1 and prefill[0].start.timestamp_ns > request.start.timestamp_ns:
+        gaps.append(
+            UnclassifiedGapSpec(
+                start_timestamp_ns=request.start.timestamp_ns,
+                end_timestamp_ns=prefill[0].start.timestamp_ns,
+                duration_ns=(
+                    prefill[0].start.timestamp_ns - request.start.timestamp_ns
+                ),
+                preceding_marker=request.start.event_name,
+                following_marker=prefill[0].start.event_name,
+                reason="no marker identifies work or wait within this interval",
+            )
+        )
+
+    decode_details = [
+        item
+        for item in rows
+        if item.definition.track_key in {"npu_decode_step", "sampling"}
     ]
-    if len(matches) != 1:
-        raise PerfettoPlanningError(
-            f"timeline summary requires exactly one {track_key!r} marker pair"
+    if decode_details:
+        latest = max(
+            decode_details,
+            key=lambda item: (item.end.timestamp_ns, item.end.event_id),
         )
-    return matches[0]
-
-
-def _kpi_by_identity(
-    context: TimelineSummaryContext,
-) -> dict[tuple[str, str], TimelineSummaryKpi]:
-    result = {(item.section, item.name): item for item in context.kpis}
-    if len(result) != len(context.kpis):
-        raise PerfettoPlanningError("timeline summary KPI identities are not unique")
-    return result
-
-
-def _available_kpi_annotation(
-    annotations: dict[str, AnnotationValue],
-    key: str,
-    kpi: TimelineSummaryKpi | None,
-) -> None:
-    if kpi is not None and kpi.available:
-        if kpi.value is None:  # pragma: no cover - property invariant
-            raise PerfettoPlanningError("available KPI unexpectedly has no value")
-        annotations[key] = kpi.value
-
-
-def _request_summary_slice(
-    request: _PairedSlice,
-    context: TimelineSummaryContext,
-) -> SliceSpec:
-    kpis = _kpi_by_identity(context)
-    annotations = dict(request.spec.annotations)
-    annotations.update(
-        {
-            "hetero.timeline_summary": True,
-            "hetero.trace_mapping_version": context.mapping_version,
-            "hetero.canonical_duration_role": "pipeline_e2e",
-            "hetero.latency_display_rule": (
-                "canonical_ns;display_ms=ns/1000000"
-            ),
-            "hetero.source_event_ids_json": _canonical_json(
-                [request.start.event_id, request.end.event_id]
-            ),
-        }
-    )
-    data_quality = dict(context.data_quality_annotations)
-    for source_key, target_key in (
-        ("hetero.profiler_kind", "hetero.profiler_kind"),
-        (
-            "hetero.native_profiler_alignment",
-            "hetero.native_profiler_alignment",
-        ),
-        ("hetero.clock_status", "hetero.alignment_status"),
-    ):
-        value = data_quality.get(source_key)
-        if value is not None:
-            annotations[target_key] = value
-    for key, identity in (
-        (
-            "hetero.request_facing_e2e_ns",
-            ("request_facing_latency", "latency.e2e"),
-        ),
-        (
-            "hetero.pipeline_e2e_ns",
-            ("pipeline_latency", "latency.e2e"),
-        ),
-        ("hetero.ttft_ns", ("request_facing_latency", "latency.ttft")),
-        ("hetero.tpot_ns", ("request_facing_latency", "latency.tpot")),
-        ("hetero.input_tokens", ("throughput_and_tokens", "request.input_tokens")),
-        (
-            "hetero.output_tokens",
-            ("throughput_and_tokens", "request.output_tokens"),
-        ),
-        ("hetero.total_tokens", ("throughput_and_tokens", "request.total_tokens")),
-    ):
-        _available_kpi_annotation(annotations, key, kpis.get(identity))
-    return SliceSpec(
-        track_key="summary.request_summary",
-        name="Hybrid Request",
-        timestamp_ns=request.spec.timestamp_ns,
-        duration_ns=request.spec.duration_ns,
-        annotations=tuple(sorted(annotations.items())),
-    )
-
-
-def _pipeline_summary_slices(
-    paired: Iterable[_PairedSlice],
-    context: TimelineSummaryContext,
-) -> list[SliceSpec]:
-    summaries: list[SliceSpec] = []
-    for detail_key, timeline_summary_key, _, _ in _TIMELINE_SUMMARY_STAGE_TRACKS:
-        matches = [
-            item for item in paired if item.definition.track_key == detail_key
-        ]
-        if not matches and detail_key in _OPTIONAL_TIMELINE_SUMMARY_STAGE_TRACKS:
-            continue
-        if len(matches) != 1:
-            raise PerfettoPlanningError(
-                f"timeline summary requires exactly one {detail_key!r} marker pair"
-            )
-        detail = matches[0]
-        annotations = dict(detail.spec.annotations)
-        annotations.update(
-            {
-                "hetero.timeline_summary": True,
-                "hetero.summary_of_track_key": detail_key,
-                "hetero.trace_mapping_version": context.mapping_version,
-            }
-        )
-        summaries.append(
-            SliceSpec(
-                track_key=timeline_summary_key,
-                name=detail.spec.name,
-                timestamp_ns=detail.spec.timestamp_ns,
-                duration_ns=detail.spec.duration_ns,
-                annotations=tuple(sorted(annotations.items())),
-            )
-        )
-    return summaries
-
-
-def _kpi_anchor(
-    kpi: TimelineSummaryKpi,
-    *,
-    request: _PairedSlice,
-    paired: tuple[_PairedSlice, ...],
-) -> tuple[int, str]:
-    detail_key = _KPI_ANCHOR_TRACKS.get((kpi.section, kpi.name))
-    if detail_key is None:
-        if kpi.name == "latency.sampling":
-            sampling = [
-                item
-                for item in paired
-                if item.definition.track_key == "sampling"
-            ]
-            if not sampling:
-                raise PerfettoPlanningError(
-                    "sampling KPI has no explicit sampling marker endpoint"
+        if request.end.timestamp_ns > latest.end.timestamp_ns:
+            gaps.append(
+                UnclassifiedGapSpec(
+                    start_timestamp_ns=latest.end.timestamp_ns,
+                    end_timestamp_ns=request.end.timestamp_ns,
+                    duration_ns=request.end.timestamp_ns - latest.end.timestamp_ns,
+                    preceding_marker=latest.end.event_name,
+                    following_marker=request.end.event_name,
+                    reason="no marker identifies finalization work or wait",
                 )
-            endpoint = max(sampling, key=lambda item: item.end.timestamp_ns)
-            return endpoint.end.timestamp_ns, endpoint.end.event_id
-        return request.end.timestamp_ns, request.end.event_id
-    detail = _pair_for_track(paired, detail_key)
-    return detail.end.timestamp_ns, detail.end.event_id
-
-
-def _kpi_track_and_counter(
-    kpi: TimelineSummaryKpi,
-    *,
-    context: TimelineSummaryContext,
-    request: _PairedSlice,
-    paired: tuple[_PairedSlice, ...],
-) -> tuple[TrackSpec, CounterSpec] | None:
-    if not kpi.available:
-        return None
-    if kpi.value is None:  # pragma: no cover - property invariant
-        raise PerfettoPlanningError("available KPI unexpectedly has no value")
-    track_key = f"summary.kpi:{kpi.identity}"
-    timestamp_ns, anchor_event_id = _kpi_anchor(
-        kpi,
-        request=request,
-        paired=paired,
-    )
-    annotations: dict[str, AnnotationValue] = {
-        "hetero.kpi_identity": kpi.identity,
-        "hetero.kpi_name": kpi.name,
-        "hetero.availability": "available",
-        "hetero.canonical_unit": kpi.canonical_unit,
-        "hetero.observation_layer": kpi.observation_layer,
-        "hetero.calculation_method": kpi.calculation_method,
-        "hetero.display_unit": kpi.display_unit,
-        "hetero.display_scale_numerator": kpi.display_scale_numerator,
-        "hetero.display_scale_denominator": kpi.display_scale_denominator,
-        "hetero.anchor_event_id": anchor_event_id,
-        "hetero.source_event_ids_json": _canonical_json(
-            list(kpi.source_event_ids)
-        ),
-        "hetero.trace_mapping_version": context.mapping_version,
-    }
-    track = TrackSpec(
-        key=track_key,
-        uuid=0,
-        name=kpi.display_name,
-        kind="counter",
-        description=(
-            f"{kpi.identity}; canonical unit={kpi.canonical_unit}; "
-            f"display={kpi.display_unit} * "
-            f"{kpi.display_scale_numerator}/{kpi.display_scale_denominator}."
-        ),
-        unit=kpi.canonical_unit,
-        parent_key=kpi.counter_group_key,
-    )
-    counter = CounterSpec(
-        track_key=track_key,
-        timestamp_ns=timestamp_ns,
-        value=kpi.value,
-        annotations=tuple(sorted(annotations.items())),
-    )
-    return track, counter
+            )
+    return tuple(gaps)
 
 
 def _resource_group(
@@ -1227,59 +1341,6 @@ def _resource_telemetry_root_track() -> TrackSpec:
     )
 
 
-def _timeline_summary_data_quality_instant(
-    context: TimelineSummaryContext,
-    *,
-    request: _PairedSlice,
-    resource_count: int,
-    available_resource_count: int,
-    unavailable_resource_count: int,
-    resource_counters: tuple[CounterSpec, ...],
-) -> InstantSpec:
-    annotations = dict(context.data_quality_annotations)
-    resource_timestamps = sorted(counter.timestamp_ns for counter in resource_counters)
-    request_start_ns = request.start.timestamp_ns
-    pre_request_timestamps = [
-        timestamp for timestamp in resource_timestamps if timestamp < request_start_ns
-    ]
-    resource_first_timestamp_ns = (
-        resource_timestamps[0] if resource_timestamps else request_start_ns
-    )
-    annotations.update(
-        {
-            "hetero.resource_metric_count": resource_count,
-            "hetero.available_resource_sample_count": available_resource_count,
-            "hetero.unavailable_resource_sample_count": unavailable_resource_count,
-            "hetero.resource_grouping": (
-                "top_level_full_capture_tracks_without_sample_duplication"
-            ),
-            "hetero.resource_time_scope": "full_capture_not_request_scoped",
-            "hetero.resource_first_timestamp_ns": resource_first_timestamp_ns,
-            "hetero.measured_request_boundary": "request_received",
-            "hetero.measured_request_start_ns": request_start_ns,
-            "hetero.pre_request_resource_sample_count": len(
-                pre_request_timestamps
-            ),
-            "hetero.pre_request_resource_duration_ns": max(
-                0,
-                request_start_ns - resource_first_timestamp_ns,
-            ),
-            "hetero.warmup_interval_status": (
-                "not_available_no_normalized_warmup_boundaries"
-            ),
-            "hetero.warmup_interval_fabricated": False,
-            "hetero.flow_policy": "detail_only_explicit_correlation",
-            "hetero.ordering_policy": "track_descriptor_explicit_hint",
-        }
-    )
-    return InstantSpec(
-        track_key="summary.data_quality",
-        name="Data Quality status",
-        timestamp_ns=request_start_ns,
-        annotations=tuple(sorted(annotations.items())),
-    )
-
-
 def build_trace_plan(
     manifest: RunManifest,
     events: Iterable[EventRecord],
@@ -1306,7 +1367,18 @@ def build_trace_plan(
         if metric.run_id != manifest.run_id:
             raise PerfettoPlanningError("metric run_id does not match manifest")
 
+    grouped_timeline = timeline_summary is not None
+    if grouped_timeline:
+        if not isinstance(timeline_summary, TimelineSummaryContext):
+            raise TypeError("timeline_summary must be a TimelineSummaryContext")
+        if timeline_summary.mapping_version != TIMELINE_SUMMARY_MAPPING_VERSION:
+            raise PerfettoPlanningError("unsupported timeline summary mapping version")
+
     paired = _pair_slices(event_rows, canonical_clock_domain_id)
+    _validate_decode_details(paired)
+    unclassified_gaps = (
+        _unclassified_gaps(paired) if grouped_timeline else ()
+    )
     paired, flows = _build_flows(manifest.run_id, paired)
     slices = [item.spec for item in paired]
     native_slices = _native_slices(envelope_rows)
@@ -1317,23 +1389,24 @@ def build_trace_plan(
         for item in paired
         for event_id in (item.start.event_id, item.end.event_id)
     }
-    instants: list[InstantSpec] = []
-    response_events = [
-        event for event in event_rows if event.event_name == "response_done"
-    ]
-    for event in response_events:
-        instants.append(
-            InstantSpec(
-                track_key="response",
-                name="Response completion",
-                timestamp_ns=event.timestamp_ns,
-                annotations=(
-                    ("hetero.event_id", event.event_id),
-                    ("hetero.correlation_id", _correlation_id(event)),
-                ),
-            )
+    token_evidence = (
+        timeline_summary.token_instants
+        if timeline_summary is not None
+        else ()
+    )
+    instants: list[InstantSpec] = [
+        _boundary_instant(event, grouped=grouped_timeline)
+        for event in event_rows
+        if event.event_name in _BOUNDARY_EVENT_NAMES
+        and (
+            not token_evidence
+            or event.event_name in {"request_received", "response_done"}
         )
+    ]
+    instants.extend(_token_output_instant(item) for item in token_evidence)
     for event in event_rows:
+        if event.event_name in _BOUNDARY_EVENT_NAMES:
+            continue
         if event.event_id in paired_event_ids:
             continue
         if event.event_type is EventType.SPAN:
@@ -1359,7 +1432,7 @@ def build_trace_plan(
                     ),
                 )
             )
-        elif event.event_name != "response_done":
+        else:
             key = f"phase:{event.phase.value}"
             instants.append(
                 InstantSpec(
@@ -1386,21 +1459,10 @@ def build_trace_plan(
     timeline_summary_kpi_counter_count = 0
     timeline_summary_unavailable_kpi_count = 0
     timeline_summary_data_quality_count = 0
-    if timeline_summary is not None:
-        if not isinstance(timeline_summary, TimelineSummaryContext):
-            raise TypeError("timeline_summary must be a TimelineSummaryContext")
-        if timeline_summary.mapping_version != TIMELINE_SUMMARY_MAPPING_VERSION:
-            raise PerfettoPlanningError("unsupported timeline summary mapping version")
-        request = _request_pair(paired)
-        request_summary = _request_summary_slice(request, timeline_summary)
-        pipeline_summaries = _pipeline_summary_slices(paired, timeline_summary)
-        slices.extend((request_summary, *pipeline_summaries))
-        timeline_summary_slice_count = 1 + len(pipeline_summaries)
-
+    if grouped_timeline:
+        assert timeline_summary is not None
         timeline_summary_tracks.extend(
-            _timeline_summary_group_tracks(
-                frozenset(item.track_key for item in pipeline_summaries)
-            )
+            _processing_group_tracks(include_native=bool(envelope_rows))
         )
         resource_groups, counter_tracks = _group_resource_tracks(
             counter_tracks,
@@ -1408,39 +1470,8 @@ def build_trace_plan(
         )
         timeline_summary_tracks.append(_resource_telemetry_root_track())
         timeline_summary_tracks.extend(resource_groups)
-        resource_counters = tuple(counters)
-        paired_tuple = tuple(paired)
-        for kpi in timeline_summary.kpis:
-            planned = _kpi_track_and_counter(
-                kpi,
-                context=timeline_summary,
-                request=request,
-                paired=paired_tuple,
-            )
-            if planned is None:
-                timeline_summary_unavailable_kpi_count += 1
-                continue
-            kpi_track, kpi_counter = planned
-            timeline_summary_tracks.append(kpi_track)
-            counters.append(kpi_counter)
-            timeline_summary_kpi_counter_count += 1
-        instants.append(
-            _timeline_summary_data_quality_instant(
-                timeline_summary,
-                request=request,
-                resource_count=resource_count,
-                available_resource_count=available_count,
-                unavailable_resource_count=unavailable_count,
-                resource_counters=resource_counters,
-            )
-        )
-        timeline_summary_data_quality_count = 1
-        counters.sort(
-            key=lambda item: (
-                item.timestamp_ns,
-                item.track_key,
-                float(item.value),
-            )
+        timeline_summary_unavailable_kpi_count = sum(
+            not item.available for item in timeline_summary.kpis
         )
 
     timestamp_candidates = [
@@ -1450,7 +1481,7 @@ def build_trace_plan(
     ]
     if not timestamp_candidates:
         raise PerfettoPlanningError("normalized run has no timestamped records")
-    if timeline_summary is None:
+    if not grouped_timeline:
         first_timestamp = min(timestamp_candidates)
         instants.append(
             InstantSpec(
@@ -1501,6 +1532,38 @@ def build_trace_plan(
                 name=name,
                 kind="slice",
                 description=description,
+                parent_key=(
+                    None
+                    if not grouped_timeline
+                    else (
+                        "summary.pipeline"
+                        if key in _PIPELINE_TRACK_ORDER
+                        else (
+                            "summary.decode_details"
+                            if key in _DECODE_DETAIL_TRACK_ORDER
+                            else (
+                                "summary.native_details"
+                                if key == "profiler"
+                                else "summary.boundaries"
+                            )
+                        )
+                    )
+                ),
+                sibling_order_rank=(
+                    _PIPELINE_TRACK_ORDER.get(
+                        key,
+                        _DECODE_DETAIL_TRACK_ORDER.get(
+                            key,
+                            (
+                                0
+                                if key == "profiler"
+                                else (1 if key == "request" else 2)
+                            ),
+                        ),
+                    )
+                    if grouped_timeline
+                    else None
+                ),
             )
         )
     tracks.extend(counter_tracks)
@@ -1510,7 +1573,7 @@ def build_trace_plan(
             track,
             uuid=(
                 _timeline_summary_track_uuid(manifest.run_id, timeline_summary, track.key)
-                if timeline_summary is not None
+                if grouped_timeline
                 and track.key.startswith(("summary.", "telemetry."))
                 else _stable_uint64(manifest.run_id, "track", track.key)
             ),
@@ -1561,9 +1624,10 @@ def build_trace_plan(
         ),
         source_identity_sha256=(
             timeline_summary.source_identity_sha256
-            if timeline_summary is not None
+            if grouped_timeline
             else None
         ),
+        unclassified_gaps=unclassified_gaps,
     )
     metadata = PlanBuildMetadata(
         input_event_count=len(event_rows),

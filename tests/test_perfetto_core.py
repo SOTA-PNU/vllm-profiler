@@ -161,6 +161,7 @@ _EVENT_PHASES = {
     "decode_step_end": Phase.DECODE,
     "sampling_start": Phase.SAMPLING,
     "sampling_end": Phase.SAMPLING,
+    "first_token_emitted": Phase.RESPONSE,
     "token_emitted": Phase.RESPONSE,
 }
 
@@ -175,6 +176,7 @@ def instant_event(
     transfer_id: str | None = None,
     remote_suffix: str | None = None,
     source_role: str | None = None,
+    token_sequence: int | bool | None = None,
 ) -> EventRecord:
     attributes: dict[str, object] = {
         "hybrid.correlation_id": correlation_id,
@@ -187,6 +189,8 @@ def instant_event(
         attributes["hybrid.remote_request_id_suffix"] = remote_suffix
     if source_role is not None:
         attributes["hybrid.source_role"] = source_role
+    if token_sequence is not None:
+        attributes["vllm.token_sequence"] = token_sequence
     discriminator = (
         f"-step-{step_index}" if step_index is not None else ""
     )
@@ -373,6 +377,67 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(slices["Decode Scheduling Wait"].duration_ns, 38)
         self.assertEqual(first.plan, second.plan)
 
+    def test_token_boundaries_are_instants_and_never_summary_durations(self):
+        details = (
+            instant_event("first_token_emitted", 640, token_sequence=0),
+            instant_event("token_emitted", 650, token_sequence=0),
+            instant_event("token_emitted", 700, token_sequence=1),
+        )
+        result = build_trace_plan(
+            synthetic_manifest(),
+            (*canonical_events(), *details),
+            (),
+            canonical_clock_domain_id=CLOCK_ID,
+        )
+        boundaries = [
+            row
+            for row in result.plan.instants
+            if dict(row.annotations).get("hetero.boundary_kind")
+            in {
+                "request_received",
+                "first_token_emitted",
+                "token_emitted",
+                "response_done",
+            }
+        ]
+        self.assertEqual(
+            [row.name for row in boundaries],
+            [
+                "Request Received",
+                "First Token Emitted",
+                "Token Emitted 0",
+                "Token Emitted 1",
+                "Response Completion",
+            ],
+        )
+        self.assertFalse(
+            any("Token Emitted" in row.name for row in result.plan.slices)
+        )
+        self.assertEqual(
+            [
+                dict(row.annotations).get("hetero.token_sequence_index")
+                for row in boundaries[1:4]
+            ],
+            [0, 0, 1],
+        )
+
+    def test_missing_optional_wait_markers_do_not_fabricate_wait_slices(self):
+        result = build_trace_plan(
+            synthetic_manifest(),
+            canonical_events(),
+            (),
+            canonical_clock_domain_id=CLOCK_ID,
+        )
+        self.assertFalse(
+            {
+                "KV Handoff",
+                "KV Transfer Setup",
+                "KV Transfer Wait",
+                "Decode Scheduling Wait",
+            }
+            & {row.name for row in result.plan.slices}
+        )
+
     def test_canonical_markers_form_nested_slices_and_preserve_step_index(self):
         result = build_trace_plan(
             synthetic_manifest(),
@@ -387,7 +452,11 @@ class PlannerTests(unittest.TestCase):
         request = slices_by_name["Request"][0]
         prefill = slices_by_name["GPU Prefill"][0]
         decode = slices_by_name["NPU Decode"][0]
-        steps = slices_by_name["NPU Decode Step"]
+        steps = [
+            item for item in result.plan.slices
+            if item.track_key == "npu_decode_step"
+        ]
+        self.assertEqual([item.name for item in steps], ["Decode Step 0", "Decode Step 1"])
         self.assertEqual((request.timestamp_ns, request.duration_ns), (100, 800))
         self.assertGreaterEqual(prefill.timestamp_ns, request.timestamp_ns)
         self.assertLessEqual(

@@ -61,7 +61,7 @@ _ABSOLUTE_PATH_RE = re.compile(
 )
 _EXTERNAL_UI_BOUNDARY_LIMITATION = (
     "this external KPI report is not the Perfetto UI; the matching "
-    "trace.pftrace contains a separate timeline Heterogeneous LLM Summary, "
+    "trace.pftrace contains a separate timeline Heterogeneous LLM Processing, "
     "not the built-in Overview"
 )
 _WINDOWS_PATH_RE = re.compile(
@@ -695,7 +695,7 @@ def render_overview_html(report: Mapping[str, Any]) -> str:
         "<p>This HTML is an external KPI Overview report, not the Perfetto UI. "
         "The matching <code>trace.pftrace</code> is identified below by a "
         "path-free SHA-256 and contains the separate timeline "
-        "<code>Heterogeneous LLM Summary</code>. This TrackEvent hierarchy is "
+        "<code>Heterogeneous LLM Processing</code>. This TrackEvent hierarchy is "
         "not Perfetto's built-in Overview and does not add custom cards there. "
         "Open the trace file in Perfetto UI to inspect timeline tracks, "
         "annotations, and explicit GPU-to-NPU flows.</p>"
@@ -719,7 +719,9 @@ def render_overview_html(report: Mapping[str, Any]) -> str:
         '<section aria-labelledby="native-heading">'
         '<h2 id="native-heading">Native profiler policy</h2>'
         "<p>Native timestamps remain partial or unaligned unless an explicit "
-        "clock transform is present. Opaque vendor captures are not parsed.</p>"
+        "clock transform is present. RBLN Perfetto payloads are validated as "
+        "separate native traces and are not merged without a canonical "
+        "anchor.</p>"
         + _table(
             "Native profiler evidence",
             ("Entry", "Details"),

@@ -1,9 +1,9 @@
-"""Source-backed inputs for the trace-native Perfetto timeline summary.
+"""Source-backed inputs for the processing timeline and Trace Attributes.
 
-This module deliberately stops before protobuf planning.  KPI values come from
-the same pure calculation used by the external KPI report, while the planner
-decides how those values are represented as tracks, slices, counters, and
-instants.
+This module deliberately stops before protobuf planning. KPI values come from
+the same pure calculation used by the external report. They are exported as
+official Trace Attributes; the timeline itself is reserved for observed
+processing events.
 """
 
 from __future__ import annotations
@@ -18,12 +18,12 @@ from ..hybrid.join import validate_marker_groups
 from ..overview.calculation import calculate_overview_kpis
 from ..schema import Availability
 from .model import TraceAttributeSpec
-from .trace_attributes import build_performance_trace_attributes
+from .trace_attributes import _read_source_artifact, build_performance_trace_attributes
 
 
 LEGACY_MAPPING_VERSION = "legacy-unversioned-phase5-v1"
-TIMELINE_SUMMARY_MAPPING_VERSION = "phase6b-timeline-summary-v2"
-TIMELINE_SUMMARY_ROOT_NAME = "Heterogeneous LLM Summary"
+TIMELINE_SUMMARY_MAPPING_VERSION = "processing-timeline-info-stats-v1"
+TIMELINE_SUMMARY_ROOT_NAME = "Heterogeneous LLM Processing"
 
 _KPI_SECTIONS = (
     "request_facing_latency",
@@ -104,6 +104,20 @@ class TimelineSummaryKpi:
 
 
 @dataclass(frozen=True, slots=True)
+class TokenInstantEvidence:
+    """One validated output-token arrival from the measured request artifact."""
+
+    request_id: str
+    token_index: int
+    timestamp_ns: int
+    source_timestamp_ns: int
+    source_clock_domain_id: str
+    target_clock_domain_id: str
+    alignment_method: str
+    alignment_uncertainty_ns: int
+
+
+@dataclass(frozen=True, slots=True)
 class TimelineSummaryContext:
     """Path-free, deterministic evidence consumed by the Perfetto planner."""
 
@@ -112,6 +126,7 @@ class TimelineSummaryContext:
     kpis: tuple[TimelineSummaryKpi, ...]
     data_quality_annotations: tuple[tuple[str, bool | int | float | str], ...]
     trace_attributes: tuple[TraceAttributeSpec, ...]
+    token_instants: tuple[TokenInstantEvidence, ...] = ()
 
 
 def _canonical_json(value: object) -> str:
@@ -445,6 +460,193 @@ def _data_quality_annotations(
     return tuple(sorted(annotations.items()))
 
 
+def _reject_duplicate_json_object(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise TimelineSummaryInputError(f"duplicate measured-request key {key!r}")
+        result[key] = value
+    return result
+
+
+def _token_instant_evidence(loaded: object) -> tuple[TokenInstantEvidence, ...]:
+    payload = _read_source_artifact(
+        loaded,
+        source_role="gpu",
+        relative_path="raw/client/measured_requests.jsonl",
+    )
+    if payload is None:
+        return ()
+    request_ids = {
+        event.request_id
+        for event in getattr(loaded, "events", ())
+        if event.event_name in {"request_received", "response_done"}
+    }
+    if len(request_ids) != 1 or None in request_ids:
+        raise TimelineSummaryInputError(
+            "token timestamps require one canonical request identity"
+        )
+    request_id = _nonempty_string(next(iter(request_ids)), "canonical request id")
+    rows: list[dict[str, object]] = []
+    try:
+        for line in payload.decode("utf-8").splitlines():
+            if not line:
+                continue
+            value = json.loads(
+                line,
+                object_pairs_hook=_reject_duplicate_json_object,
+                parse_constant=lambda token: (_ for _ in ()).throw(
+                    ValueError(f"non-finite JSON number {token}")
+                ),
+            )
+            if not isinstance(value, dict):
+                raise TimelineSummaryInputError(
+                    "measured-request JSONL row must be an object"
+                )
+            identity = value.get("request_id", value.get("client_request_id"))
+            if identity == request_id:
+                rows.append(value)
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
+        raise TimelineSummaryInputError(
+            "measured-request artifact is not valid UTF-8 JSONL"
+        ) from error
+    if len(rows) != 1:
+        raise TimelineSummaryInputError(
+            "measured-request artifact must contain one matching request row"
+        )
+    row = rows[0]
+    raw = row.get("valid_token_timestamps_ns")
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not raw:
+        raise TimelineSummaryInputError(
+            "valid_token_timestamps_ns must be a non-empty array"
+        )
+    timestamps = tuple(
+        _non_bool_int(value, "valid_token_timestamps_ns item") for value in raw
+    )
+    if any(value < 0 for value in timestamps):
+        raise TimelineSummaryInputError("token timestamp must be non-negative")
+    if any(right <= left for left, right in zip(timestamps, timestamps[1:])):
+        raise TimelineSummaryInputError(
+            "valid_token_timestamps_ns must be strictly increasing"
+        )
+    output_tokens = _non_bool_int(row.get("output_tokens"), "output_tokens")
+    if output_tokens != len(timestamps):
+        raise TimelineSummaryInputError(
+            "valid token timestamp count differs from output_tokens"
+        )
+    request_start = _non_bool_int(row.get("request_start_ns"), "request_start_ns")
+    stream_end = _non_bool_int(row.get("stream_end_ns"), "stream_end_ns")
+    if request_start > timestamps[0] or timestamps[-1] > stream_end:
+        raise TimelineSummaryInputError(
+            "token timestamps fall outside the measured request interval"
+        )
+
+    sources = [
+        source
+        for source in getattr(loaded, "sources", ())
+        if getattr(source, "source_role", None) == "gpu"
+    ]
+    if len(sources) != 1:
+        raise TimelineSummaryInputError("GPU source must occur exactly once")
+    source_clocks = [
+        clock
+        for clock in getattr(sources[0], "clock_domains", ())
+        if getattr(clock, "unit", None) == "ns"
+        and getattr(clock, "monotonic", None) is True
+    ]
+    if len(source_clocks) != 1:
+        raise TimelineSummaryInputError(
+            "measured token timestamps require one monotonic ns GPU clock"
+        )
+    source_clock = _nonempty_string(
+        getattr(source_clocks[0], "clock_domain_id", None),
+        "GPU source clock domain",
+    )
+    normalized_source_clock = f"gpu:{source_clock}"
+    transforms = [
+        transform
+        for transform in getattr(loaded, "transforms", ())
+        if getattr(transform, "source_clock_domain_id", None)
+        == normalized_source_clock
+        and getattr(transform, "target_clock_domain_id", None)
+        == getattr(loaded, "canonical_clock_domain_id", None)
+    ]
+    if len(transforms) != 1:
+        raise TimelineSummaryInputError(
+            "measured token timestamps lack one explicit canonical transform"
+        )
+    transform = transforms[0]
+    if getattr(transform, "scale", None) != 1.0:
+        raise TimelineSummaryInputError("token timestamp transform scale must be 1")
+    offset = _non_bool_int(getattr(transform, "offset_ns", None), "token offset")
+    uncertainty = _non_bool_int(
+        getattr(transform, "uncertainty_ns", None), "token uncertainty"
+    )
+    if uncertainty < 0:
+        raise TimelineSummaryInputError("token uncertainty must be non-negative")
+    valid_from = _non_bool_int(
+        getattr(transform, "valid_from_source_ns", None),
+        "token transform valid_from",
+    )
+    valid_to = getattr(transform, "valid_to_source_ns", None)
+    if valid_to is not None:
+        valid_to = _non_bool_int(valid_to, "token transform valid_to")
+    if timestamps[0] < valid_from or (
+        valid_to is not None and timestamps[-1] > valid_to
+    ):
+        raise TimelineSummaryInputError(
+            "token timestamps fall outside the canonical transform interval"
+        )
+    transform_attributes = getattr(transform, "attributes", {})
+    method = _nonempty_string(
+        transform_attributes.get(
+            "hybrid.method",
+            getattr(getattr(transform, "method", None), "value", None),
+        ),
+        "token alignment method",
+    )
+    target_clock = _nonempty_string(
+        getattr(transform, "target_clock_domain_id", None),
+        "token target clock domain",
+    )
+    canonical = tuple(value + offset for value in timestamps)
+    if canonical[0] < 0 or any(
+        right <= left for left, right in zip(canonical, canonical[1:])
+    ):
+        raise TimelineSummaryInputError(
+            "token transform produces invalid canonical timestamps"
+        )
+    request_bounds = [
+        event.timestamp_ns
+        for event in getattr(loaded, "events", ())
+        if event.event_name in {"request_received", "response_done"}
+    ]
+    if len(request_bounds) != 2:
+        raise TimelineSummaryInputError("canonical request bounds are incomplete")
+    lower, upper = min(request_bounds), max(request_bounds)
+    if canonical[0] < lower or canonical[-1] > upper:
+        raise TimelineSummaryInputError(
+            "canonical token timestamps fall outside request markers"
+        )
+    return tuple(
+        TokenInstantEvidence(
+            request_id=request_id,
+            token_index=index,
+            timestamp_ns=timestamp,
+            source_timestamp_ns=timestamps[index],
+            source_clock_domain_id=normalized_source_clock,
+            target_clock_domain_id=target_clock,
+            alignment_method=method,
+            alignment_uncertainty_ns=uncertainty,
+        )
+        for index, timestamp in enumerate(canonical)
+    )
+
+
 def build_timeline_summary_context(loaded: object) -> TimelineSummaryContext:
     """Build deterministic trace-native timeline-summary evidence from a loaded run."""
 
@@ -463,6 +665,7 @@ def build_timeline_summary_context(loaded: object) -> TimelineSummaryContext:
             kpis=kpis,
         ),
         trace_attributes=build_performance_trace_attributes(loaded, calculated),
+        token_instants=_token_instant_evidence(loaded),
     )
 
 
@@ -473,5 +676,6 @@ __all__ = [
     "TimelineSummaryContext",
     "TimelineSummaryInputError",
     "TimelineSummaryKpi",
+    "TokenInstantEvidence",
     "build_timeline_summary_context",
 ]
