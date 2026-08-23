@@ -3,6 +3,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from perfetto_hetero_profiler.collectors import (
     ProcTelemetryCollector,
@@ -132,6 +133,42 @@ class ProcCollectorTests(unittest.TestCase):
             record = collector.sample()[2]
         self.assertEqual(record.value, 5120)
         validate_record(record)
+
+    def test_timestamp_is_recorded_after_procfs_reads_complete(self):
+        order = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.make_proc(root, "cpu 10 0 0 90\n")
+
+            def stat(_text):
+                order.append("stat")
+                return parse_proc_stat("cpu 10 0 0 90\n")
+
+            def memory(_text):
+                order.append("memory")
+                return (1000, 400)
+
+            def clock():
+                order.append("clock")
+                return 123
+
+            collector = ProcTelemetryCollector(
+                run_id="run", host_id="host", clock_domain_id="clock",
+                proc_root=root, monotonic_ns=clock,
+            )
+            collector.prepare()
+            collector.start()
+            with mock.patch(
+                "perfetto_hetero_profiler.collectors.system.parse_proc_stat",
+                side_effect=stat,
+            ), mock.patch(
+                "perfetto_hetero_profiler.collectors.system.parse_meminfo",
+                side_effect=memory,
+            ):
+                records = collector.sample()
+
+        self.assertEqual(order, ["stat", "memory", "clock"])
+        self.assertTrue(all(record.timestamp_ns == 123 for record in records))
 
 
 if __name__ == "__main__":

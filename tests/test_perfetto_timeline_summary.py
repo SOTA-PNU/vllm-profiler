@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import TrackDescriptor
 
@@ -286,6 +288,40 @@ class MeasuredTokenInstantTests(unittest.TestCase):
             )
         )
         self.assertEqual(before, after)
+
+    def test_client_token_instants_may_extend_past_proxy_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            family = _build_monitor_family(
+                Path(directory),
+                overview_metrics=True,
+                measured_token_timestamps=(2_250_000, 2_350_000),
+            )
+            loaded = load_hybrid_run(family["hybrid"])
+            client_observation = (
+                json.dumps(
+                    {
+                        "request_id": "request-1",
+                        "request_start_ns": 900_000,
+                        "stream_end_ns": 2_600_000,
+                        "output_tokens": 2,
+                        "valid_token_timestamps_ns": [950_000, 2_550_000],
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                + "\n"
+            ).encode("utf-8")
+            with mock.patch(
+                "perfetto_hetero_profiler.perfetto.timeline_summary."
+                "_read_source_artifact",
+                return_value=client_observation,
+            ):
+                context = build_timeline_summary_context(loaded)
+
+        self.assertEqual(
+            [item.timestamp_ns for item in context.token_instants],
+            [950_000, 2_550_000],
+        )
 
     def test_non_monotonic_measured_token_timestamps_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

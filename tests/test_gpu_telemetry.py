@@ -168,6 +168,32 @@ class GpuTelemetryTests(unittest.TestCase):
         self.assertEqual(first[0].interval_ns, 1_000_000_000)
         self.assertEqual(second[0].interval_ns, 250_000_000)
 
+    def test_timestamp_is_recorded_after_query_completion(self):
+        order = []
+
+        def runner(*args, **kwargs):
+            order.append("query")
+            return subprocess.CompletedProcess(args[0], 0, NORMAL, "")
+
+        def clock():
+            order.append("clock")
+            return 123
+
+        collector = GpuTelemetryCollector(
+            run_id="run",
+            host_id="host",
+            clock_domain_id="clock",
+            sample_interval_ms=1000,
+            client=NvidiaSmiClient(runner=runner),
+            monotonic_ns=clock,
+        )
+        collector.prepare()
+        collector.start()
+        records = collector.sample()
+
+        self.assertEqual(order, ["query", "clock"])
+        self.assertTrue(all(record.timestamp_ns == 123 for record in records))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -104,11 +104,54 @@ def classify_failure(message: str) -> str:
         return "model_cache_reuse"
     if "artifact" in lowered or "fingerprint" in lowered or "deterministic" in lowered:
         return "artifact_validation"
-    if "cleanup" in lowered or "sigkill" in lowered:
+    if "cleanup" in lowered or "sigkill" in lowered or "shutdown integrity" in lowered:
         return "cleanup"
     if "request" in lowered or "completion" in lowered:
         return "workload"
     return "runtime"
+
+
+def _shutdown_integrity(
+    layout: "_Layout", shutdown: dict[str, Any]
+) -> dict[str, Any]:
+    logs: dict[str, str] = {}
+    for name in ("prefill", "decode", "proxy"):
+        path = layout.coordinator / f"raw/{name}.stderr.log"
+        logs[name] = (
+            path.read_text(encoding="utf-8", errors="replace")
+            if path.is_file()
+            else ""
+        )
+    combined = "\n".join(logs.values())
+    known_nixl = (
+        "Segfault encountered" in logs["decode"]
+        and "rtnl_tc_unregister" in logs["decode"]
+    )
+    signatures = {
+        "segfault_encountered": "Segfault encountered" in combined,
+        "rtnl_tc_unregister": "rtnl_tc_unregister" in combined,
+        "sigsegv": "SIGSEGV" in combined,
+        "native_abort": "Aborted" in combined or "SIGABRT" in combined,
+        "python_fatal_error": "Fatal Python error" in combined,
+    }
+    fatal = known_nixl or any(signatures.values())
+    if known_nixl:
+        status = "invalid"
+        reason = "native_sigsegv_rtnl_tc_unregister"
+    elif fatal:
+        status = "invalid"
+        reason = "unexpected_native_shutdown_failure"
+    else:
+        status = "valid"
+        reason = None
+    return {
+        "status": status,
+        "reason": reason,
+        "demo_only": known_nixl,
+        "known_nixl_shutdown_signature": known_nixl,
+        "signatures": signatures,
+        "process_results": shutdown,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,16 +382,201 @@ def _wait_runtime_marker_completion(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _SampleTicket:
+    role: str
+    generation: int
+    requested_ns: int
+
+
+class _TelemetryWorker:
+    """Serialize one collector while allowing independent device polling."""
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        collector: object,
+        target: list,
+        interval_sec: float,
+        errors: list[str],
+    ) -> None:
+        self.name = name
+        self.collector = collector
+        self.target = target
+        self.interval_sec = interval_sec
+        self.errors = errors
+        self.condition = threading.Condition()
+        self.stopping = False
+        self.inflight = False
+        self.failed = False
+        self.sampling_complete = False
+        self.generation = 0
+        self.pending_ticket: _SampleTicket | None = None
+        self.active_boundary_ticket: _SampleTicket | None = None
+        self.completed_boundaries: dict[_SampleTicket, dict[str, Any]] = {}
+        self.last_sample: dict[str, Any] | None = None
+        self.thread = threading.Thread(
+            target=self._run,
+            name=f"hybrid-telemetry-{name}",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def request(self, role: str) -> _SampleTicket:
+        if role not in {"baseline", "final"}:
+            raise ValueError(f"unsupported telemetry boundary role: {role}")
+        requested_ns = time.monotonic_ns()
+        with self.condition:
+            if self.stopping or self.failed or self.sampling_complete:
+                raise HybridRunnerError(f"{self.name} telemetry is not running")
+            if (
+                self.pending_ticket is not None
+                or self.active_boundary_ticket is not None
+            ):
+                raise HybridRunnerError(
+                    f"{self.name} telemetry already has a boundary request"
+                )
+            ticket = _SampleTicket(role, self.generation, requested_ns)
+            self.pending_ticket = ticket
+            self.condition.notify_all()
+            return ticket
+
+    def wait(self, ticket: _SampleTicket, timeout_sec: float) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout_sec
+        with self.condition:
+            while True:
+                sample = self.completed_boundaries.pop(ticket, None)
+                if sample is not None:
+                    if sample.get("error") is not None:
+                        raise HybridRunnerError(
+                            f"{self.name} telemetry boundary failed: "
+                            f"{sample['error']}"
+                        )
+                    return dict(sample)
+                if self.failed:
+                    detail = (
+                        self.last_sample.get("error")
+                        if self.last_sample is not None
+                        else None
+                    )
+                    raise HybridRunnerError(
+                        f"{self.name} telemetry boundary failed"
+                        + (f": {detail}" if detail else "")
+                    )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"{self.name} telemetry {ticket.role} sample timed out"
+                    )
+                self.condition.wait(remaining)
+
+    def stop(self, timeout_sec: float) -> None:
+        with self.condition:
+            self.stopping = True
+            self.condition.notify_all()
+        if self.thread.ident is not None:
+            self.thread.join(timeout=timeout_sec)
+        if self.thread.is_alive():
+            self.errors.append(f"{self.name} telemetry thread did not stop")
+
+    def _run(self) -> None:
+        next_deadline = time.monotonic()
+        while True:
+            with self.condition:
+                while not self.stopping and self.pending_ticket is None:
+                    remaining = next_deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self.condition.wait(remaining)
+                if self.stopping:
+                    return
+                started_ticket = self.pending_ticket
+                self.pending_ticket = None
+                self.active_boundary_ticket = started_ticket
+                self.inflight = True
+
+            query_started_ns = time.monotonic_ns()
+            try:
+                records = list(self.collector.sample())
+                error: str | None = None
+            except Exception as caught:
+                records = []
+                error = f"{type(caught).__name__}: {caught}"
+            query_completed_ns = time.monotonic_ns()
+
+            with self.condition:
+                # A boundary request arriving during an existing poll consumes that
+                # poll instead of starting a duplicate device query.
+                boundary_ticket = self.pending_ticket or self.active_boundary_ticket
+                self.pending_ticket = None
+                self.active_boundary_ticket = None
+                role = (
+                    boundary_ticket.role
+                    if boundary_ticket is not None
+                    else "background"
+                )
+                requested_ns = (
+                    boundary_ticket.requested_ns
+                    if boundary_ticket is not None
+                    else None
+                )
+                sequence = self.generation + 1
+                tagged = [
+                    replace(
+                        record,
+                        attributes={
+                            **record.attributes,
+                            "telemetry.sample_role": role,
+                            "telemetry.sample_sequence": sequence,
+                            "telemetry.query_started_ns": query_started_ns,
+                            "telemetry.query_completed_ns": query_completed_ns,
+                        },
+                    )
+                    for record in records
+                ]
+                self.target.extend(tagged)
+                timestamps = sorted({record.timestamp_ns for record in tagged})
+                self.generation = sequence
+                self.last_sample = {
+                    "role": role,
+                    "sequence": sequence,
+                    "requested_ns": requested_ns,
+                    "query_started_ns": query_started_ns,
+                    "query_completed_ns": query_completed_ns,
+                    "sample_count": len(tagged),
+                    "sample_timestamps_ns": timestamps,
+                    "error": error,
+                }
+                if boundary_ticket is not None:
+                    self.completed_boundaries[boundary_ticket] = self.last_sample
+                    if boundary_ticket.role == "final":
+                        self.sampling_complete = True
+                self.inflight = False
+                if error is not None:
+                    self.failed = True
+                    self.errors.append(f"{self.name} telemetry: {error}")
+                self.condition.notify_all()
+            if error is not None or self.sampling_complete:
+                return
+            next_deadline = time.monotonic() + self.interval_sec
+
+
 class _Telemetry:
     def __init__(self, config: HybridRunnerConfig, layout: _Layout) -> None:
         self.config = config
-        self.stop_event = threading.Event()
         self.errors: list[str] = []
         self.gpu_metrics = []
         self.npu_metrics = []
         self.system_metrics = []
         self.started_collectors = []
-        self.thread_started = False
+        self.workers_started = False
+        self.stopped = False
+        self.boundaries: dict[str, dict[str, dict[str, Any]]] = {}
+        self.request_start_ns: int | None = None
+        self.request_end_ns: int | None = None
         self.gpu = GpuTelemetryCollector(
             run_id=f"{layout.run_id}-gpu",
             host_id=HOST_ID,
@@ -370,49 +598,137 @@ class _Telemetry:
             host_id=HOST_ID,
             clock_domain_id=CLOCK_DOMAIN_ID,
         )
-        self.thread = threading.Thread(
-            target=self._run, name=f"hybrid-telemetry-{layout.run_id}", daemon=True
-        )
+        interval_sec = config.sample_interval_ms / 1000
+        self.workers = {
+            "gpu": _TelemetryWorker(
+                name="gpu", collector=self.gpu, target=self.gpu_metrics,
+                interval_sec=interval_sec, errors=self.errors,
+            ),
+            "npu": _TelemetryWorker(
+                name="npu", collector=self.npu, target=self.npu_metrics,
+                interval_sec=interval_sec, errors=self.errors,
+            ),
+            "system": _TelemetryWorker(
+                name="system", collector=self.system, target=self.system_metrics,
+                interval_sec=interval_sec, errors=self.errors,
+            ),
+        }
 
     def start(self) -> None:
         for collector in (self.gpu, self.npu, self.system):
             collector.prepare()
             collector.start()
             self.started_collectors.append(collector)
-        self.thread.start()
-        self.thread_started = True
+        for worker in self.workers.values():
+            worker.start()
+        self.workers_started = True
+
+    def capture_boundary(self, role: str) -> dict[str, dict[str, Any]]:
+        if not self.workers_started or self.stopped:
+            raise HybridRunnerError("telemetry boundary requested while stopped")
+        tickets = {
+            name: worker.request(role) for name, worker in self.workers.items()
+        }
+        timeout_sec = max(10.0, self.config.sample_interval_ms / 100.0)
+        samples = {
+            name: self.workers[name].wait(ticket, timeout_sec)
+            for name, ticket in tickets.items()
+        }
+        empty = [name for name, sample in samples.items() if not sample["sample_count"]]
+        if empty:
+            raise HybridRunnerError(
+                f"{role} telemetry sample was empty: {', '.join(empty)}"
+            )
+        self.boundaries[role] = samples
+        return samples
+
+    def set_request_window(self, start_ns: int, end_ns: int) -> None:
+        if end_ns < start_ns:
+            raise HybridRunnerError("telemetry request window is reversed")
+        self.request_start_ns = start_ns
+        self.request_end_ns = end_ns
 
     def stop(self) -> None:
-        if not self.started_collectors and not self.thread_started:
+        if self.stopped:
             return
-        self.stop_event.set()
-        if self.thread_started:
-            self.thread.join(
-                timeout=max(5.0, self.config.sample_interval_ms / 100.0)
-            )
-            if self.thread.is_alive():
-                self.errors.append("telemetry thread did not stop")
+        timeout_sec = max(10.0, self.config.sample_interval_ms / 100.0)
+        if self.workers_started:
+            for worker in self.workers.values():
+                worker.stop(timeout_sec)
         for collector in reversed(self.started_collectors):
             try:
                 collector.stop()
+                collector.finalize()
             except Exception as error:
-                self.errors.append(f"{type(collector).__name__} stop: {error}")
+                self.errors.append(f"{type(collector).__name__} finalize: {error}")
         self.started_collectors.clear()
-        self.thread_started = False
+        self.workers_started = False
+        self.stopped = True
 
-    def _run(self) -> None:
-        interval = self.config.sample_interval_ms / 1000
-        while not self.stop_event.is_set():
-            for collector, target in (
-                (self.gpu, self.gpu_metrics),
-                (self.npu, self.npu_metrics),
-                (self.system, self.system_metrics),
-            ):
-                try:
-                    target.extend(collector.sample())
-                except Exception as error:
-                    self.errors.append(f"{type(collector).__name__}: {error}")
-            self.stop_event.wait(interval)
+    def lifecycle(self) -> dict[str, Any]:
+        streams = {}
+        for name, metrics in (
+            ("gpu", self.gpu_metrics),
+            ("npu", self.npu_metrics),
+            ("system", self.system_metrics),
+        ):
+            by_timestamp: dict[int, object] = {}
+            roles: dict[str, set[int]] = {}
+            for metric in metrics:
+                by_timestamp.setdefault(metric.timestamp_ns, metric)
+                role = metric.attributes.get("telemetry.sample_role")
+                if isinstance(role, str):
+                    roles.setdefault(role, set()).add(metric.timestamp_ns)
+            ordered = list(by_timestamp.values())
+            timestamps = [metric.timestamp_ns for metric in ordered]
+            actual_intervals = [
+                metric.interval_ns
+                for index, metric in enumerate(ordered)
+                if index > 0 and isinstance(metric.interval_ns, int)
+            ]
+            interval_consistent = all(
+                metric.interval_ns == metric.timestamp_ns - ordered[index - 1].timestamp_ns
+                for index, metric in enumerate(ordered)
+                if index > 0
+            )
+            background_during_request = 0
+            if self.request_start_ns is not None and self.request_end_ns is not None:
+                background_during_request = sum(
+                    self.request_start_ns <= timestamp <= self.request_end_ns
+                    for timestamp in roles.get("background", set())
+                )
+            streams[name] = {
+                "metric_record_count": len(metrics),
+                "sample_batch_count": len(ordered),
+                "first_timestamp_ns": timestamps[0] if timestamps else None,
+                "last_timestamp_ns": timestamps[-1] if timestamps else None,
+                "timestamps_strictly_increasing": all(
+                    current > previous
+                    for previous, current in zip(timestamps, timestamps[1:])
+                ),
+                "interval_matches_timestamp_delta": interval_consistent,
+                "actual_interval_ns": {
+                    "count": len(actual_intervals),
+                    "min": min(actual_intervals) if actual_intervals else None,
+                    "max": max(actual_intervals) if actual_intervals else None,
+                    "mean": (
+                        sum(actual_intervals) / len(actual_intervals)
+                        if actual_intervals else None
+                    ),
+                },
+                "role_sample_count": {
+                    role: len(values) for role, values in sorted(roles.items())
+                },
+                "background_samples_during_request": background_during_request,
+            }
+        return {
+            "requested_interval_ms": self.config.sample_interval_ms,
+            "request_start_ns": self.request_start_ns,
+            "request_end_ns": self.request_end_ns,
+            "boundaries": self.boundaries,
+            "streams": streams,
+            "errors": list(self.errors),
+        }
 
 
 def build_hybrid_run_plan(
@@ -592,6 +908,8 @@ class HybridRunner:
         errors: list[str] = []
         boundary: dict[str, Any] | None = None
         capture_started_unix_ns: int | None = None
+        request_start_ns: int | None = None
+        request_end_ns: int | None = None
         profiler_active = False
         client: OpenAICompletionClient | None = None
         started: list[str] = []
@@ -630,6 +948,9 @@ class HybridRunner:
             for index in range(config.workload.warmup_requests):
                 warmups.append(self._request(client, prompt, f"warmup-{index:03d}"))
 
+            if self.enable_telemetry:
+                telemetry.capture_boundary("baseline")
+
             target_url = self._profile_url()
             if target_url is not None:
                 capture_started_unix_ns = time.time_ns()
@@ -640,6 +961,14 @@ class HybridRunner:
             request_start_ns = time.monotonic_ns()
             for index in range(config.workload.measured_requests):
                 observations.append(self._request(client, prompt, f"measured-{index:03d}"))
+            response_end_ns = max(item.done_ns for item in observations)
+            if self.enable_telemetry:
+                telemetry.set_request_window(request_start_ns, response_end_ns)
+                try:
+                    telemetry.capture_boundary("final")
+                except Exception as error:
+                    errors.append(f"final telemetry: {type(error).__name__}: {error}")
+                telemetry.stop()
             _wait_runtime_marker_completion(
                 layout.coordinator / "raw/runtime_markers",
                 {item.request_id for item in observations},
@@ -703,6 +1032,15 @@ class HybridRunner:
         if cache_before != cache_after:
             errors.append("persistent RBLN model cache fingerprint changed")
         _plain_json(layout.coordinator / "cleanup.json", shutdown)
+        shutdown_integrity = _shutdown_integrity(layout, shutdown)
+        _plain_json(
+            layout.coordinator / "shutdown_integrity.json", shutdown_integrity
+        )
+        shutdown_error = (
+            "shutdown integrity invalid: " + str(shutdown_integrity["reason"])
+            if shutdown_integrity["status"] == "invalid"
+            else None
+        )
         try:
             self._compile_gate()
             profile = self._profile_metadata(
@@ -759,17 +1097,29 @@ class HybridRunner:
                         {
                             "run_id": layout.run_id,
                             "profile_mode": self.profile_mode,
-                            "status": "succeeded",
-                            "stage": "immutable_collection_closeout",
+                            "status": "failed" if shutdown_error else "succeeded",
+                            "inference_status": "succeeded",
+                            "shutdown_integrity": shutdown_integrity["status"],
+                            "shutdown_reason": shutdown_integrity["reason"],
+                            "demo_only": shutdown_integrity["demo_only"],
+                            "stage": (
+                                "diagnostic_collection_closeout"
+                                if shutdown_error
+                                else "immutable_collection_closeout"
+                            ),
                             "hardware_rerun": True,
                             "warmup_completed": len(warmups),
                             "measured_completed": len(observations),
+                            "errors": [shutdown_error] if shutdown_error else [],
                         },
                     )
                     self._create_closeout()
                     self._derive_products()
         except Exception as error:
             errors.append(f"postprocess {type(error).__name__}: {error}")
+
+        if shutdown_error is not None:
+            errors.append(shutdown_error)
 
         status = RunStatus.SUCCEEDED if not errors else RunStatus.FAILED
         result_payload = {
@@ -843,6 +1193,7 @@ class HybridRunner:
         required_dirs = [
             config.model_path, config.rbln_cache_path,
             config.prefill.working_directory, config.decode.working_directory,
+            config.prefill.pythonpath, config.decode.pythonpath,
         ]
         missing_dirs = [path for path in required_dirs if not path.is_dir()]
         if missing_dirs:
@@ -871,12 +1222,14 @@ class HybridRunner:
         }
         prefill_env = {
             **common,
+            "PYTHONPATH": str(config.prefill.pythonpath),
             "CUDA_VISIBLE_DEVICES": ",".join(map(str, config.gpu_indices)),
             "VLLM_NIXL_SIDE_CHANNEL_PORT": str(config.prefill.nixl_port),
         }
         marker_dir = layout.coordinator / "raw/runtime_markers"
         decode_env = {
             **common,
+            "PYTHONPATH": str(config.decode.pythonpath),
             "RBLN_DEVICES": ",".join(map(str, config.npu_indices)),
             "VLLM_RBLN_USE_VLLM_MODEL": "1",
             "VLLM_RBLN_COMPILE_MODEL": "1",
@@ -902,17 +1255,13 @@ class HybridRunner:
             "prefill": CommandSpec(
                 argv=commands["prefill"], cwd=config.prefill.working_directory,
                 env_overrides=prefill_env,
-                env_allowlist=tuple(
-                    name for name in _ENV_ALLOWLIST if name != "PYTHONPATH"
-                ),
+                env_allowlist=_ENV_ALLOWLIST,
                 terminate_grace_sec=config.shutdown_timeout_sec,
             ),
             "decode": CommandSpec(
                 argv=commands["decode"], cwd=config.decode.working_directory,
                 env_overrides=decode_env,
-                env_allowlist=tuple(
-                    name for name in _ENV_ALLOWLIST if name != "PYTHONPATH"
-                ),
+                env_allowlist=_ENV_ALLOWLIST,
                 terminate_grace_sec=config.shutdown_timeout_sec,
             ),
             "proxy": CommandSpec(
@@ -1184,7 +1533,15 @@ class HybridRunner:
         profile: dict[str, Any] | None,
         errors: list[str],
     ) -> None:
-        gpu_events, npu_events = self._marker_events(observations)
+        marker_error: Exception | None = None
+        try:
+            gpu_events, npu_events = self._marker_events(observations)
+        except Exception as error:
+            # Request and telemetry evidence must survive a later marker or
+            # normalization failure. Invalid markers remain available as raw
+            # artifacts, but are not emitted as normalized events.
+            marker_error = error
+            gpu_events, npu_events = [], []
         gpu_metrics = [*telemetry.gpu_metrics, *telemetry.system_metrics]
         for observation in observations:
             gpu_metrics.extend(observation_metrics(f"{self.layout.run_id}-gpu", observation))
@@ -1193,6 +1550,46 @@ class HybridRunner:
             "gpu": (self.layout.gpu, gpu_events, gpu_metrics),
             "npu": (self.layout.npu, npu_events, telemetry.npu_metrics),
         }
+        telemetry_lifecycle = telemetry.lifecycle()
+        _plain_json(
+            self.layout.coordinator / "telemetry_lifecycle.json",
+            telemetry_lifecycle,
+        )
+        _plain_json(
+            self.layout.gpu / "summary/telemetry_lifecycle.json",
+            {
+                "requested_interval_ms": telemetry_lifecycle["requested_interval_ms"],
+                "request_start_ns": telemetry_lifecycle["request_start_ns"],
+                "request_end_ns": telemetry_lifecycle["request_end_ns"],
+                "boundaries": {
+                    role: {
+                        name: sample
+                        for name, sample in samples.items()
+                        if name in {"gpu", "system"}
+                    }
+                    for role, samples in telemetry_lifecycle["boundaries"].items()
+                },
+                "streams": {
+                    name: telemetry_lifecycle["streams"][name]
+                    for name in ("gpu", "system")
+                },
+                "errors": telemetry_lifecycle["errors"],
+            },
+        )
+        _plain_json(
+            self.layout.npu / "summary/telemetry_lifecycle.json",
+            {
+                "requested_interval_ms": telemetry_lifecycle["requested_interval_ms"],
+                "request_start_ns": telemetry_lifecycle["request_start_ns"],
+                "request_end_ns": telemetry_lifecycle["request_end_ns"],
+                "boundaries": {
+                    role: {"npu": samples["npu"]}
+                    for role, samples in telemetry_lifecycle["boundaries"].items()
+                },
+                "streams": {"npu": telemetry_lifecycle["streams"]["npu"]},
+                "errors": telemetry_lifecycle["errors"],
+            },
+        )
         measured_rows = [
             {
                 "request_id": item.request_id,
@@ -1269,7 +1666,11 @@ class HybridRunner:
             write_jsonl(root / "artifacts/artifacts.jsonl", artifacts)
             manifest = self._manifest(
                 role=role,
-                status=(RunStatus.FAILED if errors else RunStatus.SUCCEEDED),
+                status=(
+                    RunStatus.FAILED
+                    if errors or marker_error is not None
+                    else RunStatus.SUCCEEDED
+                ),
                 detailed=profile is not None and profile["root"] == root,
             )
             write_json(root / "manifest.json", manifest)
@@ -1283,6 +1684,8 @@ class HybridRunner:
                 "method_id": "independent_streaming_client_v1",
             },
         )
+        if marker_error is not None:
+            raise marker_error
 
     def _artifacts(
         self, root: Path, role: str, profile: dict[str, Any] | None
@@ -1320,6 +1723,9 @@ class HybridRunner:
                     None,
                 )
             )
+        lifecycle_path = root / "summary/telemetry_lifecycle.json"
+        if lifecycle_path.is_file():
+            files.append((lifecycle_path, ArtifactKind.OTHER, "json", None))
         if profile is not None and profile["root"] == root:
             alignment = root / "clocks/profiler_alignment.json"
             detail = root / "summary/detailed_profile.json"

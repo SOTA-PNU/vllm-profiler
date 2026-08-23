@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import time
 from typing import Callable
@@ -102,21 +102,30 @@ class ProcTelemetryCollector(BaseCollector):
         self._previous_timestamp_ns: int | None = None
 
     def _sample(self) -> list[MetricSample]:
+        # Read every procfs source first, then timestamp the completed query.
+        # The temporary timestamp is replaced before records leave the collector.
+        records = [
+            self._cpu_metric(0, None),
+            self._memory_metric(0, None),
+        ]
+        pid = self.pid_provider()
+        if pid is not None:
+            records.append(self._process_memory_metric(pid, 0, None))
         timestamp_ns = self.monotonic_ns()
         interval_ns = (
             None
             if self._previous_timestamp_ns is None
             else timestamp_ns - self._previous_timestamp_ns
         )
-        records = [
-            self._cpu_metric(timestamp_ns, interval_ns),
-            self._memory_metric(timestamp_ns, interval_ns),
-        ]
-        pid = self.pid_provider()
-        if pid is not None:
-            records.append(self._process_memory_metric(pid, timestamp_ns, interval_ns))
         self._previous_timestamp_ns = timestamp_ns
-        return records
+        return [
+            replace(
+                record,
+                timestamp_ns=timestamp_ns,
+                interval_ns=interval_ns,
+            )
+            for record in records
+        ]
 
     def _cpu_metric(self, timestamp_ns: int, interval_ns: int | None) -> MetricSample:
         current = parse_proc_stat(

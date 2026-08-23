@@ -27,6 +27,7 @@ def document(root: Path) -> dict:
         "prefill": {
             "executable": str(root / "prefill/bin/vllm"),
             "working_directory": str(root / "prefill"),
+            "pythonpath": str(root / "prefill"),
             "host": "127.0.0.1",
             "http_port": 18100,
             "nixl_port": 18559,
@@ -35,6 +36,7 @@ def document(root: Path) -> dict:
         "decode": {
             "executable": str(root / "decode/bin/vllm"),
             "working_directory": str(root / "decode"),
+            "pythonpath": str(root / "decode"),
             "host": "127.0.0.1",
             "http_port": 18200,
             "nixl_port": 18659,
@@ -149,6 +151,19 @@ class HybridRunnerConfigTests(unittest.TestCase):
             value = document(root)
             value["decode"]["http_port"] = value["prefill"]["http_port"]
             with self.assertRaisesRegex(HybridRunnerConfigError, "ports must differ"):
+                self.load(root, value)
+
+    def test_twenty_millisecond_telemetry_interval_is_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            value = document(root)
+            value["telemetry"]["sample_interval_ms"] = 20
+            self.assertEqual(self.load(root, value).sample_interval_ms, 20)
+
+            value["telemetry"]["sample_interval_ms"] = 19
+            with self.assertRaisesRegex(
+                HybridRunnerConfigError, "telemetry.sample_interval_ms"
+            ):
                 self.load(root, value)
 
     def test_existing_output_is_rejected_without_modification(self) -> None:

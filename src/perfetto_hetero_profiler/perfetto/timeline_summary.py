@@ -540,6 +540,10 @@ def _token_instant_evidence(loaded: object) -> tuple[TokenInstantEvidence, ...]:
         )
     request_start = _non_bool_int(row.get("request_start_ns"), "request_start_ns")
     stream_end = _non_bool_int(row.get("stream_end_ns"), "stream_end_ns")
+    if request_start > stream_end:
+        raise TimelineSummaryInputError(
+            "measured request interval end precedes its start"
+        )
     if request_start > timestamps[0] or timestamps[-1] > stream_end:
         raise TimelineSummaryInputError(
             "token timestamps fall outside the measured request interval"
@@ -595,11 +599,11 @@ def _token_instant_evidence(loaded: object) -> tuple[TokenInstantEvidence, ...]:
     valid_to = getattr(transform, "valid_to_source_ns", None)
     if valid_to is not None:
         valid_to = _non_bool_int(valid_to, "token transform valid_to")
-    if timestamps[0] < valid_from or (
-        valid_to is not None and timestamps[-1] > valid_to
+    if request_start < valid_from or (
+        valid_to is not None and stream_end > valid_to
     ):
         raise TimelineSummaryInputError(
-            "token timestamps fall outside the canonical transform interval"
+            "measured request interval falls outside the canonical transform interval"
         )
     transform_attributes = getattr(transform, "attributes", {})
     method = _nonempty_string(
@@ -614,23 +618,33 @@ def _token_instant_evidence(loaded: object) -> tuple[TokenInstantEvidence, ...]:
         "token target clock domain",
     )
     canonical = tuple(value + offset for value in timestamps)
+    canonical_request_start = request_start + offset
+    canonical_stream_end = stream_end + offset
+    if (
+        canonical_request_start < 0
+        or canonical_stream_end < canonical_request_start
+    ):
+        raise TimelineSummaryInputError(
+            "token transform produces an invalid measured request interval"
+        )
     if canonical[0] < 0 or any(
         right <= left for left, right in zip(canonical, canonical[1:])
     ):
         raise TimelineSummaryInputError(
             "token transform produces invalid canonical timestamps"
         )
-    request_bounds = [
-        event.timestamp_ns
-        for event in getattr(loaded, "events", ())
-        if event.event_name in {"request_received", "response_done"}
-    ]
-    if len(request_bounds) != 2:
-        raise TimelineSummaryInputError("canonical request bounds are incomplete")
-    lower, upper = min(request_bounds), max(request_bounds)
-    if canonical[0] < lower or canonical[-1] > upper:
+    # Token arrivals are observed by the client, while request_received and
+    # response_done are proxy-side pipeline markers.  Network delivery and SSE
+    # parsing may legitimately place a client observation just outside those
+    # proxy markers.  Preserve both observations and validate token arrivals
+    # against their own source-backed client interval after applying the same
+    # explicit clock transform.
+    if (
+        canonical[0] < canonical_request_start
+        or canonical[-1] > canonical_stream_end
+    ):
         raise TimelineSummaryInputError(
-            "canonical token timestamps fall outside request markers"
+            "canonical token timestamps fall outside measured request interval"
         )
     return tuple(
         TokenInstantEvidence(

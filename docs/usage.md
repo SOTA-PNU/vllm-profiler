@@ -422,6 +422,20 @@ sample, response 후 collector 종료 전 final sample이 모두 필요합니다
 interval은 분석하려는 가장 짧은 stage보다 충분히 짧아야 합니다. 이 조건이 없는
 기존 run은 가까운 sample이나 capture 평균으로 채우지 않습니다.
 
+`collect hybrid`의 monitor 수집은 GPU, NPU, system stream을 독립 worker에서
+조회합니다. Measured request 직전에는 각 worker의 진행 중 query를 기다리거나 새
+baseline query를 요청하고, response의 `stream_end_ns`가 확정된 뒤에는 같은 방식으로
+final sample을 확보한 후 telemetry를 먼저 종료합니다. 진행 중 poll이 있으면 해당
+poll을 경계 sample로 사용하므로 동일 device에 중복 query를 보내지 않습니다.
+Metric timestamp는 query 완료 시각이며 첫 sample 이후 `interval_ns`는 이전 완료
+timestamp와의 실제 차이입니다. Boundary query는 request latency 계산이 끝난 뒤
+실행되므로 final telemetry 시간은 E2E, TTFT, TPOT에 포함되지 않습니다.
+
+`telemetry.sample_interval_ms`의 최소 요청값은 20 ms입니다. 이는 polling 요청
+간격이며 `nvidia-smi` 또는 `rbln-smi`의 실제 query latency보다 빠른 cadence를
+보장한다는 뜻은 아닙니다. 실제 min/mean/max interval과 baseline/background/final
+sample 수는 각 source의 `summary/telemetry_lifecycle.json`에 기록됩니다.
+
 여러 Overview를 비교할 수 있습니다.
 
 ```bash

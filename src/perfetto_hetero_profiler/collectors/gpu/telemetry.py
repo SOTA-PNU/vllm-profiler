@@ -42,16 +42,11 @@ class GpuTelemetryCollector(BaseCollector):
         self._previous_timestamp_ns: int | None = None
 
     def _sample(self) -> list[MetricSample]:
-        timestamp_ns = self.monotonic_ns()
-        interval_ns = (
-            self.sample_interval_ms * 1_000_000
-            if self._previous_timestamp_ns is None
-            else timestamp_ns - self._previous_timestamp_ns
-        )
-        self._previous_timestamp_ns = timestamp_ns
         try:
             result = self.client.query()
         except NvidiaSmiCommandError as error:
+            timestamp_ns = self.monotonic_ns()
+            interval_ns = self._interval(timestamp_ns)
             return [
                 self._metric(
                     index=index,
@@ -68,6 +63,8 @@ class GpuTelemetryCollector(BaseCollector):
                     ("resource.gpu.power", "W"),
                 )
             ]
+        timestamp_ns = self.monotonic_ns()
+        interval_ns = self._interval(timestamp_ns)
         self.last_raw_output = result.raw_output
         self.discovered_rows = result.rows
         records: list[MetricSample] = []
@@ -101,6 +98,15 @@ class GpuTelemetryCollector(BaseCollector):
                 )
             )
         return records
+
+    def _interval(self, timestamp_ns: int) -> int:
+        interval_ns = (
+            self.sample_interval_ms * 1_000_000
+            if self._previous_timestamp_ns is None
+            else timestamp_ns - self._previous_timestamp_ns
+        )
+        self._previous_timestamp_ns = timestamp_ns
+        return interval_ns
 
     def _metric(
         self,

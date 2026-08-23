@@ -82,6 +82,7 @@ def _absolute_path(value: object, field: str, *, no_symlink: bool = False) -> Pa
 class ServerConfig:
     executable: Path
     working_directory: Path
+    pythonpath: Path
     host: str
     http_port: int
     nixl_port: int
@@ -200,7 +201,10 @@ def _server(document: object, field: str) -> ServerConfig:
     value = _object(document, field)
     _keys(
         value,
-        {"executable", "working_directory", "host", "http_port", "nixl_port", "extra_args"},
+        {
+            "executable", "working_directory", "pythonpath", "host",
+            "http_port", "nixl_port", "extra_args",
+        },
         field,
     )
     extra = value.get("extra_args", [])
@@ -221,11 +225,17 @@ def _server(document: object, field: str) -> ServerConfig:
     host = _string(value.get("host"), f"{field}.host")
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise HybridRunnerConfigError(f"{field}.host must be loopback")
+    working_directory = _absolute_path(
+        value.get("working_directory"), f"{field}.working_directory"
+    )
+    pythonpath = _absolute_path(
+        value.get("pythonpath", str(working_directory)),
+        f"{field}.pythonpath",
+    )
     return ServerConfig(
         executable=_absolute_path(value.get("executable"), f"{field}.executable"),
-        working_directory=_absolute_path(
-            value.get("working_directory"), f"{field}.working_directory"
-        ),
+        working_directory=working_directory,
+        pythonpath=pythonpath,
         host=host,
         http_port=_integer(value.get("http_port"), f"{field}.http_port", 1, 65535),
         nixl_port=_integer(value.get("nixl_port"), f"{field}.nixl_port", 1, 65535),
@@ -382,7 +392,12 @@ def load_hybrid_runner_config(path: Path) -> HybridRunnerConfig:
         gpu_memory_utilization=_number(runtime.get("gpu_memory_utilization"), "runtime.gpu_memory_utilization", 0.01, 1.0),
         gpu_indices=indices("gpu_indices"),
         npu_indices=indices("npu_indices"),
-        sample_interval_ms=_integer(telemetry.get("sample_interval_ms"), "telemetry.sample_interval_ms", 50, 60000),
+        sample_interval_ms=_integer(
+            telemetry.get("sample_interval_ms"),
+            "telemetry.sample_interval_ms",
+            20,
+            60000,
+        ),
         startup_timeout_sec=_number(timeouts.get("startup_sec"), "timeouts.startup_sec", 1, 3600),
         request_timeout_sec=_number(timeouts.get("request_sec"), "timeouts.request_sec", 1, 3600),
         shutdown_timeout_sec=_number(timeouts.get("shutdown_sec"), "timeouts.shutdown_sec", 1, 600),

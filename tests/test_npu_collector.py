@@ -135,6 +135,32 @@ class NpuTelemetryTests(unittest.TestCase):
             )
         )
 
+    def test_timestamp_is_recorded_after_query_completion(self):
+        order = []
+
+        def runner(argv, **kwargs):
+            order.append("query")
+            return subprocess.CompletedProcess(argv, 0, ONE_DEVICE, "")
+
+        def clock():
+            order.append("clock")
+            return 123
+
+        collector = NpuTelemetryCollector(
+            run_id="run",
+            host_id="host",
+            clock_domain_id="clock",
+            sample_interval_ms=100,
+            client=RblnSmiClient(runner=runner),
+            monotonic_ns=clock,
+        )
+        collector.prepare()
+        collector.start()
+        records = collector.sample()
+
+        self.assertEqual(order, ["query", "clock"])
+        self.assertTrue(all(record.timestamp_ns == 123 for record in records))
+
     def test_command_error_produces_error_metrics(self):
         collector = NpuTelemetryCollector(
             run_id="run",

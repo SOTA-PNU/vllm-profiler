@@ -1,7 +1,9 @@
 """CPU-only failure and interruption tests for hybrid process ownership."""
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
+import threading
 import tempfile
 import unittest
 from unittest import mock
@@ -10,7 +12,10 @@ from urllib.error import URLError
 from perfetto_hetero_profiler.hybrid.runner import (
     HybridRunner,
     HybridRunnerError,
+    _Layout,
+    _TelemetryWorker,
     _profile_call,
+    _shutdown_integrity,
     _wait_http,
     _wait_runtime_marker_completion,
 )
@@ -27,6 +32,7 @@ from perfetto_hetero_profiler.schema import (
     DeviceType,
     RunPaths,
     RunStatus,
+    read_json,
     read_jsonl,
 )
 
@@ -46,13 +52,38 @@ class _Telemetry:
         self.system_metrics = []
         self.gpu = mock.Mock(last_raw_output=None)
         self.npu = mock.Mock(last_raw_output=None)
+        self.boundary_roles = []
+        self.request_window = None
+        self.actions = []
         self.instances.append(self)
 
     def start(self):
         self.started = True
+        self.actions.append("start")
 
     def stop(self):
-        self.stopped = True
+        if not self.stopped:
+            self.stopped = True
+            self.actions.append("stop")
+
+    def capture_boundary(self, role):
+        self.boundary_roles.append(role)
+        self.actions.append(f"capture:{role}")
+        return {}
+
+    def set_request_window(self, start_ns, end_ns):
+        self.request_window = (start_ns, end_ns)
+        self.actions.append("request-window")
+
+    def lifecycle(self):
+        return {
+            "requested_interval_ms": 500,
+            "request_start_ns": None,
+            "request_end_ns": None,
+            "boundaries": {},
+            "streams": {"gpu": {}, "npu": {}, "system": {}},
+            "errors": [],
+        }
 
 
 class _Result:
@@ -66,6 +97,7 @@ class _Process:
     fail_name = None
 
     def __init__(self, _spec, stdout, _stderr):
+        self.spec = _spec
         self.name = stdout.name.split(".")[0]
         self.started = False
         self.stopped = False
@@ -105,12 +137,65 @@ class _ClosingClient:
         raise RuntimeError("close failed")
 
 
+class _SuccessfulClient(_ClosingClient):
+    def close(self):
+        self.closed = True
+
+
 class _WrittenTelemetry:
     gpu_metrics = []
     npu_metrics = []
     system_metrics = []
     gpu = mock.Mock(last_raw_output=None)
     npu = mock.Mock(last_raw_output=None)
+
+    @staticmethod
+    def lifecycle():
+        return {
+            "requested_interval_ms": 500,
+            "request_start_ns": None,
+            "request_end_ns": None,
+            "boundaries": {},
+            "streams": {"gpu": {}, "npu": {}, "system": {}},
+            "errors": [],
+        }
+
+
+@dataclass
+class _WorkerMetric:
+    timestamp_ns: int
+    interval_ns: int | None
+    attributes: dict
+
+
+class _BlockingCollector:
+    def __init__(self):
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.calls = 0
+
+    def sample(self):
+        self.calls += 1
+        self.started.set()
+        if not self.release.wait(timeout=2):
+            raise TimeoutError("test collector release timed out")
+        return [_WorkerMetric(100 + self.calls, 10, {})]
+
+
+class _SequencedCollector:
+    def __init__(self):
+        self.calls = 0
+        self.started = [threading.Event() for _ in range(3)]
+        self.release = [threading.Event() for _ in range(3)]
+
+    def sample(self):
+        call = self.calls
+        self.calls += 1
+        if call < len(self.started):
+            self.started[call].set()
+            if not self.release[call].wait(timeout=2):
+                raise TimeoutError("test collector release timed out")
+        return [_WorkerMetric(100 + self.calls, 10, {})]
 
 
 def _config(root: Path):
@@ -129,6 +214,125 @@ def _config(root: Path):
     path = root / "config.json"
     path.write_text(json.dumps(value), encoding="utf-8")
     return load_hybrid_runner_config(path)
+
+
+class TelemetryWorkerTests(unittest.TestCase):
+    def test_boundary_result_survives_later_background_sample(self) -> None:
+        collector = _SequencedCollector()
+        target = []
+        worker = _TelemetryWorker(
+            name="device",
+            collector=collector,
+            target=target,
+            interval_sec=0,
+            errors=[],
+        )
+        worker.start()
+        self.assertTrue(collector.started[0].wait(timeout=1))
+        ticket = worker.request("baseline")
+        collector.release[0].set()
+        self.assertTrue(collector.started[1].wait(timeout=1))
+        collector.release[1].set()
+        self.assertTrue(collector.started[2].wait(timeout=1))
+
+        sample = worker.wait(ticket, timeout_sec=1)
+
+        collector.release[2].set()
+        worker.stop(timeout_sec=1)
+        self.assertEqual(sample["role"], "baseline")
+        self.assertEqual(
+            [item.attributes["telemetry.sample_role"] for item in target[:2]],
+            ["baseline", "background"],
+        )
+
+    def test_final_boundary_joins_inflight_poll_without_duplicate_query(self) -> None:
+        collector = _BlockingCollector()
+        target = []
+        errors = []
+        worker = _TelemetryWorker(
+            name="device",
+            collector=collector,
+            target=target,
+            interval_sec=60,
+            errors=errors,
+        )
+        worker.start()
+        self.assertTrue(collector.started.wait(timeout=1))
+        ticket = worker.request("final")
+        collector.release.set()
+        sample = worker.wait(ticket, timeout_sec=1)
+        worker.stop(timeout_sec=1)
+
+        self.assertEqual(collector.calls, 1)
+        self.assertEqual(sample["role"], "final")
+        self.assertEqual(target[0].attributes["telemetry.sample_role"], "final")
+        self.assertEqual(errors, [])
+
+    def test_final_boundary_is_the_terminal_sample(self) -> None:
+        collector = _SequencedCollector()
+        worker = _TelemetryWorker(
+            name="device",
+            collector=collector,
+            target=[],
+            interval_sec=0,
+            errors=[],
+        )
+        worker.start()
+        self.assertTrue(collector.started[0].wait(timeout=1))
+        ticket = worker.request("final")
+        collector.release[0].set()
+
+        sample = worker.wait(ticket, timeout_sec=1)
+
+        self.assertEqual(sample["role"], "final")
+        self.assertFalse(collector.started[1].wait(timeout=0.05))
+        with self.assertRaisesRegex(HybridRunnerError, "not running"):
+            worker.request("final")
+        worker.stop(timeout_sec=1)
+        self.assertEqual(collector.calls, 1)
+
+    def test_sampler_exception_is_terminal_and_stop_is_idempotent(self) -> None:
+        class BrokenCollector:
+            calls = 0
+
+            def sample(self):
+                self.calls += 1
+                raise RuntimeError("sample failed")
+
+        collector = BrokenCollector()
+        errors = []
+        worker = _TelemetryWorker(
+            name="broken",
+            collector=collector,
+            target=[],
+            interval_sec=0.001,
+            errors=errors,
+        )
+        worker.start()
+        worker.thread.join(timeout=1)
+        worker.stop(timeout_sec=1)
+        worker.stop(timeout_sec=1)
+
+        self.assertEqual(collector.calls, 1)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("sample failed", errors[0])
+
+
+class ShutdownIntegrityTests(unittest.TestCase):
+    def test_known_nixl_segfault_is_diagnostic_not_success(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            layout = _Layout(Path(directory), "run")
+            raw = layout.coordinator / "raw"
+            raw.mkdir(parents=True)
+            (raw / "decode.stderr.log").write_text(
+                "Segfault encountered in rtnl_tc_unregister\n",
+                encoding="utf-8",
+            )
+            result = _shutdown_integrity(layout, {})
+
+        self.assertEqual(result["status"], "invalid")
+        self.assertEqual(result["reason"], "native_sigsegv_rtnl_tc_unregister")
+        self.assertTrue(result["demo_only"])
 
 
 class HybridRunnerLifecycleTests(unittest.TestCase):
@@ -163,6 +367,32 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
             self.assertFalse(by_name["prefill"].stopped)
             self.assertFalse(by_name["proxy"].started)
             self.assertTrue(_Telemetry.instances[0].stopped)
+
+    def test_server_pythonpath_uses_configured_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = _config(root)
+            runner = HybridRunner(
+                config, run_root=root / "runs", run_id="pythonpath",
+                profile_mode="monitor", process_factory=_Process,
+            )
+            runner._processes(
+                {
+                    "prefill": ("prefill",),
+                    "decode": ("decode",),
+                    "proxy": ("proxy",),
+                }
+            )
+            by_name = {item.name: item for item in _Process.instances}
+            self.assertEqual(
+                by_name["prefill"].spec.env_overrides["PYTHONPATH"],
+                str(config.prefill.pythonpath),
+            )
+            self.assertEqual(
+                by_name["decode"].spec.env_overrides["PYTHONPATH"],
+                str(config.decode.pythonpath),
+            )
+            self.assertIn("PYTHONPATH", by_name["decode"].spec.env_allowlist)
 
     def test_keyboard_interrupt_runs_reverse_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -300,6 +530,17 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
             self.assertTrue(any("client close" in error for error in result.errors))
             self.assertEqual(profile_call.call_count, 2)
             write_sources.assert_called_once()
+            telemetry = _Telemetry.instances[0]
+            self.assertEqual(telemetry.boundary_roles, ["baseline", "final"])
+            self.assertEqual(telemetry.request_window[1], 30)
+            self.assertLess(
+                telemetry.actions.index("request-window"),
+                telemetry.actions.index("capture:final"),
+            )
+            self.assertLess(
+                telemetry.actions.index("capture:final"),
+                telemetry.actions.index("stop"),
+            )
 
     def test_source_clock_metadata_is_schema_namespaced(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -336,6 +577,53 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                 self.assertEqual(
                     clock.attributes["clock.source"], "time.monotonic_ns"
                 )
+
+    def test_marker_failure_preserves_request_and_telemetry_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = root / "runs"
+            runner = HybridRunner(
+                _config(root), run_root=runs, run_id="marker-failure",
+                profile_mode="monitor", process_factory=_Process,
+            )
+            RunPaths(runs, "marker-failure-gpu").create()
+            RunPaths(runs, "marker-failure-npu").create()
+            marker_root = runs / "marker-failure-coordinator/raw/runtime_markers"
+            marker_root.mkdir(parents=True)
+            (marker_root / "proxy-markers.jsonl").write_text(
+                "", encoding="utf-8"
+            )
+            observation = CompletionObservation(
+                request_id="request-1", received_ns=10,
+                token_timestamps_ns=(20,), done_ns=30,
+                input_tokens=5, output_tokens=1, total_tokens=6,
+                http_status=200,
+            )
+
+            with mock.patch.object(
+                runner,
+                "_marker_events",
+                side_effect=HybridRunnerError("marker validation failed"),
+            ), self.assertRaisesRegex(HybridRunnerError, "marker validation failed"):
+                runner._write_sources(
+                    warmups=[], observations=[observation],
+                    telemetry=_WrittenTelemetry(), profile=None, errors=[],
+                )
+
+            self.assertTrue(
+                (runs / "marker-failure-coordinator/requests.json").is_file()
+            )
+            self.assertTrue(
+                (runs / "marker-failure-coordinator/telemetry_lifecycle.json").is_file()
+            )
+            for role in ("gpu", "npu"):
+                bundle = runs / f"marker-failure-{role}"
+                self.assertTrue((bundle / "metrics/metrics.jsonl").is_file())
+                self.assertTrue(
+                    (bundle / "summary/telemetry_lifecycle.json").is_file()
+                )
+                manifest = read_json(bundle / "manifest.json")
+                self.assertIs(manifest.status, RunStatus.FAILED)
 
     def test_torch_artifact_uses_native_converter_format_contract(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
