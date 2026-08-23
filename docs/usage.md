@@ -349,8 +349,9 @@ Trace Attribute schema `1.1.0`에서는 KPI마다 별도의 `availability` 행�
 않습니다. 숫자 value는 측정 가능한 값이고, 같은 value key의 문자열
 `not_available`은 측정 근거가 없다는 뜻입니다. 따라서 실제 정수 `0`과
 `not_available`은 서로 다른 상태입니다. 필요한 unavailable reason은 함께
-표시합니다. Prefill/Decode resource는 canonical 계산 계층에 해당 stage window가
-이미 존재할 때만 기록하며, capture 전체 값을 단계 값으로 복사하지 않습니다.
+표시합니다. Prefill, Transfer, Decode resource는 canonical 계산 계층에 해당
+marker window가 존재할 때만 기록하며, capture 전체 값을 단계 값으로 복사하지
+않습니다.
 Capture 전체 resource aggregate는 `vllm_profiler.resource.capture.*`로 분리합니다.
 요청 E2E는 `vllm_profiler.kpi.latency.e2e.*`, marker 기반 pipeline E2E는
 `vllm_profiler.pipeline.latency.e2e.*`로 분리하여 서로 덮어쓰지 않습니다.
@@ -406,6 +407,20 @@ Transfer 표에는 Handoff duration, Transfer setup duration, Transfer completio
 wait, Decode scheduling wait이 값, availability, sample 수와 source marker와
 함께 표시됩니다. 값이 `0`이면 명시적인 완료 관찰이며, `not_available`은 marker
 capability 또는 유효한 pair가 없다는 뜻입니다.
+
+Resource 표는 Prefill, Transfer, Decode와 capture 전체를 분리합니다. Utilization과
+power는 첫 synthetic interval을 제외한 trailing interval
+`(timestamp_ns - interval_ns, timestamp_ns]`과 marker window의 overlap으로
+time-weighted mean을 계산합니다. 완전한 interval coverage가 없으면 값은
+`not_available`입니다. Memory는 point-in-time gauge이므로 stage 안에 실제
+timestamp가 있는 sample만 peak에 사용하며 hold-last나 보간을 하지 않습니다.
+Sampling interval이 stage보다 길면 계산 가능한 값에도
+`value is not stage-exclusive` warning이 붙습니다.
+
+실제 stage 값을 수집하려면 measured request 전 baseline sample, 처리 중 background
+sample, response 후 collector 종료 전 final sample이 모두 필요합니다. Sampling
+interval은 분석하려는 가장 짧은 stage보다 충분히 짧아야 합니다. 이 조건이 없는
+기존 run은 가까운 sample이나 capture 평균으로 채우지 않습니다.
 
 여러 Overview를 비교할 수 있습니다.
 

@@ -6,6 +6,7 @@ import json
 import math
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 
 from ..schema import Availability
 from ..schema.metric_catalog import METRIC_CATALOG
@@ -14,6 +15,43 @@ from ..schema.records import MetricSample
 
 class ResourceCalculationError(ValueError):
     """Raised when a normalized resource stream violates its contract."""
+
+
+@dataclass(frozen=True, slots=True)
+class StageWindow:
+    """One marker-proven canonical interval used for resource aggregation."""
+
+    phase: str
+    window: str
+    request_id: str | None
+    start_ns: int | None
+    end_ns: int | None
+    clock_domain_id: str | None
+    host_ids: tuple[str, ...]
+    marker_event_ids: tuple[str, ...]
+    unavailable_reason: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return (
+            self.unavailable_reason is None
+            and self.start_ns is not None
+            and self.end_ns is not None
+            and self.end_ns > self.start_ns
+            and self.clock_domain_id is not None
+            and self.request_id is not None
+        )
+
+
+_INTERVAL_RESOURCE_METRICS = frozenset(
+    {
+        "resource.cpu.utilization",
+        "resource.gpu.utilization",
+        "resource.gpu.power",
+        "resource.npu.utilization",
+        "resource.npu.power",
+    }
+)
 
 
 def _enum_value(value: object) -> object:
@@ -308,8 +346,435 @@ def _time_weighted_mean(
     return numerator / denominator, None, segment_count
 
 
-def summarize_resources(loaded: object) -> list[dict[str, object]]:
-    """Group and aggregate every official ``resource.*`` metric stream."""
+def _stage_scope(
+    sample: MetricSample,
+    *,
+    dimensions: str,
+    window: StageWindow,
+) -> dict[str, object]:
+    scope = _scope(sample, dimensions=dimensions)
+    scope.update(
+        {
+            "request_id": window.request_id,
+            "phase": window.phase,
+            "window": window.window,
+        }
+    )
+    return scope
+
+
+def _stage_source(
+    metric_name: str,
+    samples: Sequence[MetricSample],
+    *,
+    contributing_samples: Sequence[MetricSample],
+    dimensions: str,
+    window: StageWindow,
+    covered_duration_ns: int | None,
+    coverage_ratio: float | None,
+    max_interval_ns: int | None,
+    method: str,
+) -> dict[str, object]:
+    source = _source(metric_name, samples, dimensions=dimensions)
+    details = source["details"]
+    assert isinstance(details, dict)
+    details.update(
+        {
+            "aggregation_scope": "canonical_stage_window",
+            "stage": window.phase,
+            "window": window.window,
+            "stage_start_ns": window.start_ns,
+            "stage_end_ns": window.end_ns,
+            "stage_duration_ns": (
+                window.end_ns - window.start_ns
+                if window.start_ns is not None and window.end_ns is not None
+                else None
+            ),
+            "covered_duration_ns": covered_duration_ns,
+            "coverage_ratio": coverage_ratio,
+            "max_interval_ns": max_interval_ns,
+            "coverage_method": method,
+            "source_marker_event_ids": list(window.marker_event_ids),
+            "stream_first_timestamp_ns": (
+                min(sample.timestamp_ns for sample in samples) if samples else None
+            ),
+            "stream_last_timestamp_ns": (
+                max(sample.timestamp_ns for sample in samples) if samples else None
+            ),
+            "contributing_sample_timestamps_ns": [
+                sample.timestamp_ns for sample in contributing_samples
+            ],
+        }
+    )
+    return source
+
+
+def _stage_aggregates(
+    *,
+    metric_name: str,
+    unit: str,
+    values: Sequence[int | float],
+    weighted_mean: float | None,
+    available: bool,
+    reason: str | None,
+    source: dict[str, object],
+    scope: dict[str, object],
+    clock: dict[str, object],
+    warnings: Sequence[str],
+) -> list[dict[str, object]]:
+    sample_count = len(values)
+    statistics: dict[str, tuple[int | float | None, str, str]] = {
+        "min": (
+            min(values) if available else None,
+            "minimum_v1",
+            "min(valid values overlapping the canonical stage window)",
+        ),
+        "max": (
+            max(values) if available else None,
+            "maximum_v1",
+            "max(valid values overlapping the canonical stage window)",
+        ),
+        "mean": (
+            weighted_mean if available else None,
+            "trailing_interval_overlap_weighted_mean_v1",
+            (
+                "sum(value[i] * overlap_ns[i]) / sum(overlap_ns[i]) over "
+                "the canonical stage window"
+            ),
+        ),
+        "p50": (
+            percentile_r7(values, 0.50) if available else None,
+            "percentile_r7_v1",
+            "Hyndman-Fan type 7 percentile of valid stage samples, p=0.50",
+        ),
+        "p95": (
+            percentile_r7(values, 0.95) if available else None,
+            "percentile_r7_v1",
+            "Hyndman-Fan type 7 percentile of valid stage samples, p=0.95",
+        ),
+        "time_weighted_mean": (
+            weighted_mean if available else None,
+            "trailing_interval_time_weighted_mean_v1",
+            (
+                "sum(value[i] * overlap_ns[i]) / sum(overlap_ns[i]) over "
+                "the canonical stage window"
+            ),
+        ),
+    }
+    return [
+        _aggregate(
+            name=f"{metric_name}.{suffix}",
+            canonical_unit=unit,
+            value=value,
+            reason=None if available else reason,
+            method=method,
+            sample_count=sample_count,
+            source=source,
+            scope=scope,
+            clock=clock,
+            formula=formula,
+            warnings=warnings,
+        )
+        for suffix, (value, method, formula) in statistics.items()
+    ]
+
+
+def _point_stage_aggregates(
+    *,
+    metric_name: str,
+    unit: str,
+    values: Sequence[int | float],
+    available: bool,
+    reason: str | None,
+    source: dict[str, object],
+    scope: dict[str, object],
+    clock: dict[str, object],
+    warnings: Sequence[str],
+) -> list[dict[str, object]]:
+    sample_count = len(values)
+    arithmetic = math.fsum(values) / len(values) if available else None
+    statistics: dict[str, tuple[int | float | None, str, str]] = {
+        "min": (
+            min(values) if available else None,
+            "minimum_v1",
+            "min(point samples timestamped inside the canonical stage window)",
+        ),
+        "max": (
+            max(values) if available else None,
+            "maximum_v1",
+            "max(point samples timestamped inside the canonical stage window)",
+        ),
+        "mean": (
+            arithmetic,
+            "arithmetic_mean_v1",
+            "sum(valid point samples inside the stage) / valid sample count",
+        ),
+        "p50": (
+            percentile_r7(values, 0.50) if available else None,
+            "percentile_r7_v1",
+            "Hyndman-Fan type 7 percentile of stage point samples, p=0.50",
+        ),
+        "p95": (
+            percentile_r7(values, 0.95) if available else None,
+            "percentile_r7_v1",
+            "Hyndman-Fan type 7 percentile of stage point samples, p=0.95",
+        ),
+        "time_weighted_mean": (
+            None,
+            "trailing_interval_time_weighted_mean_v1",
+            "not applicable to a point-in-time gauge without interpolation",
+        ),
+    }
+    result: list[dict[str, object]] = []
+    for suffix, (value, method, formula) in statistics.items():
+        suffix_available = available and suffix != "time_weighted_mean"
+        result.append(
+            _aggregate(
+                name=f"{metric_name}.{suffix}",
+                canonical_unit=unit,
+                value=value if suffix_available else None,
+                reason=(
+                    None
+                    if suffix_available
+                    else (
+                        "point-in-time gauge does not support interval weighting"
+                        if available and suffix == "time_weighted_mean"
+                        else reason
+                    )
+                ),
+                method=method,
+                sample_count=sample_count if suffix_available else 0,
+                source=source,
+                scope=scope,
+                clock=clock,
+                formula=formula,
+                warnings=warnings,
+            )
+        )
+    return result
+
+
+def _stage_summary(
+    loaded: object,
+    *,
+    metric_name: str,
+    samples: Sequence[MetricSample],
+    dimensions: str,
+    window: StageWindow,
+) -> dict[str, object]:
+    unit = METRIC_CATALOG[metric_name].unit
+    scope = _stage_scope(samples[0], dimensions=dimensions, window=window)
+    clock = _clock_evidence(loaded, samples)
+    warnings: list[str] = []
+    reason: str | None = None
+    selected: list[MetricSample] = []
+    values: list[int | float] = []
+    covered_duration_ns: int | None = None
+    coverage_ratio: float | None = None
+    max_interval_ns: int | None = None
+    weighted_mean: float | None = None
+    interval_metric = metric_name in _INTERVAL_RESOURCE_METRICS
+
+    if not window.valid:
+        reason = "no valid canonical stage window"
+        if window.unavailable_reason:
+            warnings.append(window.unavailable_reason)
+    elif clock["alignment_status"] != "aligned" or window.clock_domain_id not in clock["domain_ids"]:
+        reason = "no verified common clock for stage resource aggregation"
+    elif window.host_ids and samples[0].host_id not in window.host_ids:
+        reason = "no verified same-host marker window for resource stream"
+    else:
+        assert window.start_ns is not None and window.end_ns is not None
+        duration_ns = window.end_ns - window.start_ns
+        timestamps = [sample.timestamp_ns for sample in samples]
+        monotonic = all(
+            current > previous
+            for previous, current in zip(timestamps, timestamps[1:])
+        )
+        if not monotonic:
+            reason = "partial stage telemetry coverage"
+            warnings.append("resource stream timestamps are not strictly increasing")
+        elif interval_metric:
+            numerator = 0.0
+            available_segments: list[tuple[int, int]] = []
+            overlap_seen = False
+            interval_problem = False
+            for index, sample in enumerate(samples):
+                if index == 0:
+                    continue
+                previous = samples[index - 1]
+                delta = sample.timestamp_ns - previous.timestamp_ns
+                interval = sample.interval_ns
+                implied_start = previous.timestamp_ns
+                implied_overlap = max(
+                    0,
+                    min(sample.timestamp_ns, window.end_ns)
+                    - max(implied_start, window.start_ns),
+                )
+                if (
+                    isinstance(interval, bool)
+                    or not isinstance(interval, int)
+                    or interval <= 0
+                    or interval != delta
+                ):
+                    if implied_overlap > 0:
+                        overlap_seen = True
+                        interval_problem = True
+                    continue
+                sample_start = sample.timestamp_ns - interval
+                overlap_start = max(sample_start, window.start_ns)
+                overlap_end = min(sample.timestamp_ns, window.end_ns)
+                overlap_ns = max(0, overlap_end - overlap_start)
+                if overlap_ns <= 0:
+                    continue
+                overlap_seen = True
+                selected.append(sample)
+                max_interval_ns = max(max_interval_ns or 0, interval)
+                if _enum_value(sample.availability) != Availability.AVAILABLE.value:
+                    continue
+                value = _finite_number(
+                    sample.value, field=f"{metric_name} stage value"
+                )
+                values.append(value)
+                numerator += value * overlap_ns
+                available_segments.append((overlap_start, overlap_end))
+
+            if available_segments:
+                available_segments.sort()
+                union_start, union_end = available_segments[0]
+                covered_duration_ns = 0
+                overlap_problem = False
+                for start_ns, end_ns in available_segments[1:]:
+                    if start_ns < union_end:
+                        overlap_problem = True
+                    if start_ns <= union_end:
+                        union_end = max(union_end, end_ns)
+                    else:
+                        covered_duration_ns += union_end - union_start
+                        union_start, union_end = start_ns, end_ns
+                covered_duration_ns += union_end - union_start
+                if overlap_problem:
+                    interval_problem = True
+                    warnings.append("resource sample intervals overlap")
+            else:
+                covered_duration_ns = 0
+            coverage_ratio = covered_duration_ns / duration_ns
+            if max_interval_ns is not None and max_interval_ns > duration_ns:
+                warnings.append(
+                    "sampling interval exceeds stage duration; value is not stage-exclusive"
+                )
+            if interval_problem:
+                reason = "partial stage telemetry coverage"
+                warnings.append("resource intervals do not exactly tile timestamps")
+            elif not overlap_seen:
+                reason = "no resource sample overlaps canonical stage window"
+            elif covered_duration_ns != duration_ns:
+                reason = "partial stage telemetry coverage"
+            elif not values:
+                reason = "partial stage telemetry coverage"
+            else:
+                weighted_mean = numerator / covered_duration_ns
+        else:
+            selected = [
+                sample
+                for sample in samples
+                if window.start_ns <= sample.timestamp_ns <= window.end_ns
+            ]
+            available_samples = [
+                sample
+                for sample in selected
+                if _enum_value(sample.availability) == Availability.AVAILABLE.value
+            ]
+            values = [
+                _finite_number(sample.value, field=f"{metric_name} stage value")
+                for sample in available_samples
+            ]
+            if not selected:
+                reason = "no resource sample overlaps canonical stage window"
+            elif len(available_samples) != len(selected):
+                reason = "partial stage telemetry coverage"
+            elif not values:
+                reason = "partial stage telemetry coverage"
+            coverage_ratio = None
+            covered_duration_ns = None
+            warnings.append(
+                "point-in-time gauge uses only samples timestamped inside the stage; no hold or interpolation"
+            )
+
+    available = reason is None
+    selected_timestamps = [sample.timestamp_ns for sample in selected]
+    source = _stage_source(
+        metric_name,
+        samples,
+        contributing_samples=selected,
+        dimensions=dimensions,
+        window=window,
+        covered_duration_ns=covered_duration_ns,
+        coverage_ratio=coverage_ratio,
+        max_interval_ns=max_interval_ns,
+        method=(
+            "trailing_interval_overlap_v1"
+            if interval_metric
+            else "point_timestamp_inside_stage_v1"
+        ),
+    )
+    if interval_metric:
+        aggregates = _stage_aggregates(
+            metric_name=metric_name,
+            unit=unit,
+            values=values,
+            weighted_mean=weighted_mean,
+            available=available,
+            reason=reason,
+            source=source,
+            scope=scope,
+            clock=clock,
+            warnings=tuple(sorted(set(warnings))),
+        )
+    else:
+        aggregates = _point_stage_aggregates(
+            metric_name=metric_name,
+            unit=unit,
+            values=values,
+            available=available,
+            reason=reason,
+            source=source,
+            scope=scope,
+            clock=clock,
+            warnings=tuple(sorted(set(warnings))),
+        )
+    total = len(selected)
+    available_count = sum(
+        _enum_value(sample.availability) == Availability.AVAILABLE.value
+        for sample in selected
+    )
+    return {
+        "metric_name": metric_name,
+        "canonical_unit": unit,
+        "scope": scope,
+        "clock": clock,
+        "total_sample_count": total,
+        "available_sample_count": available_count,
+        "unavailable_sample_count": total - available_count,
+        "availability_ratio": available_count / total if total else 0.0,
+        "first_timestamp_ns": min(selected_timestamps) if selected_timestamps else None,
+        "last_timestamp_ns": max(selected_timestamps) if selected_timestamps else None,
+        "coverage_ns": (
+            max(selected_timestamps) - min(selected_timestamps)
+            if selected_timestamps
+            else None
+        ),
+        "aggregates": aggregates,
+        "quality_warnings": sorted(set(warnings)),
+    }
+
+
+def summarize_resources(
+    loaded: object,
+    *,
+    stage_windows: Sequence[StageWindow] = (),
+) -> list[dict[str, object]]:
+    """Aggregate capture-wide streams and marker-proven stage windows."""
 
     metrics = tuple(getattr(loaded, "metrics", ()))
     groups: dict[
@@ -486,11 +951,24 @@ def summarize_resources(loaded: object) -> list[dict[str, object]]:
                 ),
             }
         )
+        if scope["phase"] is None and scope["window"] is None:
+            raw_stream = tuple(groups[key])
+            for window in stage_windows:
+                summaries.append(
+                    _stage_summary(
+                        loaded,
+                        metric_name=metric_name,
+                        samples=raw_stream,
+                        dimensions=dimensions,
+                        window=window,
+                    )
+                )
     return summaries
 
 
 __all__ = [
     "ResourceCalculationError",
+    "StageWindow",
     "percentile_r7",
     "summarize_resources",
 ]

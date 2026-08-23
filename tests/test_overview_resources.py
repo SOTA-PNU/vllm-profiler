@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from perfetto_hetero_profiler.overview.resources import (
     ResourceCalculationError,
+    StageWindow,
     percentile_r7,
     summarize_resources,
 )
@@ -77,6 +78,27 @@ def _loaded(metrics: list[MetricSample]) -> SimpleNamespace:
 def _aggregate(summary: dict[str, object], suffix: str) -> dict[str, object]:
     return next(
         item for item in summary["aggregates"] if item["name"].endswith(suffix)
+    )
+
+
+def _window(start: int = 0, end: int = 20) -> StageWindow:
+    return StageWindow(
+        phase="prefill",
+        window="prefill",
+        request_id="request-0",
+        start_ns=start,
+        end_ns=end,
+        clock_domain_id=CLOCK_ID,
+        host_ids=("host-0",),
+        marker_event_ids=("start-event", "end-event"),
+    )
+
+
+def _stage_summary(summaries: list[dict[str, object]]) -> dict[str, object]:
+    return next(
+        summary
+        for summary in summaries
+        if summary["scope"]["window"] == "prefill"
     )
 
 
@@ -332,6 +354,160 @@ class OverviewResourceTests(unittest.TestCase):
         self.assertIsNone(summary["clock"]["alignment_method"])
         self.assertIsNone(summary["clock"]["offset_ns"])
         self.assertIsNone(summary["clock"]["uncertainty_ns"])
+
+    def test_stage_interval_full_coverage_uses_overlap_weighted_mean(self) -> None:
+        metrics = [
+            _resource("resource.gpu.utilization", 1, 0, interval_ns=999,
+                      device_type=DeviceType.GPU, device_id="gpu-0"),
+            _resource("resource.gpu.utilization", 10, 10, interval_ns=10,
+                      device_type=DeviceType.GPU, device_id="gpu-0"),
+            _resource("resource.gpu.utilization", 20, 20, interval_ns=10,
+                      device_type=DeviceType.GPU, device_id="gpu-0"),
+        ]
+        summary = _stage_summary(
+            summarize_resources(_loaded(metrics), stage_windows=(_window(),))
+        )
+        mean = _aggregate(summary, ".mean")
+        self.assertEqual(mean["value"], 15)
+        self.assertEqual(mean["aggregation_method"],
+                         "trailing_interval_overlap_weighted_mean_v1")
+        self.assertEqual(_aggregate(summary, ".max")["value"], 20)
+        self.assertEqual(mean["sample_count"], 2)
+        details = mean["sources"][0]["details"]
+        self.assertEqual(details["covered_duration_ns"], 20)
+        self.assertEqual(details["coverage_ratio"], 1.0)
+        self.assertEqual(details["source_marker_event_ids"],
+                         ["start-event", "end-event"])
+
+    def test_stage_interval_clips_boundaries_and_excludes_first_synthetic(self) -> None:
+        metrics = [
+            _resource("resource.cpu.utilization", 99, 0, interval_ns=999),
+            _resource("resource.cpu.utilization", 10, 10, interval_ns=10),
+            _resource("resource.cpu.utilization", 20, 20, interval_ns=10),
+        ]
+        clipped = _stage_summary(
+            summarize_resources(
+                _loaded(metrics), stage_windows=(_window(5, 15),)
+            )
+        )
+        self.assertEqual(_aggregate(clipped, ".mean")["value"], 15)
+        boundary = _stage_summary(
+            summarize_resources(
+                _loaded(metrics), stage_windows=(_window(10, 20),)
+            )
+        )
+        self.assertEqual(_aggregate(boundary, ".mean")["value"], 20)
+        self.assertEqual(_aggregate(boundary, ".mean")["sample_count"], 1)
+
+    def test_stage_partial_no_overlap_and_unavailable_are_not_fabricated(self) -> None:
+        base = [
+            _resource("resource.cpu.utilization", 1, 0, interval_ns=999),
+            _resource("resource.cpu.utilization", 10, 10, interval_ns=10),
+            _resource("resource.cpu.utilization", 20, 20, interval_ns=10),
+        ]
+        partial = _stage_summary(
+            summarize_resources(
+                _loaded(base), stage_windows=(_window(0, 30),)
+            )
+        )
+        self.assertEqual(_aggregate(partial, ".mean")["availability"],
+                         "not_available")
+        self.assertEqual(_aggregate(partial, ".mean")["unavailable_reason"],
+                         "partial stage telemetry coverage")
+        none = _stage_summary(
+            summarize_resources(
+                _loaded(base), stage_windows=(_window(30, 40),)
+            )
+        )
+        self.assertEqual(_aggregate(none, ".mean")["unavailable_reason"],
+                         "no resource sample overlaps canonical stage window")
+        unavailable = list(base)
+        unavailable[2] = replace(
+            unavailable[2], availability=Availability.NOT_AVAILABLE,
+            value=None, reason="collector error",
+        )
+        invalid = _stage_summary(
+            summarize_resources(
+                _loaded(unavailable), stage_windows=(_window(),)
+            )
+        )
+        self.assertEqual(_aggregate(invalid, ".mean")["unavailable_reason"],
+                         "partial stage telemetry coverage")
+
+    def test_stage_rejects_nonmonotonic_and_inconsistent_intervals(self) -> None:
+        ordered = [
+            _resource("resource.cpu.utilization", 1, 0, interval_ns=999),
+            _resource("resource.cpu.utilization", 10, 10, interval_ns=10),
+            _resource("resource.cpu.utilization", 20, 20, interval_ns=10),
+        ]
+        nonmonotonic = [ordered[0], ordered[2], ordered[1]]
+        summary = _stage_summary(
+            summarize_resources(
+                _loaded(nonmonotonic), stage_windows=(_window(),)
+            )
+        )
+        self.assertEqual(_aggregate(summary, ".mean")["availability"],
+                         "not_available")
+        self.assertTrue(
+            any(
+                "not strictly increasing" in warning
+                for warning in summary["quality_warnings"]
+            )
+        )
+        inconsistent = list(ordered)
+        inconsistent[2] = replace(inconsistent[2], interval_ns=9)
+        summary = _stage_summary(
+            summarize_resources(
+                _loaded(inconsistent), stage_windows=(_window(),)
+            )
+        )
+        self.assertEqual(_aggregate(summary, ".mean")["unavailable_reason"],
+                         "partial stage telemetry coverage")
+
+    def test_stage_point_memory_uses_inside_timestamps_without_hold(self) -> None:
+        metrics = [
+            _resource("resource.system.memory_used", 100, 0, interval_ns=None),
+            _resource("resource.system.memory_used", 0, 10, interval_ns=10),
+            _resource("resource.system.memory_used", 300, 20, interval_ns=10),
+            _resource("resource.system.memory_used", 999, 30, interval_ns=10),
+        ]
+        summary = _stage_summary(
+            summarize_resources(
+                _loaded(metrics), stage_windows=(_window(10, 20),)
+            )
+        )
+        self.assertEqual(_aggregate(summary, ".max")["value"], 300)
+        self.assertEqual(_aggregate(summary, ".min")["value"], 0)
+        self.assertEqual(_aggregate(summary, ".time_weighted_mean")["availability"],
+                         "not_available")
+        self.assertIn("no hold or interpolation", summary["quality_warnings"][0])
+
+    def test_invalid_window_and_clock_or_host_mismatch_are_unavailable(self) -> None:
+        metric = _resource("resource.cpu.utilization", 1, 0, interval_ns=None)
+        invalid_window = replace(_window(), unavailable_reason="duplicate marker")
+        summary = _stage_summary(
+            summarize_resources(
+                _loaded([metric]), stage_windows=(invalid_window,)
+            )
+        )
+        self.assertEqual(_aggregate(summary, ".mean")["unavailable_reason"],
+                         "no valid canonical stage window")
+        wrong_clock = replace(_window(), clock_domain_id="other-clock")
+        summary = _stage_summary(
+            summarize_resources(
+                _loaded([metric]), stage_windows=(wrong_clock,)
+            )
+        )
+        self.assertEqual(_aggregate(summary, ".mean")["unavailable_reason"],
+                         "no verified common clock for stage resource aggregation")
+        wrong_host = replace(_window(), host_ids=("host-9",))
+        summary = _stage_summary(
+            summarize_resources(
+                _loaded([metric]), stage_windows=(wrong_host,)
+            )
+        )
+        self.assertEqual(_aggregate(summary, ".mean")["unavailable_reason"],
+                         "no verified same-host marker window for resource stream")
 
 
 if __name__ == "__main__":

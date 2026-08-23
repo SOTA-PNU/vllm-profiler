@@ -97,6 +97,15 @@ class PerfettoTraceAttributeTests(unittest.TestCase):
             "resource.prefill.gpu_0.utilization_peak",
             "resource.prefill.gpu_0.memory_peak",
             "resource.prefill.system_memory_peak",
+            "resource.transfer.cpu.utilization_mean",
+            "resource.transfer.cpu.utilization_peak",
+            "resource.transfer.gpu_0.utilization_mean",
+            "resource.transfer.gpu_0.utilization_peak",
+            "resource.transfer.gpu_0.memory_peak",
+            "resource.transfer.npu_0.utilization_mean",
+            "resource.transfer.npu_0.utilization_peak",
+            "resource.transfer.npu_0.memory_peak",
+            "resource.transfer.system_memory_peak",
             "resource.decode.cpu.utilization_mean",
             "resource.decode.cpu.utilization_peak",
             "resource.decode.npu_0.utilization_mean",
@@ -112,6 +121,13 @@ class PerfettoTraceAttributeTests(unittest.TestCase):
                 ),
                 base,
             )
+        for stage in ("prefill", "transfer", "decode"):
+            base = (
+                f"{TRACE_ATTRIBUTE_NAMESPACE}resource.{stage}."
+                "gpu_0.utilization_mean"
+            )
+            self.assertIn(f"{base}.coverage_milli_percent", values)
+            self.assertIn(f"{base}.max_interval_ns", values)
         exported = json.dumps(values, sort_keys=True)
         for forbidden in (
             "/home/",
@@ -234,6 +250,11 @@ class PerfettoTraceAttributeTests(unittest.TestCase):
             ),
         )
         calculated = copy.deepcopy(self.calculated)
+        calculated["resource_summaries"] = [
+            summary
+            for summary in calculated["resource_summaries"]
+            if summary.get("scope", {}).get("window") not in {"prefill", "decode"}
+        ]
         calculated["resource_summaries"].extend(
             (
                 {

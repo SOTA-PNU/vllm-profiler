@@ -577,6 +577,9 @@ def _emit_resource(
         _add(values, f"{base}.sample_count", 0)
         _add(values, f"{base}.aggregation", "not_available")
         _add(values, f"{base}.reason", "no canonical stage-window resource aggregate")
+        if stage is not None:
+            _add(values, f"{base}.coverage_milli_percent", Availability.NOT_AVAILABLE.value)
+            _add(values, f"{base}.max_interval_ns", Availability.NOT_AVAILABLE.value)
         return
     multiplier = 1_000 if unit in {"percent", "W"} else 1
     _emit_metric(
@@ -588,6 +591,37 @@ def _emit_resource(
         value_suffix=value_suffix,
         multiplier=multiplier,
     )
+    if stage is None:
+        return
+    sources = aggregate.get("sources")
+    details: Mapping[str, object] = {}
+    if isinstance(sources, list) and len(sources) == 1 and isinstance(sources[0], dict):
+        candidate = sources[0].get("details")
+        if isinstance(candidate, dict):
+            details = candidate
+    ratio = details.get("coverage_ratio")
+    if isinstance(ratio, (int, float)) and not isinstance(ratio, bool):
+        _add(
+            values,
+            f"{base}.coverage_milli_percent",
+            fixed_point_half_even(
+                ratio,
+                multiplier=100_000,
+                field=f"{base} coverage ratio",
+            ),
+        )
+    else:
+        _add(values, f"{base}.coverage_milli_percent", Availability.NOT_AVAILABLE.value)
+    maximum = details.get("max_interval_ns")
+    if isinstance(maximum, int) and not isinstance(maximum, bool) and maximum >= 0:
+        _add(values, f"{base}.max_interval_ns", maximum)
+    else:
+        _add(values, f"{base}.max_interval_ns", Availability.NOT_AVAILABLE.value)
+    warnings = aggregate.get("quality_warnings")
+    if isinstance(warnings, list) and warnings:
+        if any(not isinstance(item, str) or not item for item in warnings):
+            raise TraceAttributeExportError("resource quality warnings are invalid")
+        _add(values, f"{base}.warning", "; ".join(sorted(set(warnings))))
 
 
 def build_performance_trace_attributes(
@@ -690,59 +724,74 @@ def build_performance_trace_attributes(
             multiplier=multiplier,
         )
 
-    _emit_resource(
-        values, calculated, base="resource.prefill.cpu.utilization_mean",
-        stage="prefill", metric_name="resource.cpu.utilization", device_type=None,
-        device_id=None, statistic="mean", unit="percent",
-    )
-    _emit_resource(
-        values, calculated, base="resource.prefill.cpu.utilization_peak",
-        stage="prefill", metric_name="resource.cpu.utilization", device_type=None,
-        device_id=None, statistic="max", unit="percent",
-    )
-    _emit_resource(
-        values, calculated, base="resource.prefill.system_memory_peak",
-        stage="prefill", metric_name="resource.system.memory_used", device_type=None,
-        device_id=None, statistic="max", unit="bytes",
-    )
-    for physical, alias in sorted(aliases["gpu"].items(), key=lambda item: item[1]):
+    for stage in ("prefill", "transfer", "decode"):
         for suffix, statistic, metric_name, unit in (
-            ("utilization_mean", "mean", "resource.gpu.utilization", "percent"),
-            ("utilization_peak", "max", "resource.gpu.utilization", "percent"),
-            ("memory_peak", "max", "resource.gpu.memory_used", "bytes"),
+            ("utilization_mean", "mean", "resource.cpu.utilization", "percent"),
+            ("utilization_peak", "max", "resource.cpu.utilization", "percent"),
+            ("system_memory_peak", "max", "resource.system.memory_used", "bytes"),
         ):
             _emit_resource(
-                values, calculated, base=f"resource.prefill.{alias}.{suffix}",
-                stage="prefill", metric_name=metric_name, device_type="gpu",
-                device_id=physical, statistic=statistic, unit=unit,
+                values,
+                calculated,
+                base=(
+                    f"resource.{stage}.system_memory_peak"
+                    if suffix == "system_memory_peak"
+                    else f"resource.{stage}.cpu.{suffix}"
+                ),
+                stage=stage,
+                metric_name=metric_name,
+                device_type=None,
+                device_id=None,
+                statistic=statistic,
+                unit=unit,
             )
-
-    _emit_resource(
-        values, calculated, base="resource.decode.cpu.utilization_mean",
-        stage="decode", metric_name="resource.cpu.utilization", device_type=None,
-        device_id=None, statistic="mean", unit="percent",
-    )
-    _emit_resource(
-        values, calculated, base="resource.decode.cpu.utilization_peak",
-        stage="decode", metric_name="resource.cpu.utilization", device_type=None,
-        device_id=None, statistic="max", unit="percent",
-    )
-    _emit_resource(
-        values, calculated, base="resource.decode.system_memory_peak",
-        stage="decode", metric_name="resource.system.memory_used", device_type=None,
-        device_id=None, statistic="max", unit="bytes",
-    )
-    for physical, alias in sorted(aliases["npu"].items(), key=lambda item: item[1]):
-        for suffix, statistic, metric_name, unit in (
-            ("utilization_mean", "mean", "resource.npu.utilization", "percent"),
-            ("utilization_peak", "max", "resource.npu.utilization", "percent"),
-            ("memory_peak", "max", "resource.npu.memory_used", "bytes"),
-        ):
-            _emit_resource(
-                values, calculated, base=f"resource.decode.{alias}.{suffix}",
-                stage="decode", metric_name=metric_name, device_type="npu",
-                device_id=physical, statistic=statistic, unit=unit,
-            )
+        for device_type in ("gpu", "npu"):
+            for physical, alias in sorted(
+                aliases[device_type].items(), key=lambda item: item[1]
+            ):
+                for suffix, statistic, metric_name, unit in (
+                    (
+                        "utilization_mean",
+                        "mean",
+                        f"resource.{device_type}.utilization",
+                        "percent",
+                    ),
+                    (
+                        "utilization_peak",
+                        "max",
+                        f"resource.{device_type}.utilization",
+                        "percent",
+                    ),
+                    (
+                        "memory_peak",
+                        "max",
+                        f"resource.{device_type}.memory_used",
+                        "bytes",
+                    ),
+                    (
+                        "power_mean",
+                        "mean",
+                        f"resource.{device_type}.power",
+                        "W",
+                    ),
+                    (
+                        "power_peak",
+                        "max",
+                        f"resource.{device_type}.power",
+                        "W",
+                    ),
+                ):
+                    _emit_resource(
+                        values,
+                        calculated,
+                        base=f"resource.{stage}.{alias}.{suffix}",
+                        stage=stage,
+                        metric_name=metric_name,
+                        device_type=device_type,
+                        device_id=physical,
+                        statistic=statistic,
+                        unit=unit,
+                    )
 
     # Capture-wide aggregates are exported separately from stage-window values.
     # This preserves real telemetry without pretending a stage aggregate exists.

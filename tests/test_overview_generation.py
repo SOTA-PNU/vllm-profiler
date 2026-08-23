@@ -170,15 +170,15 @@ class OverviewRunModeGoldenTests(unittest.TestCase):
     _GOLDEN_SHA256 = {
         "gpu_only": (
             "fb374e6752ad45f69c375aa5da512ea6dc482d389791b30b3696494ccb7583a8",
-            "0a9f44e36c65c027fb8a4c716bfd96f25979c92634dfe4c4ff0a44f01f7227e3",
+            "930a7213c0cd9c8b447066d68788fcb5f7137225976a414dc7b5127d3471d9c3",
         ),
         "npu_only": (
             "945c972608355fe7dcc926e4493da9eb4ea028ce2766f6456d8b2e76d29ab9cc",
-            "a7a0ab770c69f1cab4594f31f6020e5d2cec911dd09bb9d8c607e2250ea823e9",
+            "f6edba6da521e6350234961b995066acdf7da9f062454b994740e4565ba0c346",
         ),
         "hybrid": (
             "365c5ae8ce946d0d3d152f4d92177f6875ffab8bfe08fd7f3c4979323c88cfea",
-            "e709998152b8bb546db62348d0e6063dedbc757a64de37f5b7f8287d16684c3d",
+            "dc016886569376208bee11b016ca0e830ed4c6514a1dc75988a389b515fbe193",
         ),
     }
 

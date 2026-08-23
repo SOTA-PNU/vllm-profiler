@@ -11,7 +11,7 @@ from pathlib import Path
 from ..schema import Availability
 from ..schema.metric_catalog import METRIC_CATALOG
 from ..schema.records import EventRecord, MetricSample
-from .resources import ResourceCalculationError, summarize_resources
+from .resources import ResourceCalculationError, StageWindow, summarize_resources
 
 
 class OverviewCalculationError(ValueError):
@@ -1176,6 +1176,74 @@ def _pipeline_latency(
     return result, pairs
 
 
+def _canonical_stage_windows(
+    loaded: object,
+    pipeline: Sequence[dict[str, object]],
+    pairs: dict[str, tuple[EventRecord, EventRecord]],
+) -> tuple[StageWindow, ...]:
+    """Build the three required windows from the already-validated marker join."""
+
+    by_name = {str(item.get("name")): item for item in pipeline}
+    specifications = (
+        ("prefill", "latency.prefill", "latency.prefill"),
+        ("transfer", "latency.kv_export", "latency.kv_transform"),
+        ("decode", "latency.decode", "latency.decode"),
+    )
+    windows: list[StageWindow] = []
+    for stage, start_pair_name, end_pair_name in specifications:
+        start_pair = pairs.get(start_pair_name)
+        end_pair = pairs.get(end_pair_name)
+        start_kpi = by_name.get(start_pair_name)
+        end_kpi = by_name.get(end_pair_name)
+        reason: str | None = None
+        if start_pair is None or end_pair is None:
+            reason = "no valid canonical stage window"
+        elif (
+            start_kpi is None
+            or end_kpi is None
+            or start_kpi.get("availability") != Availability.AVAILABLE.value
+            or end_kpi.get("availability") != Availability.AVAILABLE.value
+        ):
+            reason = "no valid canonical stage window"
+
+        start = start_pair[0] if start_pair is not None else None
+        end = end_pair[1] if end_pair is not None else None
+        correlation: str | None = None
+        clock_domain: str | None = None
+        host_ids: tuple[str, ...] = ()
+        marker_ids: tuple[str, ...] = ()
+        if reason is None and start is not None and end is not None:
+            start_correlation = _correlation_id(start)
+            end_correlation = _correlation_id(end)
+            if start_correlation != end_correlation:
+                reason = "no valid canonical stage window"
+            elif start.clock_domain_id != end.clock_domain_id:
+                reason = "no valid canonical stage window"
+            elif end.timestamp_ns <= start.timestamp_ns:
+                reason = "no valid canonical stage window"
+            elif _clock(loaded, (start, end))["alignment_status"] != "aligned":
+                reason = "no valid canonical stage window"
+            else:
+                correlation = start_correlation
+                clock_domain = start.clock_domain_id
+                host_ids = tuple(sorted({start.host_id, end.host_id}))
+                marker_ids = (start.event_id, end.event_id)
+        windows.append(
+            StageWindow(
+                phase=stage,
+                window=stage,
+                request_id=correlation,
+                start_ns=start.timestamp_ns if start is not None else None,
+                end_ns=end.timestamp_ns if end is not None else None,
+                clock_domain_id=clock_domain,
+                host_ids=host_ids,
+                marker_event_ids=marker_ids,
+                unavailable_reason=reason,
+            )
+        )
+    return tuple(windows)
+
+
 def _throughput_and_tokens(
     loaded: object, metrics: Sequence[MetricSample]
 ) -> list[dict[str, object]]:
@@ -1798,10 +1866,11 @@ def calculate_overview_kpis(loaded: object) -> dict[str, object]:
     events = tuple(getattr(loaded, "events", ()))
     request_facing = _request_facing_latency(loaded, metrics)
     pipeline, pairs = _pipeline_latency(loaded, metrics, events)
+    stage_windows = _canonical_stage_windows(loaded, pipeline, pairs)
     throughput = _throughput_and_tokens(loaded, metrics)
     transfer = _transfer_kpis(loaded, pipeline, pairs)
     try:
-        resources = summarize_resources(loaded)
+        resources = summarize_resources(loaded, stage_windows=stage_windows)
     except ResourceCalculationError as exc:
         raise OverviewCalculationError(str(exc)) from exc
     return {

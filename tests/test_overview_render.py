@@ -29,7 +29,12 @@ _TEST_CSP = (
 
 
 def resource_summary(
-    run_id: str, *, device_type: str, device_id: str, value: float
+    run_id: str,
+    *,
+    device_type: str,
+    device_id: str,
+    value: float,
+    window: str = "capture",
 ) -> dict[str, object]:
     aggregate = kpi(
         f"resource.{device_type}.utilization.mean",
@@ -44,7 +49,8 @@ def resource_summary(
             "host_id": "host",
             "device_type": device_type,
             "device_id": device_id,
-            "window": "capture",
+            "phase": None if window == "capture" else window,
+            "window": window,
         }
     )
     return {
@@ -109,7 +115,22 @@ class OverviewHTMLTests(unittest.TestCase):
         self.assertEqual(validation["absolute_path_count"], 0)
 
     def test_required_sections_accessibility_and_responsive_table_are_present(self):
-        html = render_overview_html(self.rich_report())
+        source = self.rich_report()
+        source["resources"].extend(
+            resource_summary(
+                "run-overview",
+                device_type="gpu",
+                device_id="gpu-0",
+                value=stage_value,
+                window=window,
+            )
+            for window, stage_value in (
+                ("prefill", 10.0),
+                ("transfer", 20.0),
+                ("decode", 30.0),
+            )
+        )
+        html = render_overview_html(source)
         for heading in (
             "Run and workload information",
             "Status and data quality",
@@ -130,6 +151,14 @@ class OverviewHTMLTests(unittest.TestCase):
         self.assertIn("Status:", html)
         self.assertIn("overflow-x: auto", html)
         self.assertIn("@media (max-width: 640px)", html)
+        for caption in (
+            "Prefill resource",
+            "Transfer resource",
+            "Decode resource",
+            "Capture-wide resource",
+        ):
+            self.assertIn(f"<caption>{caption}</caption>", html)
+        self.assertIn("host · gpu · gpu-0 · transfer", html)
 
     def test_zero_and_unavailable_are_visibly_distinct(self):
         html = render_overview_html(self.rich_report())

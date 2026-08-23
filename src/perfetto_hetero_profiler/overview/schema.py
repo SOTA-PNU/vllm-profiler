@@ -98,6 +98,13 @@ _RESOURCE_AGGREGATIONS = {
     "p95": "percentile_r7_v1",
     "time_weighted_mean": "trailing_interval_time_weighted_mean_v1",
 }
+_INTERVAL_RESOURCE_METRICS = {
+    "resource.cpu.utilization",
+    "resource.gpu.utilization",
+    "resource.gpu.power",
+    "resource.npu.utilization",
+    "resource.npu.power",
+}
 _RUN_FIELDS = {
     "run_id",
     "mode",
@@ -776,6 +783,9 @@ def validate_resource_summary(
             )
     if not isinstance(summary.aggregates, tuple):
         _fail(f"{path}.aggregates", "must be an immutable tuple")
+    expected_aggregations = dict(_RESOURCE_AGGREGATIONS)
+    if summary.scope.window is not None and summary.metric_name in _INTERVAL_RESOURCE_METRICS:
+        expected_aggregations["mean"] = "trailing_interval_overlap_weighted_mean_v1"
     aggregate_contract: dict[str, str] = {}
     for index, aggregate in enumerate(summary.aggregates):
         validate_kpi(aggregate, f"{path}.aggregates[{index}]")
@@ -786,7 +796,7 @@ def validate_resource_summary(
                 "must use the resource metric name plus a statistic suffix",
             )
         suffix = aggregate.name[len(prefix) :]
-        expected_method = _RESOURCE_AGGREGATIONS.get(suffix)
+        expected_method = expected_aggregations.get(suffix)
         if expected_method is None or aggregate.aggregation_method != expected_method:
             _fail(
                 f"{path}.aggregates[{index}].aggregation_method",
@@ -804,7 +814,7 @@ def validate_resource_summary(
                 f"{path}.aggregates[{index}]",
                 "must retain the resource metric, unit, scope, and clock",
             )
-    if aggregate_contract != _RESOURCE_AGGREGATIONS:
+    if aggregate_contract != expected_aggregations:
         _fail(
             f"{path}.aggregates",
             f"must contain exactly {sorted(_RESOURCE_AGGREGATIONS)}",

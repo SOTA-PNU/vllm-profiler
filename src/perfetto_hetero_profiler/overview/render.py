@@ -387,12 +387,22 @@ def _report_models(report: Mapping[str, Any]) -> Sequence[Any]:
     return _sequence(report.get("models", report.get("model_identity", [])))
 
 
-def _resource_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
+def _resource_rows(
+    report: Mapping[str, Any],
+    *,
+    window: str | None,
+) -> list[tuple[str, ...]]:
     rows: list[tuple[str, ...]] = []
     for summary in _sequence(report.get("resources", [])):
         if not isinstance(summary, Mapping):
             raise OverviewRenderError("resource summaries must be objects")
         scope = _mapping(summary.get("scope"))
+        scope_window = scope.get("window")
+        if window is None:
+            if scope_window in {"prefill", "transfer", "decode"}:
+                continue
+        elif scope_window != window:
+            continue
         stream = " · ".join(
             str(value)
             for value in (
@@ -408,11 +418,6 @@ def _resource_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
             f"{summary.get('total_sample_count', 0)} total; "
             f"{summary.get('unavailable_sample_count', 0)} unavailable"
         )
-        coverage = (
-            f"{summary.get('first_timestamp_ns')} … "
-            f"{summary.get('last_timestamp_ns')} "
-            f"(coverage {summary.get('coverage_ns')} ns)"
-        )
         aggregates = _sequence(summary.get("aggregates", []))
         if not aggregates:
             rows.append(
@@ -420,14 +425,39 @@ def _resource_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
                     _text(summary.get("metric_name")),
                     _text(stream),
                     _text(sample_summary),
-                    _text(coverage),
+                    _text("No aggregate coverage evidence"),
                     _text("No aggregate"),
                     _text("Unavailable"),
+                    _text("No aggregate"),
                 )
             )
         for aggregate in aggregates:
             if not isinstance(aggregate, Mapping):
                 raise OverviewRenderError("resource aggregates must be objects")
+            coverage = (
+                f"{summary.get('first_timestamp_ns')} … "
+                f"{summary.get('last_timestamp_ns')} "
+                f"(stream span {summary.get('coverage_ns')} ns)"
+            )
+            sources = _sequence(aggregate.get("sources", []))
+            if sources and isinstance(sources[0], Mapping):
+                details = _mapping(sources[0].get("details"))
+                ratio = details.get("coverage_ratio")
+                if isinstance(ratio, (int, float)) and not isinstance(ratio, bool):
+                    coverage = (
+                        f"{ratio * 100:.3f}% · "
+                        f"{details.get('covered_duration_ns')} / "
+                        f"{details.get('stage_duration_ns')} ns · "
+                        f"max interval {details.get('max_interval_ns')} ns"
+                    )
+                elif details.get("coverage_method") == "point_timestamp_inside_stage_v1":
+                    coverage = (
+                        "Point samples inside stage; duration coverage is not applicable"
+                    )
+            warnings = list(_sequence(aggregate.get("quality_warnings", [])))
+            reason = aggregate.get("unavailable_reason")
+            if reason:
+                warnings.append(reason)
             rows.append(
                 (
                     _text(summary.get("metric_name")),
@@ -436,6 +466,7 @@ def _resource_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
                     _text(coverage),
                     _text(aggregate.get("aggregation_method")),
                     _kpi_value(aggregate),
+                    _text(warnings if warnings else "None recorded"),
                 )
             )
     return rows
@@ -665,24 +696,35 @@ def render_overview_html(report: Mapping[str, Any]) -> str:
         + "</section>"
         for heading_id, title, category, caption in section_specs
     )
-    resource_section = (
-        '<section aria-labelledby="resource-heading">'
-        '<h2 id="resource-heading">CPU, GPU, and NPU resources</h2>'
-        "<p>Streams remain separated by host, device, and declared window. "
-        "Unavailable samples are excluded from numeric aggregates.</p>"
-        + _table(
-            "Resource stream summaries",
+    resource_tables = "".join(
+        _table(
+            title,
             (
                 "Metric",
                 "Host / device / window",
                 "Samples",
-                "Timestamp coverage",
+                "Coverage",
                 "Aggregation",
                 "Value",
+                "Warning / unavailable reason",
             ),
-            _resource_rows(report),
-            empty_message="No resource stream was collected for this run.",
+            _resource_rows(report, window=window),
+            empty_message=f"No {title.lower()} is present for this run.",
         )
+        for title, window in (
+            ("Prefill resource", "prefill"),
+            ("Transfer resource", "transfer"),
+            ("Decode resource", "decode"),
+            ("Capture-wide resource", None),
+        )
+    )
+    resource_section = (
+        '<section aria-labelledby="resource-heading">'
+        '<h2 id="resource-heading">CPU, GPU, and NPU resources</h2>'
+        "<p>Stage values use canonical marker windows and remain separated by "
+        "host and device. Capture-wide values are shown separately and are never "
+        "copied into a stage. Missing coverage stays unavailable.</p>"
+        + resource_tables
         + "</section>"
     )
     interpretation = report.get("interpretation")
