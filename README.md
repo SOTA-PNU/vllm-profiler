@@ -103,7 +103,7 @@ hetero-profiler phase7 run \
 | 결과 | 설명 |
 | --- | --- |
 | `trace.pftrace` | 처리 단계와 전체 진단 정보를 함께 담는 Perfetto timeline |
-| `trace.request-focused.pftrace` | 처리 단계·token boundary·in-window native event만 담는 발표용 timeline |
+| `trace.request-focused.pftrace` | 처리 단계·token boundary·요청 구간 resource 표본·in-window native event를 담는 발표용 timeline |
 | `trace.rbln-native.pftrace` | canonical clock에 정렬되지 않은 RBLN native timeline |
 | `overview.json` | machine-readable KPI와 provenance |
 | `overview.html` | 브라우저에서 여는 self-contained 결과 리포트 |
@@ -118,9 +118,11 @@ Perfetto timeline의 `Heterogeneous LLM Processing` 그룹은 실제 marker pair
 관찰한 GPU Prefill, KV 처리·전송, NPU Decode, decode step과 sampling만
 표시합니다. E2E/TTFT/TPOT 같은 KPI, Data Quality와 clock 요약을 긴 slice나
 counter로 복제하지 않습니다. marker 사이의 근거 없는 간격에도 임의의 work/wait
-이름을 붙이지 않습니다. 전체 trace에는 Request lifecycle, resource telemetry,
-capture envelope와 native detail을 진단 정보로 유지하고, request-focused trace는
-이를 제외하되 원본 timestamp를 바꾸지 않습니다.
+이름을 붙이지 않습니다. 전체 trace에는 Request lifecycle, 전체 capture resource
+telemetry, capture envelope와 native detail을 진단 정보로 유지합니다.
+Request-focused trace는 canonical client request 경계에 근거해 request 전
+baseline, request와 겹치는 background, request 후 final resource 표본만 선택하며
+원본 timestamp나 값을 바꾸지 않습니다.
 
 `overview.html`은 Perfetto UI의 내장 Overview나 plugin이 아닙니다.
 `trace.pftrace`는 [Perfetto UI](https://ui.perfetto.dev/)에서 열고,
@@ -140,10 +142,18 @@ RBLN NPU에서 vLLM 기반 Hybrid workload를 수집하려면 별도
 - `merge hybrid`는 별도의 normalized source 병합 검증 명령이며 실제 workload
   runner가 아닙니다.
 - 상세 profiler는 한 run에 하나씩 수집합니다.
+- Resource의 단계별 aggregate는 검증된 marker window에서만 계산하며, 발표용
+  timeline의 counter 표본과 별개의 요약 값입니다.
 - Native profiler clock은 근거가 허용하는 범위에서만 정렬합니다. RBLN
   native trace는 canonical anchor가 없으면 별도 timeline으로 유지합니다.
 - HTML Overview는 독립 리포트이며 Perfetto 내장 UI 확장은 제공하지 않습니다.
+  UI plugin 통합은 선택적 후속 기능입니다.
+- CPU power는 현재 수집하거나 다른 telemetry에서 합성하지 않으며, 측정 지원은
+  선택적 후속 기능입니다.
 - 단일 smoke run은 통계적 benchmark나 hardware 우열의 근거가 아닙니다.
+- 일부 NIXL/UCX 환경에서는 요청과 artifact 생성 후 종료 중 native crash가 발생할
+  수 있습니다. 이 경우 결과는 `shutdown_integrity=invalid`, `demo_only=true`이며
+  production 성공으로 간주하지 않습니다.
 
 ## 문서
 

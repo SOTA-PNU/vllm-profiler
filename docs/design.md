@@ -156,8 +156,10 @@ Capability가 없는 이전 run은 기존 계약으로 검증하며 새 KPI는
 
 Resource metric은 counter track으로, native operation은 profiler와
 process/thread/device 단위의 하위 track으로 구성합니다. 선택적인
-request-focused trace는 request 구간과 겹치는 event만 포함하지만 timestamp를
-다시 기준화하지 않습니다.
+request-focused trace는 client request 시작/종료를 직접 변환한 canonical window를
+사용합니다. 각 resource stream에서 request 전 baseline, sampling interval이
+request와 겹치는 background, request 후 final 표본만 선택합니다. Full-capture
+telemetry를 복제하거나 timestamp와 값을 다시 기준화하지 않습니다.
 
 Trace Processor validation은 trace의 track, slice, counter, annotation과
 flow를 변환 계획과 대조합니다. 동일한 입력과 설정은 동일한 protobuf output을
@@ -199,8 +201,22 @@ token timestamp만 사용하고, KPI 숫자는 Info and Stats에만 기록합니
 ## 제한사항
 
 - Public `merge hybrid` 명령은 synthetic source 검증용입니다.
-- 실제 hybrid workload의 범용 end-to-end runner는 제공하지 않습니다.
+- 실제 GPU Prefill–NPU Decode 실행은 `collect hybrid`가 서버, proxy, telemetry,
+  normalization과 결과 생성을 함께 관리합니다. 환경별 model/cache/vLLM 설정은
+  사용자가 제공해야 합니다.
+- 추가 transfer 구간은 versioned runtime marker capability가 있는 run에서만
+  제공하며, 이전 run은 추정하지 않습니다.
+- 단계별 resource aggregate는 marker window와 sampling coverage가 충분할 때만
+  제공하며, 짧은 peak는 polling interval 사이에서 누락될 수 있습니다.
 - Native clock alignment는 exact synchronization이 아닐 수 있습니다.
 - RBLN native trace는 canonical anchor가 없으면 별도 timeline입니다.
-- Perfetto UI 내장 Overview와 custom plugin은 제공하지 않습니다.
-- 단일 profiler smoke 결과는 benchmark나 hardware 우열을 의미하지 않습니다.
+- Perfetto UI 내장 Overview와 custom plugin은 제공하지 않으며, plugin 통합은
+  선택적 후속 기능입니다.
+- CPU power collector는 제공하지 않고 측정되지 않은 값을 합성하지 않으며,
+  측정 지원은 선택적 후속 기능입니다.
+- 상세 profiler는 상호 간섭을 피하기 위해 한 run에 하나만 활성화합니다.
+- 검증은 고정 model/partition과 제한된 표본을 사용하므로 일반화된 hardware
+  benchmark나 우열을 의미하지 않습니다.
+- 일부 NIXL/UCX 환경의 종료 crash는 요청 성공과 분리해
+  `shutdown_integrity=invalid`, `demo_only=true`로 기록하며 production 성공으로
+  판정하지 않습니다.

@@ -1,4 +1,4 @@
-"""Stable Phase 7B limitation inventory."""
+"""Stable experiment limitation inventory."""
 
 from __future__ import annotations
 
@@ -20,15 +20,64 @@ class Limitation:
 
 
 REQUIRED_LIMITATIONS = (
-    Limitation("fixed_model_partition", "limited", "Only Qwen3-0.6B with one fixed GPU-prefill/NPU-decode partition is evaluated."),
-    Limitation("formal_sample_count", "limited", "Each condition has five formal observations."),
-    Limitation("native_partial_clock", "partial", "GPU Torch, Nsight, and NPU Torch use partial-derived clock evidence."),
-    Limitation("perfetto_ui_plugin", "not_implemented", "HTML is external and no Perfetto UI plugin is implemented."),
-    Limitation("rbln_canonical_clock_anchor", "not_available", "RBLN PB is a valid Perfetto trace but lacks a trustworthy canonical anchor."),
-    Limitation("reference_runtime_markers", "partial", "Reference disables resource and detailed profilers while existing runtime markers remain enabled."),
-    Limitation("resource_sampling_interval", "limited", "Sampling can miss peaks shorter than the configured interval."),
-    Limitation("single_detailed_profiler", "by_design", "Only one detailed profiler is enabled in a trial."),
-    Limitation("transfer_setup_wait_marker", "not_available", "No independent transfer setup/wait marker exists."),
+    Limitation(
+        "cpu_power_measurement",
+        "not_collected",
+        "CPU power is not collected or synthesized; support remains an optional follow-up.",
+    ),
+    Limitation(
+        "fixed_model_partition",
+        "limited",
+        "Only Qwen3-0.6B with one fixed GPU-prefill/NPU-decode partition is evaluated.",
+    ),
+    Limitation(
+        "formal_sample_count",
+        "limited",
+        "Each condition has five formal observations.",
+    ),
+    Limitation(
+        "native_partial_clock",
+        "partial",
+        "GPU Torch, Nsight, and NPU Torch use partial-derived clock evidence.",
+    ),
+    Limitation(
+        "nixl_shutdown_integrity",
+        "known_issue",
+        "A native NIXL/UCX shutdown crash is recorded separately as "
+        "shutdown_integrity=invalid and demo_only=true.",
+    ),
+    Limitation(
+        "perfetto_ui_plugin",
+        "not_implemented",
+        "HTML is external; a Perfetto UI plugin remains an optional follow-up.",
+    ),
+    Limitation(
+        "rbln_canonical_clock_anchor",
+        "not_available",
+        "RBLN PB is a valid Perfetto trace but lacks a trustworthy canonical anchor.",
+    ),
+    Limitation(
+        "reference_runtime_markers",
+        "partial",
+        "Reference disables resource and detailed profilers while existing "
+        "runtime markers remain enabled.",
+    ),
+    Limitation(
+        "resource_sampling_interval",
+        "limited",
+        "Sampling can miss peaks shorter than the configured interval.",
+    ),
+    Limitation(
+        "single_detailed_profiler",
+        "by_design",
+        "Only one detailed profiler is enabled in a trial.",
+    ),
+    Limitation(
+        "transfer_setup_wait_marker",
+        "capability_gated",
+        "Independent setup/wait intervals require versioned runtime markers; "
+        "older captures remain unavailable without inference.",
+    ),
 )
 
 

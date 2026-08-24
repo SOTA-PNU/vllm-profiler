@@ -20,6 +20,7 @@ from perfetto_hetero_profiler.perfetto.model import (
     CounterSpec,
     FlowSpec,
     InstantSpec,
+    RequestWindowSpec,
     SliceSpec,
     TrackSpec,
     TracePlan,
@@ -45,6 +46,18 @@ from perfetto_hetero_profiler.perfetto.writer import (
     _pending_events,
     serialize_trace,
 )
+
+
+def _request_window(start: int = 100, end: int = 200) -> RequestWindowSpec:
+    return RequestWindowSpec(
+        request_id="one",
+        start_ns=start,
+        end_ns=end,
+        source_clock_domain_id="gpu:mono",
+        target_clock_domain_id="mono",
+        alignment_method="same_clock_domain",
+        alignment_uncertainty_ns=0,
+    )
 
 
 def _track(
@@ -542,6 +555,203 @@ class NativeMetadataTests(unittest.TestCase):
 
 
 class RequestFocusedTests(unittest.TestCase):
+    @staticmethod
+    def _resource_plan(counters: tuple[CounterSpec, ...]) -> TracePlan:
+        tracks = (
+            _track("summary.root", 2, ordering="explicit"),
+            _track(
+                "summary.pipeline",
+                3,
+                parent="summary.root",
+                rank=1,
+                ordering="explicit",
+            ),
+            _track("gpu_prefill", 4, parent="summary.pipeline", rank=0),
+            _track("telemetry.resources", 5, ordering="explicit"),
+            _track(
+                "telemetry.resources.cpu_system",
+                6,
+                parent="telemetry.resources",
+                rank=0,
+                ordering="explicit",
+            ),
+            _track(
+                "telemetry.resources.gpu.gpu-0",
+                7,
+                parent="telemetry.resources",
+                rank=100,
+                ordering="explicit",
+            ),
+            _track(
+                "telemetry.resources.npu.npu-0",
+                8,
+                parent="telemetry.resources",
+                rank=200,
+                ordering="explicit",
+            ),
+            _track(
+                "counter.system.memory",
+                9,
+                parent="telemetry.resources.cpu_system",
+                rank=0,
+                kind="counter",
+            ),
+            _track(
+                "counter.gpu.power",
+                10,
+                parent="telemetry.resources.gpu.gpu-0",
+                rank=1,
+                kind="counter",
+            ),
+            _track(
+                "counter.npu.utilization",
+                11,
+                parent="telemetry.resources.npu.npu-0",
+                rank=2,
+                kind="counter",
+            ),
+        )
+        return TracePlan(
+            run_id="run",
+            canonical_clock_domain_id="mono",
+            process_uuid=1,
+            process_id=1,
+            packet_sequence_id=1,
+            tracks=tracks,
+            slices=(
+                SliceSpec(
+                    track_key="gpu_prefill",
+                    name="GPU Prefill",
+                    timestamp_ns=120,
+                    duration_ns=20,
+                ),
+            ),
+            instants=(),
+            counters=counters,
+            flows=(),
+            request_window=_request_window(),
+        )
+
+    def test_request_resource_selection_uses_exact_client_window_rules(self):
+        def sample(
+            timestamp: int,
+            value: int,
+            role: str,
+            interval: int | None,
+        ) -> CounterSpec:
+            return CounterSpec(
+                track_key="counter.system.memory",
+                timestamp_ns=timestamp,
+                value=value,
+                interval_ns=interval,
+                sample_role=role,
+            )
+
+        duplicate = sample(150, 5, "background", 50)
+        plan = self._resource_plan(
+            (
+                sample(50, 1, "background", 10),
+                sample(80, 2, "baseline", 10),
+                sample(90, 3, "baseline", 10),
+                sample(100, 4, "background", 10),
+                duplicate,
+                duplicate,
+                sample(200, 6, "final", 10),
+                sample(205, 7, "final", 10),
+                sample(210, 8, "background", 20),
+                sample(220, 9, "background", 20),
+            )
+        )
+        focused = request_focused_plan(plan)
+        self.assertEqual(
+            [
+                (row.timestamp_ns, row.value, row.interval_ns, row.sample_role)
+                for row in focused.counters
+            ],
+            [
+                (90, 3, 10, "baseline"),
+                (100, 4, 10, "background"),
+                (150, 5, 50, "background"),
+                (200, 6, 10, "final"),
+                (210, 8, 20, "background"),
+            ],
+        )
+        self.assertNotIn(50, {row.timestamp_ns for row in focused.counters})
+        self.assertNotIn(220, {row.timestamp_ns for row in focused.counters})
+
+    def test_resource_streams_are_independent_and_boundaries_are_not_synthesized(self):
+        plan = self._resource_plan(
+            (
+                CounterSpec(
+                    "counter.gpu.power",
+                    150,
+                    1.5,
+                    interval_ns=30,
+                    sample_role="background",
+                ),
+                CounterSpec(
+                    "counter.npu.utilization",
+                    90,
+                    0.0,
+                    interval_ns=20,
+                    sample_role="baseline",
+                ),
+                CounterSpec(
+                    "counter.npu.utilization",
+                    205,
+                    0.0,
+                    interval_ns=20,
+                    sample_role="final",
+                ),
+            )
+        )
+        focused = request_focused_plan(plan)
+        by_track = {
+            key: [row.sample_role for row in focused.counters if row.track_key == key]
+            for key in {row.track_key for row in focused.counters}
+        }
+        self.assertEqual(by_track["counter.gpu.power"], ["background"])
+        self.assertEqual(
+            by_track["counter.npu.utilization"],
+            ["baseline", "final"],
+        )
+
+    def test_request_resource_tracks_keep_explicit_semantic_order(self):
+        plan = self._resource_plan(
+            (
+                CounterSpec(
+                    "counter.system.memory", 150, 1,
+                    interval_ns=20, sample_role="background",
+                ),
+                CounterSpec(
+                    "counter.gpu.power", 150, 2,
+                    interval_ns=20, sample_role="background",
+                ),
+                CounterSpec(
+                    "counter.npu.utilization", 150, 3,
+                    interval_ns=20, sample_role="background",
+                ),
+            )
+        )
+        focused = request_focused_plan(plan)
+        tracks = focused.track_by_key
+        root = tracks["summary.request_resources"]
+        self.assertEqual(root.name, "Request-window Resource Telemetry")
+        self.assertEqual(root.parent_key, "summary.root")
+        self.assertEqual(root.sibling_order_rank, 3)
+        self.assertEqual(
+            [
+                (track.name, track.sibling_order_rank)
+                for track in focused.tracks
+                if track.parent_key == root.key
+            ],
+            [
+                ("telemetry.resources.cpu_system", 0),
+                ("telemetry.resources.gpu.gpu-0", 100),
+                ("telemetry.resources.npu.npu-0", 200),
+            ],
+        )
+
     def test_focus_preserves_timestamps_and_prunes_telemetry_and_half_flows(self):
         tracks = (
             _track("summary.root", 2, ordering="explicit"),
@@ -619,6 +829,7 @@ class RequestFocusedTests(unittest.TestCase):
                     correlation_id="one",
                 ),
             ),
+            request_window=_request_window(),
         )
         focused = request_focused_plan(plan)
         self.assertEqual(
@@ -704,6 +915,7 @@ class RequestFocusedTests(unittest.TestCase):
             ),
             counters=(),
             flows=(),
+            request_window=_request_window(),
         )
         focused = request_focused_plan(plan)
         self.assertNotIn(
@@ -844,6 +1056,7 @@ class NativeValidationTests(unittest.TestCase):
                     ),
                 ),
             ),
+            request_window=_request_window(0, 100),
         )
         filtered = native_validation_metadata(
             missing,

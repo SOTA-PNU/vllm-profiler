@@ -230,8 +230,14 @@ class SafetyAndLimitationsTests(unittest.TestCase):
     def test_limitation_inventory_is_current_and_complete(self):
         rows = limitation_inventory()
         ids = [row["limitation_id"] for row in rows]
+        self.assertIn("cpu_power_measurement", ids)
         self.assertIn("rbln_canonical_clock_anchor", ids)
         self.assertIn("reference_runtime_markers", ids)
+        self.assertIn("nixl_shutdown_integrity", ids)
+        transfer = next(
+            row for row in rows if row["limitation_id"] == "transfer_setup_wait_marker"
+        )
+        self.assertEqual(transfer["status"], "capability_gated")
         self.assertNotIn("rbln_pb_opaque", ids)
 
 

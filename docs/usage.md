@@ -195,8 +195,9 @@ RBLN PB는 공식 Perfetto trace이지만 canonical `CLOCK_MONOTONIC` anchor가 
 경우 `trace.rbln-native.pftrace`로 분리됩니다. Relative timestamp를 임의로
 Hybrid timeline에 이동하지 않습니다. HTML Overview는 Perfetto UI plugin이
 아닌 독립적인 결과 화면입니다. 한 번의 smoke 실행은 benchmark가 아닙니다.
-현재 canonical marker에는 KV transfer 전체 구간은 있지만 transfer setup과
-wait를 독립적으로 분리하는 marker는 없습니다.
+Versioned runtime capability가 있으면 KV handoff, transfer setup, transfer wait,
+decode scheduling wait를 독립 marker pair로 검증합니다. 이 capability가 없는
+이전 run에는 구간을 추정하지 않고 `not_available`로 유지합니다.
 
 ## Phase 7B 프로파일러 검증
 
@@ -377,6 +378,13 @@ RBLN trace에 canonical clock anchor가 없으면
 `trace.rbln-native.pftrace`로 별도 생성되며 timestamp를 임의로 이동하지
 않습니다.
 
+Request-focused trace의 `Request-window Resource Telemetry`에는 canonical client
+`request_start` 직전의 가장 가까운 baseline, request window와 실제 sampling
+interval이 겹치는 background, `stream_end` 직후의 가장 가까운 final sample만
+포함됩니다. System Memory, CPU Utilization, 각 GPU/NPU의 Memory, Power,
+Utilization 순으로 배치합니다. 전체 capture telemetry는 기본 `trace.pftrace`에만
+유지하며, 누락 경계를 보간하거나 가짜 counter를 만들지 않습니다.
+
 Versioned transfer marker가 포함된 hybrid run에서는 request group 아래의
 `KV Handoff`, `KV Transfer Setup`, `KV Transfer Wait`,
 `Decode Scheduling Wait` track을 확인할 수 있습니다. Wait은 status polling으로
@@ -416,6 +424,10 @@ time-weighted mean을 계산합니다. 완전한 interval coverage가 없으면 
 timestamp가 있는 sample만 peak에 사용하며 hold-last나 보간을 하지 않습니다.
 Sampling interval이 stage보다 길면 계산 가능한 값에도
 `value is not stage-exclusive` warning이 붙습니다.
+
+이 단계별 aggregate는 Prefill, Transfer, Decode marker window별 요약 값입니다.
+Request-focused trace에 표시하는 원본 counter 표본과 목적이 다르며, 두 값을
+서로 대체하거나 단순 합산하지 않습니다.
 
 실제 stage 값을 수집하려면 measured request 전 baseline sample, 처리 중 background
 sample, response 후 collector 종료 전 final sample이 모두 필요합니다. Sampling

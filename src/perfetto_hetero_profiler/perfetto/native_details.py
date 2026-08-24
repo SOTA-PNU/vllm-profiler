@@ -33,7 +33,7 @@ from google.protobuf.message import DecodeError
 from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import Trace, TrackEvent
 
 from .loader import LoadedHybridRun, SourceRunMetadata
-from .model import FlowSpec, InstantSpec, SliceSpec, TrackSpec, TracePlan
+from .model import CounterSpec, FlowSpec, InstantSpec, SliceSpec, TrackSpec, TracePlan
 
 
 class NativeDetailError(RuntimeError):
@@ -499,40 +499,147 @@ def augment_trace_plan(
     )
 
 
-def _request_window_from_boundaries(plan: TracePlan) -> tuple[int, int, str]:
-    boundary_rows: dict[str, list[InstantSpec]] = {
-        "request_received": [],
-        "response_done": [],
-    }
-    for spec in plan.instants:
-        kind = dict(spec.annotations).get("hetero.boundary_kind")
-        if kind in boundary_rows:
-            boundary_rows[str(kind)].append(spec)
-    if any(len(rows) != 1 for rows in boundary_rows.values()):
-        raise NativeDetailError(
-            "request-focused trace requires one canonical request/response boundary pair"
-        )
-    received = boundary_rows["request_received"][0]
-    completed = boundary_rows["response_done"][0]
-    received_annotations = dict(received.annotations)
-    completed_annotations = dict(completed.annotations)
-    correlation = received_annotations.get("hetero.correlation_id")
+def _client_request_window(plan: TracePlan) -> tuple[int, int, str]:
+    window = plan.request_window
     if (
-        not isinstance(correlation, str)
-        or not correlation
-        or completed_annotations.get("hetero.correlation_id") != correlation
-        or completed.timestamp_ns < received.timestamp_ns
+        window is None
+        or not window.request_id
+        or window.start_ns < 0
+        or window.end_ns < window.start_ns
+        or window.target_clock_domain_id != plan.canonical_clock_domain_id
     ):
         raise NativeDetailError(
-            "canonical request/response boundary identity or order is invalid"
+            "request-focused trace requires one canonical client request window"
         )
-    return received.timestamp_ns, completed.timestamp_ns, correlation
+    return window.start_ns, window.end_ns, window.request_id
+
+
+def _request_window_counters(
+    plan: TracePlan,
+    *,
+    start_ns: int,
+    end_ns: int,
+) -> tuple[CounterSpec, ...]:
+    by_stream: dict[str, list[CounterSpec]] = defaultdict(list)
+    for spec in plan.counters:
+        if spec.interval_ns is not None and (
+            isinstance(spec.interval_ns, bool) or spec.interval_ns < 0
+        ):
+            raise NativeDetailError("resource counter interval is invalid")
+        by_stream[spec.track_key].append(spec)
+
+    selected: dict[tuple[str, int], CounterSpec] = {}
+
+    def add(spec: CounterSpec) -> None:
+        identity = (spec.track_key, spec.timestamp_ns)
+        existing = selected.get(identity)
+        if existing is not None and existing != spec:
+            raise NativeDetailError(
+                "resource stream has conflicting samples at one timestamp"
+            )
+        selected[identity] = spec
+
+    for rows in by_stream.values():
+        ordered = sorted(
+            rows,
+            key=lambda item: (
+                item.timestamp_ns,
+                repr(item.value),
+                repr(item.annotations),
+            ),
+        )
+        baseline = [
+            item
+            for item in ordered
+            if item.sample_role == "baseline" and item.timestamp_ns <= start_ns
+        ]
+        if baseline:
+            add(max(baseline, key=lambda item: item.timestamp_ns))
+        for item in ordered:
+            if item.sample_role != "background" or item.interval_ns is None:
+                continue
+            coverage_start = item.timestamp_ns - item.interval_ns
+            if item.timestamp_ns >= start_ns and coverage_start < end_ns:
+                add(item)
+        final = [
+            item
+            for item in ordered
+            if item.sample_role == "final" and item.timestamp_ns >= end_ns
+        ]
+        if final:
+            add(min(final, key=lambda item: item.timestamp_ns))
+    return tuple(
+        sorted(
+            selected.values(),
+            key=lambda item: (
+                item.timestamp_ns,
+                item.track_key,
+                repr(item.value),
+            ),
+        )
+    )
+
+
+def _request_resource_tracks(
+    plan: TracePlan,
+    counters: tuple[CounterSpec, ...],
+) -> tuple[TrackSpec, ...]:
+    if not counters:
+        return ()
+    by_key = plan.track_by_key
+    root_key = "summary.request_resources"
+    group_keys = {
+        by_key[counter.track_key].parent_key for counter in counters
+    }
+    if None in group_keys or any(
+        not str(key).startswith("telemetry.resources.") for key in group_keys
+    ):
+        raise NativeDetailError("request resource counter hierarchy is invalid")
+    group_mapping = {
+        str(key): root_key + str(key).removeprefix("telemetry.resources")
+        for key in group_keys
+    }
+    tracks = [
+        TrackSpec(
+            key=root_key,
+            uuid=_stable_uint64(plan.run_id, "request-resource-track", root_key),
+            name="Request-window Resource Telemetry",
+            kind="group",
+            description=(
+                "Source-backed baseline, overlapping background, and final "
+                "resource samples for the canonical client request window."
+            ),
+            parent_key="summary.root",
+            child_ordering="explicit",
+            sibling_order_rank=3,
+        )
+    ]
+    tracks.extend(
+        replace(
+            by_key[group_key],
+            key=focused_key,
+            uuid=_stable_uint64(
+                plan.run_id, "request-resource-track", focused_key
+            ),
+            parent_key=root_key,
+        )
+        for group_key, focused_key in sorted(group_mapping.items())
+    )
+    counter_keys = {counter.track_key for counter in counters}
+    tracks.extend(
+        replace(
+            by_key[key],
+            parent_key=group_mapping[str(by_key[key].parent_key)],
+        )
+        for key in sorted(counter_keys)
+    )
+    return tuple(tracks)
 
 
 def request_focused_plan(plan: TracePlan) -> TracePlan:
-    """Keep observed request processing without summary bars or telemetry."""
+    """Keep request processing and its source-backed resource subset."""
 
-    start, end, _ = _request_window_from_boundaries(plan)
+    start, end, _ = _client_request_window(plan)
     by_key = plan.track_by_key
 
     def is_under(track_key: str, root_key: str) -> bool:
@@ -571,7 +678,7 @@ def request_focused_plan(plan: TracePlan) -> TracePlan:
             )
         )
     )
-    counters: tuple[CounterSpec, ...] = ()
+    counters = _request_window_counters(plan, start_ns=start, end_ns=end)
     endpoint_counts = Counter(
         flow_id
         for spec in candidate_slices
@@ -613,14 +720,24 @@ def request_focused_plan(plan: TracePlan) -> TracePlan:
     used_keys = {
         *(spec.track_key for spec in slices),
         *(spec.track_key for spec in instants),
-        *(spec.track_key for spec in counters),
     }
     for key in tuple(used_keys):
         current = by_key[key]
         while current.parent_key is not None:
             used_keys.add(current.parent_key)
             current = by_key[current.parent_key]
-    tracks = tuple(track for track in plan.tracks if track.key in used_keys)
+    tracks = tuple(
+        replace(
+            track,
+            sibling_order_rank=(
+                4
+                if counters and track.key == "summary.native_details"
+                else track.sibling_order_rank
+            ),
+        )
+        for track in plan.tracks
+        if track.key in used_keys
+    ) + _request_resource_tracks(plan, counters)
     return replace(
         plan,
         tracks=tracks,
@@ -783,7 +900,7 @@ def _expected_native_subset(
     set[int],
 ]:
     if filtered_subset:
-        start, end, _ = _request_window_from_boundaries(plan)
+        start, end, _ = _client_request_window(plan)
         slices = tuple(
             spec
             for spec in native.slices

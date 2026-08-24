@@ -282,6 +282,8 @@ _TIMELINE_SUMMARY_DATA_QUALITY_NAME: Final = "Data Quality status"
 _TIMELINE_SUMMARY_RESOURCE_TRACK_PREFIX: Final = "telemetry.resources"
 _RESOURCE_TELEMETRY_ROOT_KEY: Final = "telemetry.resources"
 _RESOURCE_TELEMETRY_ROOT_NAME: Final = "Resource telemetry (full capture window)"
+_REQUEST_RESOURCE_ROOT_KEY: Final = "summary.request_resources"
+_REQUEST_RESOURCE_ROOT_NAME: Final = "Request-window Resource Telemetry"
 _REPORT_ROW_QUERIES: Final = frozenset(
     {
         # Overview reconciliation consumes these two evidence tables. Other
@@ -1315,6 +1317,19 @@ def _timeline_summary_plan_contract_mismatches(plan: TracePlan) -> list[str]:
         )
 
     track_by_key = plan.track_by_key
+
+    def is_under(track_key: str, root_key: str) -> bool:
+        current = track_by_key.get(track_key)
+        seen: set[str] = set()
+        while current is not None:
+            if current.key == root_key:
+                return True
+            if current.key in seen or current.parent_key is None:
+                return False
+            seen.add(current.key)
+            current = track_by_key.get(current.parent_key)
+        return False
+
     processing_tracks = [
         track
         for track in plan.tracks
@@ -1368,6 +1383,11 @@ def _timeline_summary_plan_contract_mismatches(plan: TracePlan) -> list[str]:
         required_groups["summary.native_details"] = (
             "summary.root",
             "Native Profiler Details",
+        )
+    if _REQUEST_RESOURCE_ROOT_KEY in track_by_key:
+        required_groups[_REQUEST_RESOURCE_ROOT_KEY] = (
+            "summary.root",
+            _REQUEST_RESOURCE_ROOT_NAME,
         )
     for key, (parent, name) in required_groups.items():
         track = track_by_key.get(key)
@@ -1483,13 +1503,67 @@ def _timeline_summary_plan_contract_mismatches(plan: TracePlan) -> list[str]:
     if plan.presentation_mode:
         if any(spec.track_key in {"request", "profiler"} for spec in plan.slices):
             mismatches.append("presentation trace contains request summary or capture envelope")
-        if plan.counters:
-            mismatches.append("presentation trace contains counters")
         if any(
             track.key.startswith(_RESOURCE_TELEMETRY_ROOT_KEY)
             for track in plan.tracks
         ):
             mismatches.append("presentation trace contains full-window telemetry")
+        if plan.request_window is None:
+            mismatches.append("presentation trace lacks a canonical client request window")
+        elif (
+            plan.request_window.start_ns < 0
+            or plan.request_window.end_ns < plan.request_window.start_ns
+            or plan.request_window.target_clock_domain_id
+            != plan.canonical_clock_domain_id
+        ):
+            mismatches.append("presentation client request window is invalid")
+        if plan.counters and _REQUEST_RESOURCE_ROOT_KEY not in track_by_key:
+            mismatches.append("presentation resource counters lack their group")
+        if any(
+            not is_under(spec.track_key, _REQUEST_RESOURCE_ROOT_KEY)
+            for spec in plan.counters
+        ):
+            mismatches.append("presentation counter is outside request resources")
+        identities = [
+            (spec.track_key, spec.timestamp_ns) for spec in plan.counters
+        ]
+        if len(identities) != len(set(identities)):
+            mismatches.append("presentation resource sample is duplicated")
+        if plan.request_window is not None:
+            start = plan.request_window.start_ns
+            end = plan.request_window.end_ns
+            by_stream_role: dict[tuple[str, str], int] = {}
+            for spec in plan.counters:
+                role = spec.sample_role
+                if role not in {"baseline", "background", "final"}:
+                    mismatches.append("presentation resource sample role is invalid")
+                    continue
+                key = (spec.track_key, role)
+                by_stream_role[key] = by_stream_role.get(key, 0) + 1
+                if role == "baseline" and spec.timestamp_ns > start:
+                    mismatches.append("presentation baseline follows request start")
+                elif role == "final" and spec.timestamp_ns < end:
+                    mismatches.append("presentation final precedes request end")
+                elif role == "background":
+                    interval = spec.interval_ns
+                    if (
+                        interval is None
+                        or isinstance(interval, bool)
+                        or interval < 0
+                        or spec.timestamp_ns < start
+                        or spec.timestamp_ns - interval >= end
+                    ):
+                        mismatches.append(
+                            "presentation background interval misses request window"
+                        )
+            if any(
+                count > 1
+                for (track_key, role), count in by_stream_role.items()
+                if role in {"baseline", "final"}
+            ):
+                mismatches.append(
+                    "presentation stream has multiple baseline or final samples"
+                )
     elif sum(spec.track_key == "request" for spec in plan.slices) != 1:
         mismatches.append("full trace must retain one diagnostic Request lifecycle")
 

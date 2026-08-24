@@ -114,7 +114,7 @@ def plan_perfetto_conversion(
             "instant_count": len(focused.instants),
             "counter_count": len(focused.counters),
             "flow_count": len(focused.flows),
-            "resource_telemetry_included": False,
+            "resource_telemetry_included": bool(focused.counters),
             "timestamp_rebased": False,
             "presentation_policy": _presentation_policy(focused),
             **_native_request_membership_metadata(native),
@@ -233,7 +233,7 @@ def convert_perfetto(
                 "size_bytes": focused_size,
                 "sha256": focused_sha256,
                 "timestamp_rebased": False,
-                "resource_telemetry_included": False,
+                "resource_telemetry_included": bool(focused_plan.counters),
                 "track_count": len(focused_plan.tracks),
                 "slice_count": len(focused_plan.slices),
                 "instant_count": len(focused_plan.instants),
@@ -1014,12 +1014,23 @@ def _timeline_summary_mapping_metadata(
 def _presentation_policy(plan: TracePlan) -> dict[str, object]:
     return {
         "role": "request_focused_processing_timeline",
-        "request_window_source": "canonical_request_received_response_done_pair",
+        "request_window_source": "canonical_client_request_start_stream_end",
+        "request_window_start_ns": (
+            plan.request_window.start_ns if plan.request_window is not None else None
+        ),
+        "request_window_end_ns": (
+            plan.request_window.end_ns if plan.request_window is not None else None
+        ),
         "request_lifecycle_slice_included": False,
         "kpi_counters_included": False,
         "data_quality_slice_included": False,
         "clock_metadata_slice_included": False,
         "full_window_resource_telemetry_included": False,
+        "request_window_resource_telemetry_included": bool(plan.counters),
+        "request_window_resource_counter_count": len(plan.counters),
+        "resource_selection_policy": (
+            "nearest_existing_baseline_overlap_background_nearest_existing_final_v1"
+        ),
         "capture_envelope_included": False,
         "timestamp_rebased": False,
         "flow_endpoints": [

@@ -254,6 +254,19 @@ _COUNTER_NAMES = {
     "resource.npu.power": "NPU power",
 }
 
+_RESOURCE_TRACK_ORDER = {
+    "resource.system.memory_used": 0,
+    "resource.cpu.utilization": 1,
+    "resource.process.cpu_memory": 2,
+    "resource.process.memory_used": 2,
+    "resource.gpu.memory_used": 0,
+    "resource.gpu.power": 1,
+    "resource.gpu.utilization": 2,
+    "resource.npu.memory_used": 0,
+    "resource.npu.power": 1,
+    "resource.npu.utilization": 2,
+}
+
 _PIPELINE_TRACK_ORDER = {
     "gpu_prefill": 0,
     "kv_export": 1,
@@ -1004,6 +1017,14 @@ def _resource_counters(
                 track_key=key,
                 timestamp_ns=metric.timestamp_ns,
                 value=value,
+                interval_ns=metric.interval_ns,
+                sample_role=(
+                    metric.attributes.get("telemetry.sample_role")
+                    if isinstance(
+                        metric.attributes.get("telemetry.sample_role"), str
+                    )
+                    else None
+                ),
             )
         )
     tracks = [
@@ -1292,8 +1313,8 @@ def _group_resource_tracks(
         if metric.metric_name.startswith("resource.")
         and metric.availability is Availability.AVAILABLE
     }
-    groups: dict[str, TrackSpec] = {}
-    grouped: list[TrackSpec] = []
+    group_metadata: dict[str, tuple[str, int]] = {}
+    tracks_by_group: dict[str, list[tuple[TrackSpec, MetricSample]]] = {}
     used_ranks: dict[int, str] = {}
     for track in counter_tracks:
         try:
@@ -1307,9 +1328,11 @@ def _group_resource_tracks(
         while rank in used_ranks and used_ranks[rank] != group_key:
             rank += 1
         used_ranks[rank] = group_key
-        groups.setdefault(
-            group_key,
-            TrackSpec(
+        group_metadata.setdefault(group_key, (group_name, rank))
+        tracks_by_group.setdefault(group_key, []).append((track, metric))
+
+    groups = [
+        TrackSpec(
                 key=group_key,
                 uuid=0,
                 name=group_name,
@@ -1319,12 +1342,36 @@ def _group_resource_tracks(
                     "not duplicated."
                 ),
                 parent_key="telemetry.resources",
-                child_ordering="lexicographic",
+                child_ordering="explicit",
                 sibling_order_rank=rank,
+        )
+        for group_key, (group_name, rank) in sorted(
+            group_metadata.items(), key=lambda item: (item[1][1], item[0])
+        )
+    ]
+    grouped: list[TrackSpec] = []
+    for group_key in sorted(
+        tracks_by_group,
+        key=lambda key: (group_metadata[key][1], key),
+    ):
+        ordered = sorted(
+            tracks_by_group[group_key],
+            key=lambda item: (
+                _RESOURCE_TRACK_ORDER.get(item[1].metric_name, 100),
+                item[1].metric_name,
+                item[1].unit,
+                item[0].key,
             ),
         )
-        grouped.append(replace(track, parent_key=group_key))
-    return list(groups.values()), grouped
+        grouped.extend(
+            replace(
+                track,
+                parent_key=group_key,
+                sibling_order_rank=index,
+            )
+            for index, (track, _metric) in enumerate(ordered)
+        )
+    return groups, grouped
 
 
 def _resource_telemetry_root_track() -> TrackSpec:
@@ -1628,6 +1675,11 @@ def build_trace_plan(
             else None
         ),
         unclassified_gaps=unclassified_gaps,
+        request_window=(
+            timeline_summary.request_window
+            if timeline_summary is not None
+            else None
+        ),
     )
     metadata = PlanBuildMetadata(
         input_event_count=len(event_rows),

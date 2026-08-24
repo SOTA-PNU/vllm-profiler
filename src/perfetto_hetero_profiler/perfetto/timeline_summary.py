@@ -17,7 +17,7 @@ from typing import Any, Mapping
 from ..hybrid.join import validate_marker_groups
 from ..overview.calculation import calculate_overview_kpis
 from ..schema import Availability
-from .model import TraceAttributeSpec
+from .model import RequestWindowSpec, TraceAttributeSpec
 from .trace_attributes import _read_source_artifact, build_performance_trace_attributes
 
 
@@ -127,6 +127,7 @@ class TimelineSummaryContext:
     data_quality_annotations: tuple[tuple[str, bool | int | float | str], ...]
     trace_attributes: tuple[TraceAttributeSpec, ...]
     token_instants: tuple[TokenInstantEvidence, ...] = ()
+    request_window: RequestWindowSpec | None = None
 
 
 def _canonical_json(value: object) -> str:
@@ -471,14 +472,16 @@ def _reject_duplicate_json_object(
     return result
 
 
-def _token_instant_evidence(loaded: object) -> tuple[TokenInstantEvidence, ...]:
+def _measured_request_evidence(
+    loaded: object,
+) -> tuple[RequestWindowSpec | None, tuple[TokenInstantEvidence, ...]]:
     payload = _read_source_artifact(
         loaded,
         source_role="gpu",
         relative_path="raw/client/measured_requests.jsonl",
     )
     if payload is None:
-        return ()
+        return None, ()
     request_ids = {
         event.request_id
         for event in getattr(loaded, "events", ())
@@ -486,7 +489,7 @@ def _token_instant_evidence(loaded: object) -> tuple[TokenInstantEvidence, ...]:
     }
     if len(request_ids) != 1 or None in request_ids:
         raise TimelineSummaryInputError(
-            "token timestamps require one canonical request identity"
+            "measured request evidence requires one canonical request identity"
         )
     request_id = _nonempty_string(next(iter(request_ids)), "canonical request id")
     rows: list[dict[str, object]] = []
@@ -517,37 +520,37 @@ def _token_instant_evidence(loaded: object) -> tuple[TokenInstantEvidence, ...]:
             "measured-request artifact must contain one matching request row"
         )
     row = rows[0]
-    raw = row.get("valid_token_timestamps_ns")
-    if raw is None:
-        return ()
-    if not isinstance(raw, list) or not raw:
-        raise TimelineSummaryInputError(
-            "valid_token_timestamps_ns must be a non-empty array"
-        )
-    timestamps = tuple(
-        _non_bool_int(value, "valid_token_timestamps_ns item") for value in raw
-    )
-    if any(value < 0 for value in timestamps):
-        raise TimelineSummaryInputError("token timestamp must be non-negative")
-    if any(right <= left for left, right in zip(timestamps, timestamps[1:])):
-        raise TimelineSummaryInputError(
-            "valid_token_timestamps_ns must be strictly increasing"
-        )
-    output_tokens = _non_bool_int(row.get("output_tokens"), "output_tokens")
-    if output_tokens != len(timestamps):
-        raise TimelineSummaryInputError(
-            "valid token timestamp count differs from output_tokens"
-        )
     request_start = _non_bool_int(row.get("request_start_ns"), "request_start_ns")
     stream_end = _non_bool_int(row.get("stream_end_ns"), "stream_end_ns")
     if request_start > stream_end:
         raise TimelineSummaryInputError(
             "measured request interval end precedes its start"
         )
-    if request_start > timestamps[0] or timestamps[-1] > stream_end:
-        raise TimelineSummaryInputError(
-            "token timestamps fall outside the measured request interval"
+    raw = row.get("valid_token_timestamps_ns")
+    timestamps: tuple[int, ...] = ()
+    if raw is not None:
+        if not isinstance(raw, list) or not raw:
+            raise TimelineSummaryInputError(
+                "valid_token_timestamps_ns must be a non-empty array"
+            )
+        timestamps = tuple(
+            _non_bool_int(value, "valid_token_timestamps_ns item") for value in raw
         )
+        if any(value < 0 for value in timestamps):
+            raise TimelineSummaryInputError("token timestamp must be non-negative")
+        if any(right <= left for left, right in zip(timestamps, timestamps[1:])):
+            raise TimelineSummaryInputError(
+                "valid_token_timestamps_ns must be strictly increasing"
+            )
+        output_tokens = _non_bool_int(row.get("output_tokens"), "output_tokens")
+        if output_tokens != len(timestamps):
+            raise TimelineSummaryInputError(
+                "valid token timestamp count differs from output_tokens"
+            )
+        if request_start > timestamps[0] or timestamps[-1] > stream_end:
+            raise TimelineSummaryInputError(
+                "token timestamps fall outside the measured request interval"
+            )
 
     sources = [
         source
@@ -564,7 +567,7 @@ def _token_instant_evidence(loaded: object) -> tuple[TokenInstantEvidence, ...]:
     ]
     if len(source_clocks) != 1:
         raise TimelineSummaryInputError(
-            "measured token timestamps require one monotonic ns GPU clock"
+            "measured request evidence requires one monotonic ns GPU clock"
         )
     source_clock = _nonempty_string(
         getattr(source_clocks[0], "clock_domain_id", None),
@@ -581,14 +584,14 @@ def _token_instant_evidence(loaded: object) -> tuple[TokenInstantEvidence, ...]:
     ]
     if len(transforms) != 1:
         raise TimelineSummaryInputError(
-            "measured token timestamps lack one explicit canonical transform"
+            "measured request evidence lacks one explicit canonical transform"
         )
     transform = transforms[0]
     if getattr(transform, "scale", None) != 1.0:
-        raise TimelineSummaryInputError("token timestamp transform scale must be 1")
-    offset = _non_bool_int(getattr(transform, "offset_ns", None), "token offset")
+        raise TimelineSummaryInputError("request timestamp transform scale must be 1")
+    offset = _non_bool_int(getattr(transform, "offset_ns", None), "request offset")
     uncertainty = _non_bool_int(
-        getattr(transform, "uncertainty_ns", None), "token uncertainty"
+        getattr(transform, "uncertainty_ns", None), "request uncertainty"
     )
     if uncertainty < 0:
         raise TimelineSummaryInputError("token uncertainty must be non-negative")
@@ -611,13 +614,12 @@ def _token_instant_evidence(loaded: object) -> tuple[TokenInstantEvidence, ...]:
             "hybrid.method",
             getattr(getattr(transform, "method", None), "value", None),
         ),
-        "token alignment method",
+        "request alignment method",
     )
     target_clock = _nonempty_string(
         getattr(transform, "target_clock_domain_id", None),
-        "token target clock domain",
+        "request target clock domain",
     )
-    canonical = tuple(value + offset for value in timestamps)
     canonical_request_start = request_start + offset
     canonical_stream_end = stream_end + offset
     if (
@@ -625,8 +627,20 @@ def _token_instant_evidence(loaded: object) -> tuple[TokenInstantEvidence, ...]:
         or canonical_stream_end < canonical_request_start
     ):
         raise TimelineSummaryInputError(
-            "token transform produces an invalid measured request interval"
+            "request transform produces an invalid measured request interval"
         )
+    request_window = RequestWindowSpec(
+        request_id=request_id,
+        start_ns=canonical_request_start,
+        end_ns=canonical_stream_end,
+        source_clock_domain_id=normalized_source_clock,
+        target_clock_domain_id=target_clock,
+        alignment_method=method,
+        alignment_uncertainty_ns=uncertainty,
+    )
+    if not timestamps:
+        return request_window, ()
+    canonical = tuple(value + offset for value in timestamps)
     if canonical[0] < 0 or any(
         right <= left for left, right in zip(canonical, canonical[1:])
     ):
@@ -646,7 +660,7 @@ def _token_instant_evidence(loaded: object) -> tuple[TokenInstantEvidence, ...]:
         raise TimelineSummaryInputError(
             "canonical token timestamps fall outside measured request interval"
         )
-    return tuple(
+    return request_window, tuple(
         TokenInstantEvidence(
             request_id=request_id,
             token_index=index,
@@ -669,6 +683,7 @@ def build_timeline_summary_context(loaded: object) -> TimelineSummaryContext:
     if not isinstance(calculated, dict):
         raise TimelineSummaryInputError("external KPI report calculation returned no object")
     kpis = _flatten_kpis(calculated)
+    request_window, token_instants = _measured_request_evidence(loaded)
     return TimelineSummaryContext(
         mapping_version=TIMELINE_SUMMARY_MAPPING_VERSION,
         source_identity_sha256=source_identity_sha256,
@@ -679,7 +694,8 @@ def build_timeline_summary_context(loaded: object) -> TimelineSummaryContext:
             kpis=kpis,
         ),
         trace_attributes=build_performance_trace_attributes(loaded, calculated),
-        token_instants=_token_instant_evidence(loaded),
+        token_instants=token_instants,
+        request_window=request_window,
     )
 
 

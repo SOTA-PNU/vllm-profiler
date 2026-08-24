@@ -12,6 +12,8 @@ from unittest import mock
 from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import TrackDescriptor
 
 from perfetto_hetero_profiler.perfetto.loader import load_hybrid_run
+from perfetto_hetero_profiler.perfetto.model import RequestWindowSpec
+from perfetto_hetero_profiler.perfetto.native_details import request_focused_plan
 from perfetto_hetero_profiler.perfetto.planner import (
     PerfettoPlanningError,
     build_trace_plan,
@@ -23,6 +25,7 @@ from perfetto_hetero_profiler.perfetto.timeline_summary import (
     TimelineSummaryInputError,
 )
 from perfetto_hetero_profiler.perfetto.writer import build_trace, serialize_trace
+from perfetto_hetero_profiler.schema import Availability, MetricScope
 from tests.test_perfetto_conversion import _build_monitor_family
 
 
@@ -208,6 +211,121 @@ class PerfettoTimelineSummaryTests(unittest.TestCase):
         )
         self.assertIsNone(plan.track_by_key["telemetry.resources"].parent_key)
 
+    def test_resource_tracks_use_explicit_memory_power_utilization_order(self):
+        gpu = next(
+            row
+            for row in self.loaded.metrics
+            if row.metric_name == "resource.gpu.utilization"
+        )
+        npu = next(
+            row
+            for row in self.loaded.metrics
+            if row.metric_name == "resource.npu.utilization"
+        )
+        metrics = (
+            replace(
+                gpu,
+                metric_name="resource.system.memory_used",
+                scope=MetricScope.HOST,
+                device_type=None,
+                device_id=None,
+                unit="bytes",
+                value=1,
+            ),
+            replace(
+                gpu,
+                metric_name="resource.cpu.utilization",
+                scope=MetricScope.HOST,
+                device_type=None,
+                device_id=None,
+                unit="percent",
+                value=2,
+            ),
+            replace(
+                gpu,
+                metric_name="resource.gpu.memory_used",
+                unit="bytes",
+                value=3,
+            ),
+            replace(gpu, metric_name="resource.gpu.power", unit="W", value=4),
+            replace(gpu, value=5),
+            replace(
+                gpu,
+                metric_name="resource.gpu.memory_used",
+                device_id="gpu-1",
+                unit="bytes",
+                value=6,
+            ),
+            replace(
+                npu,
+                metric_name="resource.npu.memory_used",
+                unit="bytes",
+                value=7,
+            ),
+            replace(npu, metric_name="resource.npu.power", unit="W", value=8),
+            replace(npu, value=9),
+            replace(
+                npu,
+                metric_name="resource.npu.memory_used",
+                device_id="npu-1",
+                unit="bytes",
+                value=10,
+            ),
+        )
+        plan = build_trace_plan(
+            self.loaded.manifest,
+            self.loaded.events,
+            metrics,
+            canonical_clock_domain_id=self.loaded.canonical_clock_domain_id,
+            timeline_summary=self.context,
+        ).plan
+        tracks = plan.track_by_key
+        root_children = sorted(
+            (
+                track.sibling_order_rank,
+                track.key,
+            )
+            for track in plan.tracks
+            if track.parent_key == "telemetry.resources"
+        )
+        self.assertEqual(
+            root_children,
+            [
+                (0, "telemetry.resources.cpu_system"),
+                (100, "telemetry.resources.gpu.gpu-0"),
+                (101, "telemetry.resources.gpu.gpu-1"),
+                (200, "telemetry.resources.npu.npu-0"),
+                (201, "telemetry.resources.npu.npu-1"),
+            ],
+        )
+        expected = {
+            "telemetry.resources.cpu_system": [
+                "System memory [host-0]",
+                "CPU utilization [host-0]",
+            ],
+            "telemetry.resources.gpu.gpu-0": [
+                "GPU memory [gpu-0]",
+                "GPU power [gpu-0]",
+                "GPU utilization [gpu-0]",
+            ],
+            "telemetry.resources.npu.npu-0": [
+                "NPU memory [npu-0]",
+                "NPU power [npu-0]",
+                "NPU utilization [npu-0]",
+            ],
+        }
+        for group_key, names in expected.items():
+            self.assertEqual(tracks[group_key].child_ordering, "explicit")
+            children = sorted(
+                (
+                    track.sibling_order_rank,
+                    track.name,
+                )
+                for track in plan.tracks
+                if track.parent_key == group_key
+            )
+            self.assertEqual(children, list(enumerate(names)))
+
     def test_official_descriptors_encode_processing_parent_chain(self):
         plan = self.result.plan
         trace = build_trace(plan)
@@ -321,6 +439,115 @@ class MeasuredTokenInstantTests(unittest.TestCase):
         self.assertEqual(
             [item.timestamp_ns for item in context.token_instants],
             [950_000, 2_550_000],
+        )
+
+    def test_focused_plan_preserves_processing_tokens_flows_and_attributes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            family = _build_monitor_family(
+                Path(directory),
+                overview_metrics=True,
+                measured_token_timestamps=(2_250_000, 2_350_000),
+            )
+            loaded = load_hybrid_run(family["hybrid"])
+            context = build_timeline_summary_context(loaded)
+            full = build_trace_plan(
+                loaded.manifest,
+                loaded.events,
+                loaded.metrics,
+                canonical_clock_domain_id=loaded.canonical_clock_domain_id,
+                timeline_summary=context,
+            ).plan
+            focused = request_focused_plan(full)
+
+        expected_slices = tuple(
+            row
+            for row in full.slices
+            if row.track_key not in {"request", "profiler"}
+            and row.name not in {"Hybrid Request", "Request Summary"}
+        )
+        self.assertEqual(
+            [
+                (
+                    row.track_key,
+                    row.name,
+                    row.timestamp_ns,
+                    row.duration_ns,
+                    row.annotations,
+                )
+                for row in focused.slices
+            ],
+            [
+                (
+                    row.track_key,
+                    row.name,
+                    row.timestamp_ns,
+                    row.duration_ns,
+                    row.annotations,
+                )
+                for row in expected_slices
+            ],
+        )
+        self.assertEqual(focused.instants, full.instants)
+        self.assertEqual(
+            focused.flows,
+            tuple(
+                flow
+                for flow in full.flows
+                if flow.source_slice_name != "Request"
+            ),
+        )
+        self.assertEqual(focused.trace_attributes, full.trace_attributes)
+        attributes = {row.key: row.value for row in focused.trace_attributes}
+        self.assertEqual(attributes["vllm_profiler.schema_version"], "1.1.0")
+        self.assertFalse(any(key.endswith(".availability") for key in attributes))
+        self.assertIsNotNone(focused.request_window)
+
+    def test_unavailable_resource_sample_is_not_fabricated_as_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            family = _build_monitor_family(
+                Path(directory),
+                overview_metrics=True,
+            )
+            loaded = load_hybrid_run(family["hybrid"])
+            context = replace(
+                build_timeline_summary_context(loaded),
+                request_window=RequestWindowSpec(
+                    request_id="request-1",
+                    start_ns=1_000_000,
+                    end_ns=2_500_000,
+                    source_clock_domain_id="gpu:host-monotonic",
+                    target_clock_domain_id=loaded.canonical_clock_domain_id,
+                    alignment_method="same_clock_domain",
+                    alignment_uncertainty_ns=0,
+                ),
+            )
+            resource = next(
+                row
+                for row in loaded.metrics
+                if row.metric_name.startswith("resource.")
+            )
+            unavailable = replace(
+                resource,
+                availability=Availability.NOT_AVAILABLE,
+                value=None,
+                reason="not reported",
+                attributes={"telemetry.sample_role": "background"},
+                interval_ns=10,
+            )
+            full = build_trace_plan(
+                loaded.manifest,
+                loaded.events,
+                (unavailable,),
+                canonical_clock_domain_id=loaded.canonical_clock_domain_id,
+                timeline_summary=context,
+            ).plan
+            focused = request_focused_plan(full)
+
+        self.assertFalse(full.counters)
+        self.assertFalse(focused.counters)
+        self.assertNotIn(
+            "summary.request_resources",
+            focused.track_by_key,
         )
 
     def test_non_monotonic_measured_token_timestamps_are_rejected(self) -> None:

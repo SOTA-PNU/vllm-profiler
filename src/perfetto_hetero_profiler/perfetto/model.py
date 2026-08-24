@@ -66,6 +66,21 @@ class CounterSpec:
     timestamp_ns: int
     value: int | float
     annotations: tuple[tuple[str, AnnotationValue], ...] = ()
+    interval_ns: int | None = None
+    sample_role: str | None = None
+
+
+@dataclass(frozen=True)
+class RequestWindowSpec:
+    """One source-backed client request window on the canonical clock."""
+
+    request_id: str
+    start_ns: int
+    end_ns: int
+    source_clock_domain_id: str
+    target_clock_domain_id: str
+    alignment_method: str
+    alignment_uncertainty_ns: int
 
 
 @dataclass(frozen=True)
@@ -113,6 +128,7 @@ class TracePlan:
     source_identity_sha256: str | None = None
     presentation_mode: bool = False
     unclassified_gaps: tuple[UnclassifiedGapSpec, ...] = ()
+    request_window: RequestWindowSpec | None = None
 
     @property
     def track_by_key(self) -> dict[str, TrackSpec]:
