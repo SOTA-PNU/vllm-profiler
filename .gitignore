@@ -27,7 +27,6 @@ runs/
 outputs/
 reports/
 pdd_logs/
-phase6c-results/
 *.nsys-rep
 *.qdrep
 *.sqlite

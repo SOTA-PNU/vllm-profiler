@@ -1880,7 +1880,7 @@ class HybridRunner:
             )
         )
         _plain_json(self.layout.publication / "overview_result.json", overview)
-        with tempfile.TemporaryDirectory(prefix="phase7a-determinism-") as directory:
+        with tempfile.TemporaryDirectory(prefix="runner-determinism-") as directory:
             temporary = Path(directory)
             second_perfetto = temporary / "perfetto"
             convert_perfetto(

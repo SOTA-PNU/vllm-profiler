@@ -1,4 +1,4 @@
-"""Pure Phase 3B planning for installed RBLN profiler APIs."""
+"""Pure planning for installed RBLN profiler APIs."""
 
 from __future__ import annotations
 
@@ -41,6 +41,6 @@ def build_rbln_profile_plan(
             "capture_reports is importable and used by vllm-rbln worker code.",
             "activate_profiler and RBLN_PROFILER are present in installed runtime code.",
             "profiler_start/profiler_done delegate to TVM global functions.",
-            "Runtime connection, output format, extension, and overhead need Phase 3B validation.",
+            "Runtime connection, output format, extension, and overhead require hardware validation.",
         ),
     )

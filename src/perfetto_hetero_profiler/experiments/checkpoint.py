@@ -1,4 +1,4 @@
-"""Atomic Phase 7 checkpoints and conservative resume decisions."""
+"""Atomic experiment checkpoints and conservative resume decisions."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from typing import Any
 
 from .failure import FailureClass
 from .paths import (
-    Phase7PathError,
+    ExperimentPathError,
     validate_absolute_path,
     validate_existing_real_path,
     validate_safe_name,
@@ -133,7 +133,7 @@ class AttemptRecord:
                 self.relative_directory,
                 field="relative_directory",
             )
-        except Phase7PathError as error:
+        except ExperimentPathError as error:
             raise CheckpointIntegrityError(str(error)) from error
         if self.relative_directory != self.attempt_id:
             raise CheckpointIntegrityError(
@@ -688,7 +688,7 @@ class CheckpointStore:
                 field="checkpoint parent",
                 kind="directory",
             )
-        except Phase7PathError as error:
+        except ExperimentPathError as error:
             raise CheckpointError(str(error)) from error
         self.path = checkpoint_path
 
@@ -726,7 +726,7 @@ class CheckpointStore:
             before = _file_identity(self.path)
             raw = self.path.read_text(encoding="utf-8")
             after = _file_identity(self.path)
-        except (OSError, UnicodeDecodeError, Phase7PathError) as error:
+        except (OSError, UnicodeDecodeError, ExperimentPathError) as error:
             raise CheckpointIntegrityError(
                 f"checkpoint cannot be read safely: {self.path}"
             ) from error

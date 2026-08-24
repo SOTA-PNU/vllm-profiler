@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import unittest
 
-from perfetto_hetero_profiler.phase7.statistics import (
+from perfetto_hetero_profiler.experiments.statistics import (
     OverheadDirection,
     StatisticsError,
     paired_overhead,

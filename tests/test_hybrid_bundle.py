@@ -872,7 +872,7 @@ class HybridCliTests(unittest.TestCase):
                     ]
                 )
             self.assertEqual(code, 1)
-            self.assertIn("accepts fake source bundles only", stdout.getvalue())
+            self.assertIn("accepts synthetic source bundles only", stdout.getvalue())
             self.assertFalse(case.output.exists())
 
     def test_invalid_method_is_rejected(self):

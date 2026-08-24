@@ -1,4 +1,4 @@
-"""Deterministic Phase 7 pilot and formal-trial scheduling."""
+"""Deterministic pilot and formal-trial scheduling."""
 
 from __future__ import annotations
 
@@ -11,13 +11,14 @@ from typing import Collection, Iterable
 
 
 SCHEDULE_VERSION = "1.0.0"
+SCHEDULE_SEED_DOMAIN = "profiler-experiment"
 PILOT_REPETITIONS = 1
 FORMAL_ROUNDS = 5
 MAX_HARDWARE_ATTEMPTS = 42
 
 
 class ScheduleError(ValueError):
-    """A Phase 7 schedule or attempt request is invalid."""
+    """An experiment schedule or attempt request is invalid."""
 
 
 class Condition(str, Enum):
@@ -32,7 +33,7 @@ class Condition(str, Enum):
 CONDITIONS: tuple[Condition, ...] = tuple(Condition)
 
 
-class TrialPhase(str, Enum):
+class TrialKind(str, Enum):
     PILOT = "pilot"
     FORMAL = "formal"
 
@@ -77,24 +78,24 @@ class TrialSpec:
     """One predeclared logical trial, independent of hardware attempts."""
 
     position: int
-    phase: TrialPhase
+    phase: TrialKind
     round_index: int
     condition: Condition
 
     def __post_init__(self) -> None:
         if isinstance(self.position, bool) or self.position < 0:
             raise ScheduleError("position must be a non-negative integer")
-        if not isinstance(self.phase, TrialPhase):
-            object.__setattr__(self, "phase", TrialPhase(self.phase))
+        if not isinstance(self.phase, TrialKind):
+            object.__setattr__(self, "phase", TrialKind(self.phase))
         if not isinstance(self.condition, Condition):
             object.__setattr__(self, "condition", Condition(self.condition))
         if isinstance(self.round_index, bool) or not isinstance(
             self.round_index, int
         ):
             raise ScheduleError("round_index must be an integer")
-        if self.phase is TrialPhase.PILOT and self.round_index != 0:
+        if self.phase is TrialKind.PILOT and self.round_index != 0:
             raise ScheduleError("pilot round_index must be zero")
-        if self.phase is TrialPhase.FORMAL and not 1 <= self.round_index <= 5:
+        if self.phase is TrialKind.FORMAL and not 1 <= self.round_index <= 5:
             raise ScheduleError("formal round_index must be between 1 and 5")
 
     @property
@@ -106,7 +107,7 @@ class TrialSpec:
 
     @property
     def repetition_index(self) -> int:
-        return 1 if self.phase is TrialPhase.PILOT else self.round_index
+        return 1 if self.phase is TrialKind.PILOT else self.round_index
 
     def attempt_id(self, attempt_number: int) -> str:
         return make_attempt_id(self.logical_trial_id, attempt_number)
@@ -123,7 +124,7 @@ class TrialSpec:
 
 
 @dataclass(frozen=True)
-class Phase7Schedule:
+class ExperimentSchedule:
     """The immutable schedule committed before results are observed."""
 
     seed: int
@@ -144,7 +145,7 @@ class Phase7Schedule:
         ):
             raise ScheduleError("seed must be an integer between 0 and 2^32-1")
         if self.max_retries_per_trial != 1:
-            raise ScheduleError("Phase 7 permits one retry per logical trial")
+            raise ScheduleError("the experiment permits one retry per logical trial")
         if (
             isinstance(self.max_hardware_attempts, bool)
             or not isinstance(self.max_hardware_attempts, int)
@@ -161,7 +162,7 @@ class Phase7Schedule:
         expected_count = len(CONDITIONS) * (PILOT_REPETITIONS + FORMAL_ROUNDS)
         if len(self.trials) != expected_count:
             raise ScheduleError(
-                f"Phase 7 requires exactly {expected_count} logical trials"
+                f"the experiment requires exactly {expected_count} logical trials"
             )
         if tuple(trial.position for trial in self.trials) != tuple(
             range(expected_count)
@@ -177,7 +178,7 @@ class Phase7Schedule:
         } != set(CONDITIONS):
             raise ScheduleError("the pilot must contain every condition once")
         if any(
-            trial.phase is TrialPhase.PILOT
+            trial.phase is TrialKind.PILOT
             for trial in self.trials[len(CONDITIONS) :]
         ):
             raise ScheduleError("all pilot trials must precede formal trials")
@@ -194,20 +195,20 @@ class Phase7Schedule:
     @property
     def pilot_trials(self) -> tuple[TrialSpec, ...]:
         return tuple(
-            trial for trial in self.trials if trial.phase is TrialPhase.PILOT
+            trial for trial in self.trials if trial.phase is TrialKind.PILOT
         )
 
     @property
     def formal_trials(self) -> tuple[TrialSpec, ...]:
         return tuple(
-            trial for trial in self.trials if trial.phase is TrialPhase.FORMAL
+            trial for trial in self.trials if trial.phase is TrialKind.FORMAL
         )
 
     def formal_round(self, round_index: int) -> tuple[TrialSpec, ...]:
         return tuple(
             trial
             for trial in self.trials
-            if trial.phase is TrialPhase.FORMAL
+            if trial.phase is TrialKind.FORMAL
             and trial.round_index == round_index
         )
 
@@ -250,14 +251,19 @@ class Phase7Schedule:
         return hashlib.sha256(canonical_schedule_bytes(self)).hexdigest()
 
 
-def _randomized_conditions(seed: int, label: str) -> tuple[Condition, ...]:
+def _randomized_conditions(
+    seed: int,
+    label: str,
+    *,
+    seed_domain: str,
+) -> tuple[Condition, ...]:
     """Return a stable pseudorandom order without Python RNG version coupling."""
 
     return tuple(
         sorted(
             CONDITIONS,
             key=lambda condition: hashlib.sha256(
-                f"phase7b:{seed}:{label}:{condition.value}".encode("ascii")
+                f"{seed_domain}:{seed}:{label}:{condition.value}".encode("ascii")
             ).digest(),
         )
     )
@@ -267,7 +273,8 @@ def build_schedule(
     *,
     seed: int,
     max_hardware_attempts: int = MAX_HARDWARE_ATTEMPTS,
-) -> Phase7Schedule:
+    seed_domain: str = SCHEDULE_SEED_DOMAIN,
+) -> ExperimentSchedule:
     """Build six pilots followed by five cyclic, balanced formal rounds."""
 
     if (
@@ -278,35 +285,42 @@ def build_schedule(
         raise ScheduleError("seed must be an integer between 0 and 2^32-1")
 
     trials: list[TrialSpec] = []
-    for condition in _randomized_conditions(seed, "pilot"):
+    if not isinstance(seed_domain, str) or not seed_domain:
+        raise ScheduleError("seed_domain must be a non-empty string")
+
+    for condition in _randomized_conditions(seed, "pilot", seed_domain=seed_domain):
         trials.append(
             TrialSpec(
                 position=len(trials),
-                phase=TrialPhase.PILOT,
+                phase=TrialKind.PILOT,
                 round_index=0,
                 condition=condition,
             )
         )
 
     for round_index in range(1, FORMAL_ROUNDS + 1):
-        for condition in _randomized_conditions(seed, f"formal:{round_index}"):
+        for condition in _randomized_conditions(
+            seed,
+            f"formal:{round_index}",
+            seed_domain=seed_domain,
+        ):
             trials.append(
                 TrialSpec(
                     position=len(trials),
-                    phase=TrialPhase.FORMAL,
+                    phase=TrialKind.FORMAL,
                     round_index=round_index,
                     condition=condition,
                 )
             )
 
-    return Phase7Schedule(
+    return ExperimentSchedule(
         seed=seed,
         trials=tuple(trials),
         max_hardware_attempts=max_hardware_attempts,
     )
 
 
-def canonical_schedule_bytes(schedule: Phase7Schedule) -> bytes:
+def canonical_schedule_bytes(schedule: ExperimentSchedule) -> bytes:
     """Serialize a schedule deterministically for identity and manifests."""
 
     return (
@@ -322,7 +336,7 @@ def canonical_schedule_bytes(schedule: Phase7Schedule) -> bytes:
 
 
 def schedule_by_logical_id(
-    schedule: Phase7Schedule,
+    schedule: ExperimentSchedule,
 ) -> dict[str, TrialSpec]:
     return {trial.logical_trial_id: trial for trial in schedule.trials}
 

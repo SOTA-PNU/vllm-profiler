@@ -5,30 +5,30 @@ import tempfile
 import unittest
 from unittest import mock
 
-from perfetto_hetero_profiler.phase7.checkpoint import (
+from perfetto_hetero_profiler.experiments.checkpoint import (
     AttemptRecord,
     AttemptStatus,
     CheckpointIntegrityError,
     CheckpointStore,
     ExperimentCheckpoint,
 )
-from perfetto_hetero_profiler.phase7.config import canonical_config_bytes, load_phase7_config
-from perfetto_hetero_profiler.phase7.experiment import RETRYABLE, _resume
-from perfetto_hetero_profiler.phase7.failure import (
+from perfetto_hetero_profiler.experiments.config import canonical_config_bytes, load_experiment_config
+from perfetto_hetero_profiler.experiments.experiment import RETRYABLE, _resume
+from perfetto_hetero_profiler.experiments.failure import (
     ConnectionEvidence,
     FailureClass,
     FailurePhase,
     classify_connection_failure,
 )
-from perfetto_hetero_profiler.phase7.paths import ExperimentPaths
-from perfetto_hetero_profiler.phase7.schedule import canonical_schedule_bytes
+from perfetto_hetero_profiler.experiments.paths import ExperimentPaths
+from perfetto_hetero_profiler.experiments.schedule import canonical_schedule_bytes
 
 from tests.test_experiment_contract import write_config
 
 
 class ResumeTests(unittest.TestCase):
     def fixture(self, root: Path):
-        config = load_phase7_config(write_config(root))
+        config = load_experiment_config(write_config(root))
         experiment = root / "experiment"
         experiment.mkdir()
         (experiment / "trials").mkdir()
@@ -94,7 +94,7 @@ class ResumeTests(unittest.TestCase):
             store.initialize(initial)
             store.update(initial.with_attempt(success))
             with mock.patch(
-                "perfetto_hetero_profiler.phase7.experiment._fresh_attempt_validation",
+                "perfetto_hetero_profiler.experiments.experiment._fresh_attempt_validation",
                 return_value=False,
             ):
                 with self.assertRaises(CheckpointIntegrityError):

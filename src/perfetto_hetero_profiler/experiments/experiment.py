@@ -1,4 +1,4 @@
-"""Phase 7B experiment orchestration on top of the Phase 7A HybridRunner."""
+"""Repeatability experiment orchestration on top of the HybridRunner."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from .checkpoint import (
     CheckpointStore,
     ExperimentCheckpoint,
 )
-from .config import Phase7Config, canonical_config_bytes, load_phase7_config, sha256_file
+from .config import ExperimentConfig, canonical_config_bytes, load_experiment_config, sha256_file
 from .environment import (
     EnvironmentNotIdleError,
     canonical_bytes,
@@ -31,7 +31,7 @@ from .environment import (
 from .failure import FailureClass
 from .paths import ExperimentPaths, validate_new_output_directory
 from .report import build_report, canonical_json, render_report_html
-from .schedule import Condition, TrialPhase, canonical_schedule_bytes, schedule_by_logical_id
+from .schedule import Condition, TrialKind, canonical_schedule_bytes, schedule_by_logical_id
 from .validation import TrialValidationError, validate_trial
 
 
@@ -63,7 +63,7 @@ RETRYABLE = frozenset(
 )
 
 
-class Phase7ExperimentError(RuntimeError):
+class ExperimentError(RuntimeError):
     pass
 
 
@@ -94,7 +94,7 @@ def _write_json(path: Path, value: object, *, exclusive: bool = False) -> None:
 def _load_json(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
-        raise Phase7ExperimentError(f"expected JSON object: {path}")
+        raise ExperimentError(f"expected JSON object: {path}")
     return value
 
 
@@ -131,7 +131,7 @@ def _policy() -> dict[str, object]:
     }
 
 
-def build_plan(config: Phase7Config, experiment_root: Path) -> dict[str, object]:
+def build_plan(config: ExperimentConfig, experiment_root: Path) -> dict[str, object]:
     schedule = config.schedule
     return {
         "executes": False,
@@ -191,7 +191,7 @@ def _fresh_attempt_validation(root: Path, attempt: AttemptRecord, trials: dict[s
     return result == stored and result.get("valid") is True
 
 
-def _initialize(config: Phase7Config, paths: ExperimentPaths) -> ExperimentCheckpoint:
+def _initialize(config: ExperimentConfig, paths: ExperimentPaths) -> ExperimentCheckpoint:
     hybrid = config.load_hybrid()
     paths.root.mkdir(mode=0o755)
     paths.trials.mkdir()
@@ -217,7 +217,7 @@ def _initialize(config: Phase7Config, paths: ExperimentPaths) -> ExperimentCheck
     return checkpoint
 
 
-def _resume(config: Phase7Config, paths: ExperimentPaths) -> ExperimentCheckpoint:
+def _resume(config: ExperimentConfig, paths: ExperimentPaths) -> ExperimentCheckpoint:
     if (paths.root / "config.json").read_bytes() != canonical_config_bytes(config):
         raise CheckpointIntegrityError("resume config snapshot mismatch")
     if (paths.root / "schedule.json").read_bytes() != canonical_schedule_bytes(config.schedule):
@@ -252,7 +252,7 @@ def _resume(config: Phase7Config, paths: ExperimentPaths) -> ExperimentCheckpoin
 
 def _execute_attempt(
     *,
-    config: Phase7Config,
+    config: ExperimentConfig,
     paths: ExperimentPaths,
     checkpoint: ExperimentCheckpoint,
     logical_trial: Any,
@@ -309,7 +309,7 @@ def _execute_attempt(
         ).run()
         if result.status is not RunStatus.SUCCEEDED:
             message = "; ".join(result.errors) or "hybrid runner failed"
-            raise Phase7ExperimentError(message)
+            raise ExperimentError(message)
         validation = validate_trial(
             attempt_root,
             attempt_id=attempt_id,
@@ -394,7 +394,7 @@ def run_experiment(
     resume: bool = False,
     dry_run: bool = False,
 ) -> dict[str, object]:
-    config = load_phase7_config(config_path)
+    config = load_experiment_config(config_path)
     hybrid = config.load_hybrid()
     if dry_run:
         return build_plan(config, experiment_root)
@@ -414,9 +414,9 @@ def run_experiment(
     for trial in config.schedule.trials:
         if trial.logical_trial_id in successful:
             continue
-        if trial.phase is TrialPhase.FORMAL and not config.schedule.formal_trials_unlocked(successful):
-            raise Phase7ExperimentError("formal trials are locked until all pilots succeed")
-        if trial.phase is TrialPhase.FORMAL and not formal_gate_validated:
+        if trial.phase is TrialKind.FORMAL and not config.schedule.formal_trials_unlocked(successful):
+            raise ExperimentError("formal trials are locked until all pilots succeed")
+        if trial.phase is TrialKind.FORMAL and not formal_gate_validated:
             successful_attempts = {
                 item.logical_trial_id: item
                 for item in checkpoint.attempts
@@ -429,15 +429,15 @@ def run_experiment(
                         f"pilot failed pre-formal fresh validation: {attempt.attempt_id}"
                     )
             formal_gate_validated = True
-            print("phase7 pilot fresh validation: 6/6; formal trials unlocked", flush=True)
+            print("experiment pilot fresh validation: 6/6; formal trials unlocked", flush=True)
         prior = checkpoint.attempts_for(trial.logical_trial_id)
         if prior and prior[-1].status is AttemptStatus.FAILED:
             if prior[-1].failure_class not in RETRYABLE or len(prior) >= 2:
-                raise Phase7ExperimentError(
+                raise ExperimentError(
                     f"logical trial cannot be retried: {trial.logical_trial_id} ({prior[-1].failure_class.value})"
                 )
         if len(checkpoint.attempts) >= checkpoint.max_hardware_attempts:
-            raise Phase7ExperimentError("maximum hardware attempt count reached")
+            raise ExperimentError("maximum hardware attempt count reached")
         checkpoint, failure = _execute_attempt(
             config=config,
             paths=paths,
@@ -446,14 +446,14 @@ def run_experiment(
         )
         latest = checkpoint.attempts_for(trial.logical_trial_id)[-1]
         print(
-            f"phase7 trial {latest.attempt_id}: {latest.status.value}"
+            f"experiment trial {latest.attempt_id}: {latest.status.value}"
             + (f" ({latest.failure_class.value})" if latest.failure_class else ""),
             flush=True,
         )
         if latest.status is AttemptStatus.SUCCEEDED:
             successful.add(trial.logical_trial_id)
         elif failure in RETRYABLE and latest.attempt_number == 1:
-            print(f"phase7 retry scheduled: {trial.logical_trial_id}", flush=True)
+            print(f"experiment retry scheduled: {trial.logical_trial_id}", flush=True)
             checkpoint, failure = _execute_attempt(
                 config=config,
                 paths=paths,
@@ -462,21 +462,21 @@ def run_experiment(
             )
             latest = checkpoint.attempts_for(trial.logical_trial_id)[-1]
             print(
-                f"phase7 retry {latest.attempt_id}: {latest.status.value}"
+                f"experiment retry {latest.attempt_id}: {latest.status.value}"
                 + (f" ({latest.failure_class.value})" if latest.failure_class else ""),
                 flush=True,
             )
             if latest.status is AttemptStatus.SUCCEEDED:
                 successful.add(trial.logical_trial_id)
             else:
-                raise Phase7ExperimentError(f"retry failed: {latest.attempt_id}")
+                raise ExperimentError(f"retry failed: {latest.attempt_id}")
         else:
-            raise Phase7ExperimentError(f"trial failed without retry: {latest.attempt_id}")
-        if trial.phase is TrialPhase.PILOT:
+            raise ExperimentError(f"trial failed without retry: {latest.attempt_id}")
+        if trial.phase is TrialKind.PILOT:
             completed_pilots = sum(item.logical_trial_id in successful for item in config.schedule.pilot_trials)
-            print(f"phase7 pilot progress: {completed_pilots}/6", flush=True)
+            print(f"experiment pilot progress: {completed_pilots}/6", flush=True)
         elif all(item.logical_trial_id in successful for item in config.schedule.formal_round(trial.round_index)):
-            print(f"phase7 formal round {trial.round_index}/5 complete", flush=True)
+            print(f"experiment formal round {trial.round_index}/5 complete", flush=True)
 
     validation = validate_experiment(
         paths.root,
@@ -517,11 +517,11 @@ def validate_experiment(
 
     A newly completed hardware run may explicitly persist its validation
     evidence with ``output_path``.  Read-only validation and the public
-    ``phase7 validate`` command leave the existing experiment untouched.
+    ``experiment validate`` command leave the existing experiment untouched.
     """
 
     paths = ExperimentPaths.for_resume(experiment_root)
-    config = load_phase7_config(paths.root / "config.json")
+    config = load_experiment_config(paths.root / "config.json")
     checkpoint = CheckpointStore(paths.checkpoint).load()
     if checkpoint.config_sha256 != config.sha256 or checkpoint.schedule_sha256 != config.schedule.sha256:
         raise CheckpointIntegrityError("experiment identity mismatch")
@@ -545,7 +545,7 @@ def validate_experiment(
     if output_path is not None:
         output_path = Path(output_path)
         if output_path != paths.root / "fresh_validation.json":
-            raise Phase7ExperimentError(
+            raise ExperimentError(
                 "validation output must be the experiment fresh_validation.json"
             )
         _write_json(output_path, result)
@@ -573,12 +573,12 @@ def generate_report(
     output_root: Path | None = None,
 ) -> dict[str, object]:
     paths = ExperimentPaths.for_resume(experiment_root)
-    config = load_phase7_config(paths.root / "config.json")
+    config = load_experiment_config(paths.root / "config.json")
     checkpoint = CheckpointStore(paths.checkpoint).load()
     report = build_report(
         root=paths.root,
         config={
-            "phase7": config.to_dict(),
+            "experiment_config": config.to_dict(),
             "hybrid": _load_json(paths.root / "hybrid_config.json"),
         },
         schedule=config.schedule,
@@ -621,7 +621,7 @@ def generate_report(
             "deterministic_regeneration": True,
         }
         if not validation["valid"]:
-            raise Phase7ExperimentError("report output fresh validation failed")
+            raise ExperimentError("report output fresh validation failed")
         _write_json(output / "artifact_manifest_validation.json", validation)
         return {
             "status": "succeeded",
@@ -635,14 +635,14 @@ def generate_report(
         (paths.root / "limitations.json", canonical_json({"limitations": report["limitations"]})),
     ):
         if path.exists() and path.read_bytes() != data:
-            raise Phase7ExperimentError(f"deterministic report mismatch: {path.name}")
+            raise ExperimentError(f"deterministic report mismatch: {path.name}")
         if not path.exists():
             _atomic_write(path, data, exclusive=True)
     manifest = _artifact_manifest(paths.root)
     manifest_bytes = canonical_json(manifest)
     manifest_path = paths.root / "artifact_manifest.json"
     if manifest_path.exists() and manifest_path.read_bytes() != manifest_bytes:
-        raise Phase7ExperimentError("artifact manifest changed on regeneration")
+        raise ExperimentError("artifact manifest changed on regeneration")
     if not manifest_path.exists():
         _atomic_write(manifest_path, manifest_bytes, exclusive=True)
     current = _artifact_manifest(paths.root)
@@ -656,7 +656,7 @@ def generate_report(
         "deterministic_regeneration": True,
     }
     if not validation["valid"]:
-        raise Phase7ExperimentError("artifact fresh validation failed")
+        raise ExperimentError("artifact fresh validation failed")
     _write_json(paths.root / "artifact_manifest_validation.json", validation)
     return report
 
@@ -664,7 +664,7 @@ def generate_report(
 __all__ = [
     "CONDITION_MODE",
     "RETRYABLE",
-    "Phase7ExperimentError",
+    "ExperimentError",
     "build_plan",
     "experiment_status",
     "generate_report",

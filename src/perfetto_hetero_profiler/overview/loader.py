@@ -1,6 +1,6 @@
-"""Strict read-only loaders for Phase 6 Overview inputs.
+"""Strict read-only loaders for Overview inputs.
 
-The Overview layer deliberately reuses the Phase 5 normalized-run loader and
+The Overview layer deliberately reuses the normalized-run loader and
 trace planner.  This module adds the missing boundary around a *published*
 Perfetto bundle: exact file layout, detached-manifest freshness, source
 fingerprint matching, trace identity, and a fresh official Trace Processor
@@ -118,7 +118,7 @@ class PerfettoBundleIdentity:
 
 @dataclass(frozen=True, slots=True)
 class LoadedPerfettoBundle:
-    """A matching Phase 5 Perfetto output, freshly reconciled."""
+    """A matching Perfetto output, freshly reconciled."""
 
     root: Path
     conversion_manifest: dict[str, Any]
@@ -319,7 +319,7 @@ def _normalized_input_metadata(loaded: LoadedHybridRun) -> dict[str, Any]:
 
 
 def normalized_identity(loaded: LoadedHybridRun) -> tuple[object, ...]:
-    """Return the exact immutable identity used by Phase 5 conversion."""
+    """Return the exact immutable identity used by Perfetto conversion."""
 
     return (
         loaded.manifest.run_id,
@@ -584,7 +584,7 @@ def load_matching_perfetto(
     *,
     trace_processor_path: Path | None = None,
 ) -> LoadedPerfettoBundle:
-    """Load and freshly reconcile one exact matching Phase 5 output."""
+    """Load and freshly reconcile one exact matching Perfetto output."""
 
     if not isinstance(loaded, LoadedHybridRun):
         raise TypeError("loaded must be a LoadedHybridRun")
@@ -682,7 +682,7 @@ def load_matching_perfetto(
         )
     if fresh_validation != stored_validation:
         raise OverviewInputError(
-            "fresh official Trace Processor result differs from stored Phase 5 "
+            "fresh official Trace Processor result differs from stored conversion "
             "validation"
         )
     identity_after = _bundle_identity(root)
@@ -746,7 +746,7 @@ def reconciliation_summary(bundle: LoadedPerfettoBundle) -> dict[str, Any]:
     return {
         "valid": True,
         "trace": dict(report["trace"]),
-        # Keep the Phase 6 external-report schema backward-compatible. New
+        # Keep the external-report schema backward-compatible. New
         # mapping-specific query counts remain available in ``queries``.
         "counts": {
             name: report["counts"][name] for name in report_count_names
@@ -865,7 +865,7 @@ def assert_perfetto_unchanged(
     before: LoadedPerfettoBundle,
     after: LoadedPerfettoBundle,
 ) -> None:
-    """Reject mutation of a Phase 5 input during Overview publication."""
+    """Reject mutation of a conversion input during Overview publication."""
 
     if before.identity != after.identity:
         raise OverviewInputError(

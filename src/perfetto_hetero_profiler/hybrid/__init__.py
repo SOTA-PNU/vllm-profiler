@@ -1,4 +1,4 @@
-"""Phase 4 hybrid source alignment and merge API."""
+"""Hybrid source alignment and merge API."""
 
 from .alignment import (
     AlignedTimestamp,

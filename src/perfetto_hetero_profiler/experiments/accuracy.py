@@ -1,4 +1,4 @@
-"""Pure Phase 7 accuracy tolerance and exact-reconciliation checks."""
+"""Pure experiment accuracy tolerance and exact-reconciliation checks."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ class AccuracyError(ValueError):
 
 
 class ClientLatencyMetric(str, Enum):
-    """Client latency metrics with fixed Phase 7 tolerances."""
+    """Client latency metrics with fixed experiment tolerances."""
 
     E2E = "latency.e2e"
     TTFT = "latency.ttft"
@@ -89,7 +89,7 @@ def client_latency_accuracy(
     reference_ns: Number,
     observed_ns: Number,
 ) -> AccuracyCheck:
-    """Apply the fixed Phase 7 independent-client latency tolerance.
+    """Apply the fixed independent-client latency tolerance.
 
     E2E and TTFT use ``max(2 ms, 2% of reference)``.  TPOT uses
     ``max(1 ms, 5% of reference)``.  Equality at the tolerance boundary

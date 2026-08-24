@@ -1,4 +1,4 @@
-"""Configuration for Phase 4 hybrid bundle alignment."""
+"""Configuration for hybrid bundle alignment."""
 
 from __future__ import annotations
 

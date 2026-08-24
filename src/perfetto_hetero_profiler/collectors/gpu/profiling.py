@@ -53,7 +53,7 @@ def build_detailed_profile_plan(command: tuple[str, ...]) -> DetailedProfilePlan
             notes=(
                 "Configure vLLM profiler_config with profiler=torch.",
                 "Set torch_profiler_dir before server startup.",
-                "Call start/stop endpoints only during Phase 2B execution validation.",
+                "Call start/stop endpoints only during controlled execution validation.",
             ),
         ),
         simultaneous_warning=(

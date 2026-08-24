@@ -26,7 +26,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "perfetto_hetero_profiler.schema" = ["json/v1/*.json"]
 "perfetto_hetero_profiler.overview" = ["json/v1/*.json"]
-"perfetto_hetero_profiler.phase7" = ["json/v1/*.json"]
+"perfetto_hetero_profiler.experiments" = ["json/v1/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

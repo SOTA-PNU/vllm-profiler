@@ -17,11 +17,15 @@ from typing import Any, Mapping
 from ..hybrid.join import validate_marker_groups
 from ..overview.calculation import calculate_overview_kpis
 from ..schema import Availability
+from .compatibility import (
+    LEGACY_PROFILE_KIND_ATTRIBUTE,
+    LEGACY_TIMELINE_MAPPING_VERSION,
+)
 from .model import RequestWindowSpec, TraceAttributeSpec
 from .trace_attributes import _read_source_artifact, build_performance_trace_attributes
 
 
-LEGACY_MAPPING_VERSION = "legacy-unversioned-phase5-v1"
+LEGACY_MAPPING_VERSION = LEGACY_TIMELINE_MAPPING_VERSION
 TIMELINE_SUMMARY_MAPPING_VERSION = "processing-timeline-info-stats-v1"
 TIMELINE_SUMMARY_ROOT_NAME = "Heterogeneous LLM Processing"
 
@@ -372,7 +376,7 @@ def _data_quality_annotations(
     configuration = getattr(manifest, "configuration", {})
     if not isinstance(attributes, dict) or not isinstance(configuration, dict):
         raise TimelineSummaryInputError("manifest attributes/configuration are invalid")
-    raw_profiler_kind = attributes.get("hybrid.phase4b2b_profile_kind")
+    raw_profiler_kind = attributes.get(LEGACY_PROFILE_KIND_ATTRIBUTE)
     profiler_kind = (
         raw_profiler_kind
         if isinstance(raw_profiler_kind, str) and raw_profiler_kind

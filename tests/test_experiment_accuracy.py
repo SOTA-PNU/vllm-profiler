@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import unittest
 
-from perfetto_hetero_profiler.phase7.accuracy import (
+from perfetto_hetero_profiler.experiments.accuracy import (
     AccuracyError,
     ClientLatencyMetric,
     client_latency_accuracy,

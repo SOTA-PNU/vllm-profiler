@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import hashlib
+from importlib import resources
 import json
 from pathlib import Path
 import tempfile
@@ -9,29 +10,34 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from perfetto_hetero_profiler.phase7.checkpoint import (
+from perfetto_hetero_profiler.experiments.checkpoint import (
     AttemptRecord,
     AttemptStatus,
     CheckpointIntegrityError,
     CheckpointStore,
     ExperimentCheckpoint,
 )
-from perfetto_hetero_profiler.phase7.config import (
-    Phase7ConfigError,
-    load_phase7_config,
+from perfetto_hetero_profiler.experiments.config import (
+    ExperimentConfigError,
+    load_experiment_config,
 )
-from perfetto_hetero_profiler.phase7.experiment import (
+from perfetto_hetero_profiler.experiments.compatibility import (
+    LEGACY_SCHEDULE_SEED_DOMAIN,
+)
+from perfetto_hetero_profiler.experiments.experiment import (
     CONDITION_MODE,
     build_plan,
+    run_experiment,
     validate_experiment,
 )
-from perfetto_hetero_profiler.phase7.failure import FailureClass
-from perfetto_hetero_profiler.phase7.limitations import limitation_inventory
-from perfetto_hetero_profiler.phase7.paths import ExperimentPaths, Phase7PathError
-from perfetto_hetero_profiler.phase7.schedule import (
+from perfetto_hetero_profiler.experiments.failure import FailureClass
+from perfetto_hetero_profiler.experiments.limitations import limitation_inventory
+from perfetto_hetero_profiler.experiments.paths import ExperimentPaths, ExperimentPathError
+from perfetto_hetero_profiler.experiments.schedule import (
     Condition,
-    TrialPhase,
+    TrialKind,
     build_schedule,
+    canonical_schedule_bytes,
 )
 
 
@@ -95,10 +101,34 @@ class ScheduleTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_packaged_schema_and_example_use_canonical_identity(self):
+        schema_path = (
+            resources.files("perfetto_hetero_profiler.experiments")
+            / "json/v1/profiler_experiment_config.schema.json"
+        )
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            schema["$id"],
+            "https://sota-pnu.github.io/vllm-profiler/schema/"
+            "profiler-experiment-config-v1.json",
+        )
+        self.assertEqual(
+            schema["title"],
+            "Hybrid profiler experiment configuration",
+        )
+        example = json.loads(
+            (Path(__file__).parents[1] / "examples/profiler_experiment_config.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            example["experiment_id"],
+            "fixed-hybrid-profiler-validation",
+        )
+
     def test_fixed_config_and_dry_plan(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            config = load_phase7_config(write_config(root))
+            config = load_experiment_config(write_config(root))
             output = root / "experiment"
             plan = build_plan(config, output)
             self.assertFalse(output.exists())
@@ -111,20 +141,60 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             bad = write_config(root, mutate_hybrid=lambda value: value["workload"].update({"measured_requests": 9}))
-            with self.assertRaises(Phase7ConfigError):
-                load_phase7_config(bad)
+            with self.assertRaises(ExperimentConfigError):
+                load_experiment_config(bad)
             good = write_config(root)
             document = json.loads(good.read_text())
             document["hybrid_config"]["sha256"] = "0" * 64
             good.write_text(json.dumps(document))
-            with self.assertRaises(Phase7ConfigError):
-                load_phase7_config(good)
+            with self.assertRaises(ExperimentConfigError):
+                load_experiment_config(good)
+
+    def test_dry_run_creates_no_output_or_runner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = write_config(root)
+            output = root / "planned-experiment"
+            with mock.patch(
+                "perfetto_hetero_profiler.experiments.experiment.HybridRunner"
+            ) as runner:
+                plan = run_experiment(
+                    config_path=config_path,
+                    experiment_root=output,
+                    dry_run=True,
+                )
+            runner.assert_not_called()
+            self.assertFalse(output.exists())
+            self.assertFalse(plan["executes"])
 
     def test_condition_mapping_has_reference_without_telemetry_and_one_profiler(self):
         self.assertEqual(CONDITION_MODE[Condition.REFERENCE], ("monitor", False))
         self.assertEqual(CONDITION_MODE[Condition.MONITOR], ("monitor", True))
         modes = [mode for condition, (mode, _) in CONDITION_MODE.items() if condition not in {Condition.REFERENCE, Condition.MONITOR}]
         self.assertEqual(len(modes), len(set(modes)))
+
+    def test_existing_schedule_identity_is_loaded_without_recalculation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = write_config(root)
+            experiment = root / "existing-experiment"
+            experiment.mkdir()
+            stored_config = experiment / "config.json"
+            stored_config.write_bytes(source.read_bytes())
+            legacy_schedule = build_schedule(
+                seed=20260807,
+                seed_domain=LEGACY_SCHEDULE_SEED_DOMAIN,
+            )
+            (experiment / "schedule.json").write_bytes(
+                canonical_schedule_bytes(legacy_schedule)
+            )
+
+            loaded = load_experiment_config(stored_config)
+            self.assertEqual(loaded.schedule.sha256, legacy_schedule.sha256)
+            self.assertEqual(
+                canonical_schedule_bytes(loaded.schedule),
+                (experiment / "schedule.json").read_bytes(),
+            )
 
 
 class CheckpointTests(unittest.TestCase):
@@ -190,16 +260,16 @@ class ExperimentValidationTests(unittest.TestCase):
                 attempts=attempts,
             )
             with mock.patch(
-                "perfetto_hetero_profiler.phase7.experiment.load_phase7_config",
+                "perfetto_hetero_profiler.experiments.experiment.load_experiment_config",
                 return_value=config,
             ), mock.patch(
-                "perfetto_hetero_profiler.phase7.experiment.CheckpointStore.load",
+                "perfetto_hetero_profiler.experiments.experiment.CheckpointStore.load",
                 return_value=checkpoint,
             ), mock.patch(
-                "perfetto_hetero_profiler.phase7.experiment._fresh_attempt_validation",
+                "perfetto_hetero_profiler.experiments.experiment._fresh_attempt_validation",
                 return_value=True,
             ), mock.patch(
-                "perfetto_hetero_profiler.phase7.experiment._write_json"
+                "perfetto_hetero_profiler.experiments.experiment._write_json"
             ) as write_json:
                 result = validate_experiment(root)
                 write_json.assert_not_called()
@@ -224,7 +294,7 @@ class SafetyAndLimitationsTests(unittest.TestCase):
             target.mkdir()
             link = root / "link"
             link.symlink_to(target, target_is_directory=True)
-            with self.assertRaises(Phase7PathError):
+            with self.assertRaises(ExperimentPathError):
                 ExperimentPaths.for_resume(link)
 
     def test_limitation_inventory_is_current_and_complete(self):

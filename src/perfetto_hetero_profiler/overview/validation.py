@@ -1,4 +1,4 @@
-"""Deterministic semantic reconciliation reports for Phase 6 outputs."""
+"""Deterministic semantic reconciliation reports for Overview outputs."""
 
 from __future__ import annotations
 

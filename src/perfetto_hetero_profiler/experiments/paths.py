@@ -1,4 +1,4 @@
-"""Path validation for immutable Phase 7 experiments.
+"""Path validation for immutable profiler experiments.
 
 The runner never resolves a user-supplied symlink into an accepted path.  New
 outputs must have a real, existing parent and must not overlap immutable
@@ -19,15 +19,15 @@ from typing import Iterable
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,191}$")
 
 
-class Phase7PathError(ValueError):
-    """A Phase 7 input or output path is unsafe."""
+class ExperimentPathError(ValueError):
+    """An experiment input or output path is unsafe."""
 
 
 def validate_safe_name(value: str, *, field: str = "name") -> str:
     """Return a safe single path component."""
 
     if not isinstance(value, str) or _SAFE_NAME_RE.fullmatch(value) is None:
-        raise Phase7PathError(f"{field} must be a safe single path component")
+        raise ExperimentPathError(f"{field} must be a safe single path component")
     return value
 
 
@@ -45,16 +45,16 @@ def validate_absolute_path(
     """
 
     if not isinstance(value, (str, os.PathLike)):
-        raise Phase7PathError(f"{field} must be a filesystem path")
+        raise ExperimentPathError(f"{field} must be a filesystem path")
     path = Path(value)
     if not path.is_absolute():
-        raise Phase7PathError(f"{field} must be absolute")
+        raise ExperimentPathError(f"{field} must be absolute")
     if ".." in path.parts:
-        raise Phase7PathError(f"{field} must not contain '..'")
+        raise ExperimentPathError(f"{field} must not contain '..'")
 
     normalized = Path(os.path.normpath(os.fspath(path)))
     if path != normalized:
-        raise Phase7PathError(f"{field} must be normalized")
+        raise ExperimentPathError(f"{field} must be normalized")
 
     current = Path(path.anchor)
     for part in path.parts[1:]:
@@ -64,13 +64,13 @@ def validate_absolute_path(
         except FileNotFoundError:
             if allow_missing:
                 return path
-            raise Phase7PathError(f"{field} does not exist: {path}") from None
+            raise ExperimentPathError(f"{field} does not exist: {path}") from None
         except OSError as error:
-            raise Phase7PathError(
+            raise ExperimentPathError(
                 f"{field} component cannot be inspected: {current}"
             ) from error
         if stat.S_ISLNK(current_stat.st_mode):
-            raise Phase7PathError(
+            raise ExperimentPathError(
                 f"{field} must not contain a symlink component: {current}"
             )
     return path
@@ -91,17 +91,17 @@ def validate_existing_real_path(
     try:
         path_stat = path.lstat()
     except OSError as error:
-        raise Phase7PathError(f"{field} cannot be inspected: {path}") from error
+        raise ExperimentPathError(f"{field} cannot be inspected: {path}") from error
     if kind == "file" and not stat.S_ISREG(path_stat.st_mode):
-        raise Phase7PathError(f"{field} must be a real regular file")
+        raise ExperimentPathError(f"{field} must be a real regular file")
     if kind == "directory" and not stat.S_ISDIR(path_stat.st_mode):
-        raise Phase7PathError(f"{field} must be a real directory")
+        raise ExperimentPathError(f"{field} must be a real directory")
     if kind not in {None, "file", "directory"}:
         raise ValueError("kind must be 'file', 'directory', or None")
     if kind is None and not (
         stat.S_ISREG(path_stat.st_mode) or stat.S_ISDIR(path_stat.st_mode)
     ):
-        raise Phase7PathError(f"{field} must be a real file or directory")
+        raise ExperimentPathError(f"{field} must be a real file or directory")
     return path
 
 
@@ -140,7 +140,7 @@ def validate_new_output_directory(
             field=f"immutable_roots[{index}]",
         )
         if paths_overlap(output, root):
-            raise Phase7PathError(
+            raise ExperimentPathError(
                 f"{field} must not overlap an immutable input: {root}"
             )
     return output
@@ -162,7 +162,7 @@ def validate_resume_directory(
             field=f"immutable_roots[{index}]",
         )
         if paths_overlap(root, source):
-            raise Phase7PathError(
+            raise ExperimentPathError(
                 f"{field} must not overlap an immutable input: {source}"
             )
     return root
@@ -170,7 +170,7 @@ def validate_resume_directory(
 
 @dataclass(frozen=True)
 class ExperimentPaths:
-    """Stable paths below one Phase 7 experiment root."""
+    """Stable paths below one experiment root."""
 
     root: Path
 

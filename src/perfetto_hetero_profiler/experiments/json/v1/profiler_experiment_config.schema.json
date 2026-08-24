@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sota-pnu.github.io/vllm-profiler/schema/phase7b-config-v1.json",
-  "title": "Phase 7B experiment configuration",
+  "$id": "https://sota-pnu.github.io/vllm-profiler/schema/profiler-experiment-config-v1.json",
+  "title": "Hybrid profiler experiment configuration",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "experiment_id", "hybrid_config", "schedule"],

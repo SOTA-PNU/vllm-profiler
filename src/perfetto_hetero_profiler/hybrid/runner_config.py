@@ -155,7 +155,7 @@ class HybridRunnerConfig:
         if len(set(nixl_ports)) != 2 or set(ports) & set(nixl_ports):
             raise HybridRunnerConfigError("HTTP and NIXL ports must all be unique")
         if not self.offline:
-            raise HybridRunnerConfigError("Phase 7A requires offline=true")
+            raise HybridRunnerConfigError("hybrid execution requires offline=true")
 
     def with_overrides(
         self,

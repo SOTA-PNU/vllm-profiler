@@ -1,4 +1,4 @@
-"""Fresh Phase 7B trial validation and independent client reconciliation."""
+"""Fresh trial validation and independent client reconciliation."""
 
 from __future__ import annotations
 
@@ -99,7 +99,7 @@ def validate_trial(
         raise TrialValidationError("one or more source/hybrid manifests did not succeed")
     result = _json(roots["coordinator"] / "result.json")
     if result.get("status") != "succeeded":
-        raise TrialValidationError("Phase 7A runner result did not succeed")
+        raise TrialValidationError("hybrid runner result did not succeed")
     requests = _json(roots["coordinator"] / "requests.json")
     raw_rows = _jsonl(roots["gpu"] / "raw/client/measured_requests.jsonl")
     metric_rows = _jsonl(roots["gpu"] / "metrics/metrics.jsonl")

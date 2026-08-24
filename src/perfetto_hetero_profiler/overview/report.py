@@ -9,6 +9,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from ..hybrid.join import validate_marker_groups
+from ..perfetto.compatibility import LEGACY_PROFILE_KIND_ATTRIBUTE
 from ..perfetto.loader import LoadedHybridRun
 from ..schema import Availability
 from .calculation import calculate_overview_kpis
@@ -373,7 +374,7 @@ def _data_quality(
     )
     join_method = join_methods[0] if len(join_methods) == 1 else "not_available"
     attributes = loaded.manifest.attributes
-    profiler_kind = attributes.get("hybrid.phase4b2b_profile_kind", "unknown")
+    profiler_kind = attributes.get(LEGACY_PROFILE_KIND_ATTRIBUTE, "unknown")
     native_alignment = attributes.get(
         "hybrid.profiler_alignment_status",
         "not_available",
@@ -547,7 +548,7 @@ def build_overview_report(
     calculated = calculate_overview_kpis(loaded)
     sections, resources = _canonicalize_calculation(calculated)
     attributes = loaded.manifest.attributes
-    profiler_kind = attributes.get("hybrid.phase4b2b_profile_kind")
+    profiler_kind = attributes.get(LEGACY_PROFILE_KIND_ATTRIBUTE)
     if not isinstance(profiler_kind, str) or not profiler_kind:
         profiler_kind = "unknown"
     return {

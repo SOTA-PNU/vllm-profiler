@@ -6,7 +6,7 @@ The conversion in this module deliberately separates two questions:
 * whether that timestamp can be placed on the run's canonical monotonic axis.
 
 Kineto Chrome traces and Nsight SQLite exports have documented Unix-time
-reconstructions.  The Phase 4B captures also contain paired Unix/monotonic
+reconstructions. Earlier captures also contain paired Unix/monotonic
 samples.  Those samples support a deterministic point transform, but they are
 not atomic clock snapshots.  Emitted events are consequently labelled
 ``partial_derived`` and retain a conservative uncertainty; they are never

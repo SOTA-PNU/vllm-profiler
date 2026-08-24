@@ -1,4 +1,4 @@
-"""Deterministic Phase 7B JSON/HTML report generation."""
+"""Deterministic profiler experiment JSON/HTML report generation."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 
 from .checkpoint import AttemptStatus, ExperimentCheckpoint
 from .limitations import limitation_inventory
-from .schedule import Condition, Phase7Schedule, TrialPhase, schedule_by_logical_id
+from .schedule import Condition, ExperimentSchedule, TrialKind, schedule_by_logical_id
 from .statistics import OverheadDirection, paired_overhead, summarize_distribution
 
 
@@ -73,7 +73,7 @@ def build_report(
     *,
     root: Path,
     config: dict[str, object],
-    schedule: Phase7Schedule,
+    schedule: ExperimentSchedule,
     checkpoint: ExperimentCheckpoint,
 ) -> dict[str, object]:
     trials = schedule_by_logical_id(schedule)
@@ -97,7 +97,7 @@ def build_report(
     pilot: dict[str, dict[str, Any]] = {}
     for logical_id, validation in successful.items():
         trial = trials[logical_id]
-        if trial.phase is TrialPhase.PILOT:
+        if trial.phase is TrialKind.PILOT:
             pilot[trial.condition.value] = validation
         else:
             formal[trial.condition.value][trial.round_index] = validation
@@ -198,7 +198,7 @@ def build_report(
     }
     return {
         "schema_version": "1.0",
-        "report_type": "phase7b_repeatability_overhead",
+        "report_type": "profiler_repeatability_overhead",
         "config": config,
         "schedule_sha256": schedule.sha256,
         "policy": {
@@ -245,9 +245,9 @@ def render_report_html(report: dict[str, object]) -> bytes:
     payload = html.escape(json.dumps(report, allow_nan=False, ensure_ascii=False, indent=2, sort_keys=True))
     document = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>Phase 7B Hybrid Profiler Validation</title>
+<title>Hybrid Profiler Repeatability and Overhead Validation</title>
 <style>body{{font-family:system-ui,sans-serif;max-width:1100px;margin:2rem auto;padding:0 1rem}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #bbb;padding:.5rem;text-align:right}}th:first-child,td:first-child{{text-align:left}}pre{{white-space:pre-wrap;background:#f4f4f4;padding:1rem;overflow:auto}}</style></head>
-<body><h1>Phase 7B Hybrid Profiler Validation</h1>
+<body><h1>Hybrid Profiler Repeatability and Overhead Validation</h1>
 <p>Independent result dashboard. This is not a Perfetto built-in Overview or UI plugin.</p>
 <p>Successful logical trials: {progress['successful_logical_trials']} / {progress['logical_trials']}; hardware attempts: {progress['hardware_attempts']}.</p>
 <h2>Formal E2E repeatability</h2><table><thead><tr><th>Condition</th><th>Mean (ms)</th><th>Median (ms)</th><th>CV</th></tr></thead><tbody>{''.join(rows)}</tbody></table>

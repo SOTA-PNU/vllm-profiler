@@ -21,6 +21,7 @@ from perfetto.trace_processor import (
 )
 
 from ..schema.constants import SCHEMA_VERSION
+from .compatibility import LEGACY_TIMELINE_MAPPING_VERSION
 from .model import AnnotationValue, SliceSpec, TracePlan
 from .trace_attributes import TRACE_ATTRIBUTE_NAMESPACE
 from .tooling import (
@@ -271,7 +272,7 @@ GROUP BY category
 ORDER BY category
 """.strip()
 
-_LEGACY_MAPPING_VERSION: Final = "legacy-unversioned-phase5-v1"
+_LEGACY_MAPPING_VERSION: Final = LEGACY_TIMELINE_MAPPING_VERSION
 _TIMELINE_SUMMARY_MAPPING_VERSION: Final = "processing-timeline-info-stats-v1"
 _TIMELINE_SUMMARY_ROOT_KEY: Final = "summary.root"
 _TIMELINE_SUMMARY_ROOT_NAME: Final = "Heterogeneous LLM Processing"

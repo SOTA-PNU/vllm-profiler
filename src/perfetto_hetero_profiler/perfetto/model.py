@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TypeAlias
 
+from .compatibility import LEGACY_TIMELINE_MAPPING_VERSION
+
 
 AnnotationValue: TypeAlias = bool | int | float | str
 TraceAttributeValue: TypeAlias = int | str
@@ -124,7 +126,7 @@ class TracePlan:
     counters: tuple[CounterSpec, ...]
     flows: tuple[FlowSpec, ...]
     trace_attributes: tuple[TraceAttributeSpec, ...] = ()
-    mapping_version: str = "legacy-unversioned-phase5-v1"
+    mapping_version: str = LEGACY_TIMELINE_MAPPING_VERSION
     source_identity_sha256: str | None = None
     presentation_mode: bool = False
     unclassified_gaps: tuple[UnclassifiedGapSpec, ...] = ()

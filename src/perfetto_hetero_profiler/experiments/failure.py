@@ -1,4 +1,4 @@
-"""Stable Phase 7 failure classes based on structured evidence."""
+"""Stable experiment failure classes based on structured evidence."""
 
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 """Deterministic KPI Overview calculation, rendering, and publication.
 
-The package initializer intentionally stays dependency-light.  Phase 6 product
+The package initializer intentionally stays dependency-light. Overview product
 commands import the official Perfetto runtime lazily, so schema-only users and
 CPU tests can still import this package without that optional execution path.
 """

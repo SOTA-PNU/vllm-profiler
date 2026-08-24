@@ -114,7 +114,7 @@ class NpuRunCollector:
             and not self.config.allow_detailed_execution
         ):
             raise NotImplementedError(
-                "RBLN detailed-profile execution is deferred to Phase 3B; use --dry-run"
+                "RBLN detailed-profile execution requires the runtime collector; use --dry-run"
             )
         paths = self.config.paths
         paths.create()

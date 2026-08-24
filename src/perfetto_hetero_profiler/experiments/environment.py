@@ -1,4 +1,4 @@
-"""Read-only Phase 7B environment snapshots and idle checks."""
+"""Read-only experiment environment snapshots and idle checks."""
 
 from __future__ import annotations
 

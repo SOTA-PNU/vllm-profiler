@@ -131,7 +131,7 @@ class HybridBundleMerger:
             source.manifest.attributes.get("hybrid.fake_source") is True
             for source in (gpu, npu)
         ):
-            reason = "Phase 4A executable merge accepts fake source bundles only"
+            reason = "executable merge accepts synthetic source bundles only"
             return HybridMergeResult(
                 run_directory=paths.root,
                 status=RunStatus.FAILED,

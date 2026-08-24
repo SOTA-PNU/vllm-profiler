@@ -107,7 +107,7 @@ class GpuRunCollector:
     def run(self) -> GpuRunResult:
         if self.config.profile_mode is ProfileMode.DETAILED_PROFILE:
             raise NotImplementedError(
-                "detailed-profile execution is deferred to Phase 2B; use --dry-run"
+                "detailed-profile execution requires the runtime collector; use --dry-run"
             )
         paths = self.config.paths
         paths.create()

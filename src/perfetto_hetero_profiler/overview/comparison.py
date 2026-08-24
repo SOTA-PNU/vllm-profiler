@@ -69,7 +69,7 @@ def _run(report: Mapping[str, Any]) -> Mapping[str, Any]:
     nested = report.get("run")
     if isinstance(nested, Mapping):
         return nested
-    # Read the first internal Phase 6 model as a compatibility aid.  Generated
+    # Read the first internal Overview model as a compatibility aid. Generated
     # reports use the nested ``run`` contract.
     return {
         "run_id": report.get("run_id"),

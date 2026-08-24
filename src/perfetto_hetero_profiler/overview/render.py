@@ -1,4 +1,4 @@
-"""Deterministic, self-contained HTML rendering for Phase 6 Overview data."""
+"""Deterministic, self-contained HTML rendering for Overview data."""
 
 from __future__ import annotations
 

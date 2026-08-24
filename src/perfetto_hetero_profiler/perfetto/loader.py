@@ -895,11 +895,11 @@ def _native_envelope(
         value=detail.get("files"),
     )
     if is_rbln:
-        # Phase 4B closeout metadata predates the verified Perfetto-compatible
+        # Early closeout metadata predates the verified Perfetto-compatible
         # interpretation of RBLN PB files.  Accept that immutable legacy
         # provenance as input, while also accepting the corrected capture
         # policy emitted by newer runs.  Neither form proves canonical clock
-        # alignment; Phase 6C validates the PB with Trace Processor separately.
+        # alignment; native-detail validation checks the PB separately.
         legacy_metadata = (
             detail.get("format") == "vendor_rbln_pb"
             and detail.get("structural_parse") == "not_available"

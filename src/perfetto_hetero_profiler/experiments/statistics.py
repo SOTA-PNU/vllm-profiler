@@ -1,4 +1,4 @@
-"""Deterministic descriptive statistics and paired Phase 7 overhead.
+"""Deterministic descriptive statistics and paired profiler overhead.
 
 The functions in this module are deliberately pure.  They do not inspect
 hardware, files, clocks, or process state.  Callers must select valid trials
@@ -137,7 +137,7 @@ class DistributionSummary:
 
 
 def summarize_distribution(values: Sequence[Number]) -> DistributionSummary:
-    """Calculate the Phase 7 descriptive-statistics contract.
+    """Calculate the profiler experiment descriptive-statistics contract.
 
     Standard deviation is the sample standard deviation with denominator
     ``n - 1``.  MAD is the unscaled median absolute deviation.  CV is

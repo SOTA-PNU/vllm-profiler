@@ -82,17 +82,17 @@ hetero-profiler overview generate \
 ```
 
 고정된 Hybrid 구성에서 프로파일러 자체의 정확도·반복성·부하를 검증하려면
-Phase 7B 실행기를 사용합니다. 이 명령은 6개 조건의 pilot과 5개 formal round를
+experiment 실행기를 사용합니다. 이 명령은 6개 조건의 pilot과 5개 formal round를
 사전에 고정하고, 중단 시 checkpoint에서 재개합니다.
 
 ```bash
-hetero-profiler phase7 run \
-  --config /absolute/path/phase7b-config.json \
-  --experiment-root /absolute/path/phase7b-experiment \
+hetero-profiler experiment run \
+  --config /absolute/path/profiler-experiment-config.json \
+  --experiment-root /absolute/path/profiler-experiment \
   --dry-run
 ```
 
-설정과 실행 정책은 [사용 가이드](docs/usage.md#phase-7b-프로파일러-검증)를
+설정과 실행 정책은 [사용 가이드](docs/usage.md#프로파일러-반복성-및-측정-부하-검증)를
 참고하세요. 이 검증은 단일 모델·고정 partition에 대한 제한된 표본이며 일반
 하드웨어 benchmark가 아닙니다.
 

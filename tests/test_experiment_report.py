@@ -5,9 +5,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from perfetto_hetero_profiler.phase7.checkpoint import AttemptRecord, AttemptStatus, ExperimentCheckpoint
-from perfetto_hetero_profiler.phase7.report import build_report, canonical_json, render_report_html
-from perfetto_hetero_profiler.phase7.schedule import build_schedule
+from perfetto_hetero_profiler.experiments.checkpoint import AttemptRecord, AttemptStatus, ExperimentCheckpoint
+from perfetto_hetero_profiler.experiments.report import build_report, canonical_json, render_report_html
+from perfetto_hetero_profiler.experiments.schedule import build_schedule
 
 
 class ReportTests(unittest.TestCase):
@@ -74,6 +74,11 @@ class ReportTests(unittest.TestCase):
             self.assertLess(first["formal_repeatability"]["reference"]["latency.e2e"]["mean"], 10_000_000)
             self.assertEqual(first["paired_overhead"]["monitor_vs_reference"]["latency.e2e"]["expected_pair_count"], 5)
             self.assertEqual(first["progress"]["successful_logical_trials"], 36)
+            self.assertEqual(
+                first["report_type"],
+                "profiler_repeatability_overhead",
+            )
+            self.assertNotIn("phase", canonical_json(first).decode("utf-8").lower())
             self.assertEqual(
                 first["resources"]["monitor"]["resource.npu.utilization"]
                 ["trial_mean_distribution"]["mean"],

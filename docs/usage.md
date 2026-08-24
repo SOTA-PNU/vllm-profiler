@@ -36,7 +36,7 @@ binary를 `--trace-processor`로 명시하세요.
 | `hetero-profiler convert perfetto` | normalized hybrid run을 Perfetto로 변환 |
 | `hetero-profiler overview generate` | 단일 run의 JSON/HTML 리포트 생성 |
 | `hetero-profiler overview compare` | 여러 Overview 비교 |
-| `hetero-profiler phase7` | 고정 Hybrid 조건의 정확도·반복성·측정 부하 검증 |
+| `hetero-profiler experiment` | 고정 Hybrid 조건의 정확도·반복성·측정 부하 검증 |
 
 실행 전 `--dry-run`으로 경로와 child command를 확인하는 것을 권장합니다.
 
@@ -199,19 +199,19 @@ Versioned runtime capability가 있으면 KV handoff, transfer setup, transfer w
 decode scheduling wait를 독립 marker pair로 검증합니다. 이 capability가 없는
 이전 run에는 구간을 추정하지 않고 `not_available`로 유지합니다.
 
-## Phase 7B 프로파일러 검증
+## 프로파일러 반복성 및 측정 부하 검증
 
-`phase7`은 `collect hybrid`를 반복 호출해 프로파일러 자체의 정확도, 반복성,
+`experiment`는 `collect hybrid`를 반복 호출해 프로파일러 자체의 정확도, 반복성,
 측정 부하를 검증합니다. 설정 예시는
-[`phase7b_config.json`](../examples/phase7b_config.json)입니다. 먼저 고정
-Hybrid 설정을 준비하고 그 파일의 SHA-256을 Phase 7B 설정에 기록합니다.
+[`profiler_experiment_config.json`](../examples/profiler_experiment_config.json)입니다.
+먼저 고정 Hybrid 설정을 준비하고 그 파일의 SHA-256을 experiment 설정에 기록합니다.
 
 ```bash
 sha256sum /absolute/path/hybrid-config.json
 
-hetero-profiler phase7 run \
-  --config /absolute/path/phase7b-config.json \
-  --experiment-root /absolute/path/phase7b-experiment \
+hetero-profiler experiment run \
+  --config /absolute/path/profiler-experiment-config.json \
+  --experiment-root /absolute/path/profiler-experiment \
   --dry-run
 ```
 
@@ -220,22 +220,22 @@ hardware attempt 계획만 출력합니다. 실제 실행은 `--dry-run`을 제�
 중단된 실험은 같은 설정과 출력 경로로 재개합니다.
 
 ```bash
-hetero-profiler phase7 run \
-  --config /absolute/path/phase7b-config.json \
-  --experiment-root /absolute/path/phase7b-experiment \
+hetero-profiler experiment run \
+  --config /absolute/path/profiler-experiment-config.json \
+  --experiment-root /absolute/path/profiler-experiment \
   --resume
 
-hetero-profiler phase7 status \
-  --experiment-root /absolute/path/phase7b-experiment
+hetero-profiler experiment status \
+  --experiment-root /absolute/path/profiler-experiment
 
-hetero-profiler phase7 validate \
-  --experiment-root /absolute/path/phase7b-experiment
+hetero-profiler experiment validate \
+  --experiment-root /absolute/path/profiler-experiment
 
-hetero-profiler phase7 report \
-  --experiment-root /absolute/path/phase7b-experiment
+hetero-profiler experiment report \
+  --experiment-root /absolute/path/profiler-experiment
 ```
 
-`phase7 validate`는 성공 trial을 현재 디스크 상태에서 다시 읽어 검증 결과를
+`experiment validate`는 성공 trial을 현재 디스크 상태에서 다시 읽어 검증 결과를
 표준 출력으로 반환하며 기존 experiment 파일을 수정하지 않습니다.
 
 이미 게시된 experiment report를 보존하면서 report 집계 코드를 다시 적용하려면
@@ -243,9 +243,9 @@ hetero-profiler phase7 report \
 사용하고 report, limitations, source provenance와 detached manifest만 게시합니다.
 
 ```bash
-hetero-profiler phase7 report \
-  --experiment-root /absolute/path/phase7b-experiment \
-  --output-root /absolute/path/phase7b-report
+hetero-profiler experiment report \
+  --experiment-root /absolute/path/profiler-experiment \
+  --output-root /absolute/path/profiler-experiment-report
 ```
 
 실험 조건은 `reference`, `monitor`, `gpu_torch`, `gpu_nsys`, `npu_torch`,

@@ -1,6 +1,6 @@
 """Pure, self-reference-free artifact inventories for Perfetto conversion.
 
-The Phase 5 conversion output is published separately from its immutable
+The conversion output is published separately from its immutable
 source run.  Its artifact manifest inventories every regular file under the
 logical roots supplied by the caller, except for the manifest itself and its
 stored validation sidecar in the designated output root.

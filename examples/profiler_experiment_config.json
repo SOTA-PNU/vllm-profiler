@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "experiment_id": "phase7b-fixed-hybrid-validation",
+  "experiment_id": "fixed-hybrid-profiler-validation",
   "hybrid_config": {
     "path": "/absolute/path/hybrid-config.json",
     "sha256": "0000000000000000000000000000000000000000000000000000000000000000"

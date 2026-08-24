@@ -682,7 +682,7 @@ def validate_rbln_reports(
         "structural_parse": "deferred_to_official_trace_processor",
         "structural_parse_reason": (
             "capture closeout validates freshness and bounded timing evidence; "
-            "Phase 6C performs official Perfetto Trace Processor validation"
+            "native-detail conversion performs official Trace Processor validation"
         ),
         "reader_evidence": evidence,
         "host_timing_present": host_timing_present,
