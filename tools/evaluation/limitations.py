@@ -1,4 +1,4 @@
-"""Stable experiment limitation inventory."""
+"""Stable evaluation limitation inventory."""
 
 from __future__ import annotations
 

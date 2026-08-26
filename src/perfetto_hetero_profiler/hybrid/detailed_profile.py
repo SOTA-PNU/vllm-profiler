@@ -23,6 +23,8 @@ from ..schema import (
     validate_record,
     write_jsonl,
 )
+from ..support.files import sha256_file
+from ..support.json_io import write_jsonl_exclusive
 
 
 HybridProfileKind = Literal[
@@ -92,30 +94,14 @@ def select_profile_kind(enabled: Sequence[str]) -> HybridProfileKind:
 
 
 def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return sha256_file(path)
 
 
 def _write_plain_jsonl_exclusive(
     path: Path,
     rows: Sequence[Mapping[str, Any]],
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("x", encoding="utf-8", newline="\n") as stream:
-        for row in rows:
-            stream.write(
-                json.dumps(
-                    row,
-                    allow_nan=False,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                )
-                + "\n"
-            )
+    write_jsonl_exclusive(path, rows)
 
 
 def summarize_metrics(metrics: Sequence[MetricSample]) -> dict[str, Any]:

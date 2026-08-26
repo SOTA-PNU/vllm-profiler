@@ -17,6 +17,10 @@ from typing import Any, Mapping
 from ..hybrid.join import validate_marker_groups
 from ..overview.calculation import calculate_overview_kpis
 from ..schema import Availability
+from ..schema.catalog import (
+    KPI_PRESENTATION_BY_IDENTITY,
+    KPI_SECTION_ORDER,
+)
 from .compatibility import (
     LEGACY_PROFILE_KIND_ATTRIBUTE,
     LEGACY_TIMELINE_MAPPING_VERSION,
@@ -29,46 +33,10 @@ LEGACY_MAPPING_VERSION = LEGACY_TIMELINE_MAPPING_VERSION
 TIMELINE_SUMMARY_MAPPING_VERSION = "processing-timeline-info-stats-v1"
 TIMELINE_SUMMARY_ROOT_NAME = "Heterogeneous LLM Processing"
 
-_KPI_SECTIONS = (
-    "request_facing_latency",
-    "pipeline_latency",
-    "throughput_and_tokens",
-    "transfer",
-)
-
+_KPI_SECTIONS = KPI_SECTION_ORDER
 _DISPLAY_NAMES = {
-    ("request_facing_latency", "latency.e2e"): "Request E2E",
-    ("request_facing_latency", "latency.ttft"): "TTFT",
-    ("request_facing_latency", "latency.tpot"): "TPOT",
-    ("pipeline_latency", "latency.e2e"): "Pipeline E2E",
-    ("pipeline_latency", "latency.prefill"): "Prefill latency",
-    ("pipeline_latency", "latency.kv_export"): "KV export latency",
-    ("pipeline_latency", "latency.kv_transfer"): "KV transfer latency",
-    ("pipeline_latency", "latency.kv_transform"): "KV transform latency",
-    ("pipeline_latency", "latency.decode"): "Decode latency",
-    ("pipeline_latency", "latency.sampling"): "Sampling total",
-    ("pipeline_latency", "latency.wait"): "Pipeline wait",
-    ("throughput_and_tokens", "request.count"): "Request count",
-    ("throughput_and_tokens", "request.input_tokens"): "Input tokens",
-    ("throughput_and_tokens", "request.output_tokens"): "Output tokens",
-    ("throughput_and_tokens", "request.total_tokens"): "Total tokens",
-    ("throughput_and_tokens", "throughput.requests"): "Requests per second",
-    ("throughput_and_tokens", "throughput.input_tokens"): "Input tokens per second",
-    ("throughput_and_tokens", "throughput.output_tokens"): (
-        "Output tokens per second"
-    ),
-    ("throughput_and_tokens", "throughput.total_tokens"): (
-        "Total tokens per second"
-    ),
-    ("transfer", "transfer.bytes"): "Transferred bytes",
-    ("transfer", "transfer.duration"): "Transfer duration",
-    ("transfer", "transfer.effective_bandwidth"): "Effective bandwidth",
-    ("transfer", "transfer.transform_duration"): "Transform duration",
-    ("transfer", "transfer.wait_duration"): "Transfer wait",
-    ("transfer", "transfer.handoff_duration"): "KV handoff",
-    ("transfer", "transfer.setup_duration"): "Transfer setup",
-    ("transfer", "decode.schedule_wait_duration"): "Decode scheduling wait",
-    ("transfer", "transfer.e2e_share"): "Transfer E2E share",
+    identity: presentation.display_name
+    for identity, presentation in KPI_PRESENTATION_BY_IDENTITY.items()
 }
 
 

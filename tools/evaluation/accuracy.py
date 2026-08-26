@@ -1,4 +1,4 @@
-"""Pure experiment accuracy tolerance and exact-reconciliation checks."""
+"""Pure evaluation accuracy tolerance and exact-reconciliation checks."""
 
 from __future__ import annotations
 

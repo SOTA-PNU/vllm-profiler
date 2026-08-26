@@ -1,4 +1,4 @@
-"""Read-only experiment environment snapshots and idle checks."""
+"""Read-only evaluation environment snapshots and idle checks."""
 
 from __future__ import annotations
 
@@ -7,12 +7,13 @@ import json
 import os
 from pathlib import Path
 import platform
-import socket
 import subprocess
 import time
 from typing import Any
 
-from ..hybrid.runner_config import HybridRunnerConfig
+from perfetto_hetero_profiler.hybrid.runner_config import HybridRunnerConfig
+from perfetto_hetero_profiler.support.json_io import canonical_json_bytes
+from perfetto_hetero_profiler.support.network import port_available
 
 
 class EnvironmentNotIdleError(RuntimeError):
@@ -20,10 +21,7 @@ class EnvironmentNotIdleError(RuntimeError):
 
 
 def canonical_bytes(value: object) -> bytes:
-    return (
-        json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-        + "\n"
-    ).encode("utf-8")
+    return canonical_json_bytes(value)
 
 
 def _command(argv: tuple[str, ...], timeout: float = 15.0) -> dict[str, object]:
@@ -73,16 +71,7 @@ def _proc_text(path: str) -> dict[str, object]:
 
 
 def _port_free(host: str, port: int) -> bool:
-    family = socket.AF_INET6 if ":" in host else socket.AF_INET
-    sock = socket.socket(family, socket.SOCK_STREAM)
-    try:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind((host, port))
-        return True
-    except OSError:
-        return False
-    finally:
-        sock.close()
+    return port_available(host, port)
 
 
 def capture_environment(config: HybridRunnerConfig, *, stage: str) -> dict[str, object]:

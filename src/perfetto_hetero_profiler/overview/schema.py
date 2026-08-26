@@ -20,6 +20,11 @@ import re
 from typing import Any, Iterable, Mapping, Sequence, TypeVar
 
 from ..schema import Availability, METRIC_CATALOG
+from ..schema.catalog import (
+    INTERVAL_RESOURCE_METRICS,
+    KPI_SECTION_METRICS,
+    RESOURCE_AGGREGATIONS,
+)
 from ..schema.constants import JSON_SCHEMA_DRAFT, SCHEMA_VERSION, SHA256_RE
 from .model import (
     OVERVIEW_COMPARISON_RECORD_TYPE,
@@ -90,21 +95,8 @@ _RUN_STATUSES = {
     "cancelled",
 }
 _PROFILE_MODES = {"monitor", "detailed_profile"}
-_RESOURCE_AGGREGATIONS = {
-    "min": "minimum_v1",
-    "max": "maximum_v1",
-    "mean": "arithmetic_mean_v1",
-    "p50": "percentile_r7_v1",
-    "p95": "percentile_r7_v1",
-    "time_weighted_mean": "trailing_interval_time_weighted_mean_v1",
-}
-_INTERVAL_RESOURCE_METRICS = {
-    "resource.cpu.utilization",
-    "resource.gpu.utilization",
-    "resource.gpu.power",
-    "resource.npu.utilization",
-    "resource.npu.power",
-}
+_RESOURCE_AGGREGATIONS = dict(RESOURCE_AGGREGATIONS)
+_INTERVAL_RESOURCE_METRICS = INTERVAL_RESOURCE_METRICS
 _RUN_FIELDS = {
     "run_id",
     "mode",
@@ -113,38 +105,10 @@ _RUN_FIELDS = {
     "profiler_kind",
     "canonical_clock_domain_id",
 }
-_REQUEST_FACING_KPIS = {"latency.e2e", "latency.ttft", "latency.tpot"}
-_PIPELINE_KPIS = {
-    "latency.e2e",
-    "latency.prefill",
-    "latency.kv_export",
-    "latency.kv_transfer",
-    "latency.kv_transform",
-    "latency.decode",
-    "latency.sampling",
-    "latency.wait",
-}
-_THROUGHPUT_TOKEN_KPIS = {
-    "request.count",
-    "request.input_tokens",
-    "request.output_tokens",
-    "request.total_tokens",
-    "throughput.requests",
-    "throughput.input_tokens",
-    "throughput.output_tokens",
-    "throughput.total_tokens",
-}
-_TRANSFER_KPIS = {
-    "transfer.bytes",
-    "transfer.duration",
-    "transfer.effective_bandwidth",
-    "transfer.transform_duration",
-    "transfer.handoff_duration",
-    "transfer.setup_duration",
-    "transfer.wait_duration",
-    "decode.schedule_wait_duration",
-    "transfer.e2e_share",
-}
+_REQUEST_FACING_KPIS = KPI_SECTION_METRICS["request_facing_latency"]
+_PIPELINE_KPIS = KPI_SECTION_METRICS["pipeline_latency"]
+_THROUGHPUT_TOKEN_KPIS = KPI_SECTION_METRICS["throughput_and_tokens"]
+_TRANSFER_KPIS = KPI_SECTION_METRICS["transfer"]
 _COMPARISON_SECTION_CONTRACT = {
     "request_facing_latency": (
         _REQUEST_FACING_KPIS,

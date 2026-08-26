@@ -78,6 +78,15 @@ class BaseCollector:
             raise CollectorError(f"finalize is invalid while {self.state.value}")
         return self._finalize()
 
+    def __enter__(self) -> "BaseCollector":
+        self.prepare()
+        self.start()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.stop()
+        self.finalize()
+
     def _fail(self, error: Exception) -> None:
         self.last_error = error
         self.state = CollectorState.FAILED

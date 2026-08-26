@@ -9,7 +9,6 @@ never opts in to the "latest" endpoint.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
 from importlib import metadata as importlib_metadata
 import os
 from pathlib import Path
@@ -18,6 +17,8 @@ import stat
 import subprocess
 import sys
 from typing import Any
+
+from ..support.files import sha256_file
 
 
 PERFETTO_PACKAGE_VERSION = "0.57.2"
@@ -221,16 +222,12 @@ def _validate_regular_binary(path: Path) -> os.stat_result:
 
 
 def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
     try:
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
+        return sha256_file(path)
     except OSError as error:
         raise ToolchainValidationError(
             f"cannot hash Trace Processor binary {path}: {error}"
         ) from error
-    return digest.hexdigest()
 
 
 def _same_file_state(

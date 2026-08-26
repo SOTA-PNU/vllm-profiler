@@ -1,4 +1,4 @@
-"""Deterministic descriptive statistics and paired profiler overhead.
+"""Deterministic descriptive statistics and paired profiler evaluation.
 
 The functions in this module are deliberately pure.  They do not inspect
 hardware, files, clocks, or process state.  Callers must select valid trials

@@ -81,12 +81,13 @@ hetero-profiler overview generate \
   --trace-processor /path/to/trace_processor_shell
 ```
 
-고정된 Hybrid 구성에서 프로파일러 자체의 정확도·반복성·부하를 검증하려면
-experiment 실행기를 사용합니다. 이 명령은 6개 조건의 pilot과 5개 formal round를
-사전에 고정하고, 중단 시 checkpoint에서 재개합니다.
+고정된 Hybrid 구성에서 프로파일러 자체의 정확도·반복성·부하를 검증하는 기능은
+설치 패키지가 아니라 저장소 전용 평가 도구로 분리되어 있습니다. 이 도구는 6개
+조건의 pilot과 5개 formal round를 사전에 고정하고, 중단 시 checkpoint에서
+재개합니다.
 
 ```bash
-hetero-profiler experiment run \
+PYTHONPATH=src:. python3 -m tools.evaluation run \
   --config /absolute/path/profiler-experiment-config.json \
   --experiment-root /absolute/path/profiler-experiment \
   --dry-run

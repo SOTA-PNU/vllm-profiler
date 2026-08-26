@@ -9,6 +9,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 from html import escape
 from html.parser import HTMLParser
+from importlib import resources
 from typing import Any
 
 
@@ -78,6 +79,11 @@ _WORKLOAD_DIGEST_FIELDS = frozenset(
 )
 _RECORDED_DIGEST_LABEL = (
     "Recorded (full SHA-256 retained in overview.json)"
+)
+_OVERVIEW_STYLE = (
+    resources.files(__package__)
+    .joinpath("templates/overview.css")
+    .read_text(encoding="utf-8")
 )
 
 
@@ -549,41 +555,7 @@ def _document(title: str, body: str) -> str:
         f'content="{_CSP}">\n'
         f"<title>{_text(title)}</title>\n"
         "<style>\n"
-        ":root { color-scheme: light dark; font-family: system-ui, sans-serif; }\n"
-        "body { margin: 0; background: #f4f6f8; color: #17202a; }\n"
-        "main { max-width: 1180px; margin: 0 auto; padding: 1rem; }\n"
-        "header, section { background: #fff; border: 1px solid #c8d0d8; "
-        "border-radius: .5rem; margin: 0 0 1rem; padding: 1rem; }\n"
-        "h1, h2 { line-height: 1.25; margin-top: 0; }\n"
-        "h1 { font-size: 1.65rem; } h2 { font-size: 1.25rem; }\n"
-        ".lede, .muted { color: #52606d; }\n"
-        ".table-scroll { overflow-x: auto; margin-top: .5rem; }\n"
-        "table { border-collapse: collapse; min-width: 42rem; width: 100%; }\n"
-        "caption { font-weight: 700; text-align: left; padding: .4rem 0; }\n"
-        "th, td { border: 1px solid #c8d0d8; padding: .45rem .55rem; "
-        "text-align: left; vertical-align: top; }\n"
-        "th { background: #edf2f7; }\n"
-        ".status { border: 1px solid currentColor; border-radius: 1rem; "
-        "display: inline-block; font-weight: 700; padding: .1rem .55rem; }\n"
-        ".status-ok { color: #176b3a; } .status-warn { color: #7a5200; }\n"
-        ".status-bad { color: #a12622; } .status-muted { color: #52606d; }\n"
-        ".status-neutral { color: #334e68; }\n"
-        ".unavailable { color: #7a5200; font-weight: 700; }\n"
-        "code { overflow-wrap: anywhere; }\n"
-        "ul { padding-left: 1.3rem; }\n"
-        "@media (prefers-color-scheme: dark) {\n"
-        " body { background: #101820; color: #e8eef3; }\n"
-        " header, section { background: #18232d; border-color: #52606d; }\n"
-        " th { background: #253544; } th, td { border-color: #52606d; }\n"
-        " .lede, .muted { color: #b8c5d0; }\n"
-        " .status-ok { color: #78d49b; } .status-warn, .unavailable { "
-        "color: #ffd166; } .status-bad { color: #ff8a80; }\n"
-        " .status-muted, .status-neutral { color: #b8c5d0; }\n"
-        "}\n"
-        "@media (max-width: 640px) {\n"
-        " main { padding: .5rem; } header, section { padding: .75rem; }\n"
-        " h1 { font-size: 1.35rem; } table { font-size: .9rem; }\n"
-        "}\n"
+        f"{_OVERVIEW_STYLE}"
         "</style>\n"
         "</head>\n"
         "<body>\n"

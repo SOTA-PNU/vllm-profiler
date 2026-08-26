@@ -12,6 +12,10 @@ import stat
 from typing import Final
 
 from ..schema import Availability
+from ..schema.catalog import (
+    KPI_PRESENTATION_BY_IDENTITY,
+    TRACE_ATTRIBUTE_LATENCY_IDENTITIES,
+)
 from .model import TraceAttributeSpec
 
 
@@ -25,25 +29,13 @@ _INT64_MIN: Final = -(2**63)
 _INT64_MAX: Final = 2**63 - 1
 _SHA256_RE: Final = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 
-_LATENCY_EXPORTS: Final = (
-    ("request_facing_latency", "latency.e2e", "kpi.latency.e2e"),
-    ("request_facing_latency", "latency.ttft", "kpi.latency.ttft"),
-    ("request_facing_latency", "latency.tpot", "kpi.latency.tpot"),
-    ("pipeline_latency", "latency.e2e", "pipeline.latency.e2e"),
-    ("pipeline_latency", "latency.prefill", "kpi.latency.prefill"),
-    ("pipeline_latency", "latency.kv_export", "kpi.latency.kv_export"),
-    ("transfer", "transfer.handoff_duration", "kpi.latency.kv_handoff"),
-    ("transfer", "transfer.setup_duration", "kpi.latency.kv_transfer_setup"),
-    ("pipeline_latency", "latency.kv_transfer", "kpi.latency.kv_transfer"),
-    ("transfer", "transfer.wait_duration", "kpi.latency.kv_transfer_wait"),
-    ("pipeline_latency", "latency.kv_transform", "kpi.latency.kv_transform"),
+_LATENCY_EXPORTS: Final = tuple(
     (
-        "transfer",
-        "decode.schedule_wait_duration",
-        "kpi.latency.decode_schedule_wait",
-    ),
-    ("pipeline_latency", "latency.decode", "kpi.latency.decode"),
-    ("pipeline_latency", "latency.sampling", "kpi.latency.sampling"),
+        identity[0],
+        identity[1],
+        KPI_PRESENTATION_BY_IDENTITY[identity].trace_attribute_key,
+    )
+    for identity in TRACE_ATTRIBUTE_LATENCY_IDENTITIES
 )
 _THROUGHPUT_EXPORTS: Final = (
     (

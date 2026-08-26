@@ -1,4 +1,4 @@
-"""Deterministic pilot and formal-trial scheduling."""
+"""Deterministic pilot and formal evaluation scheduling."""
 
 from __future__ import annotations
 

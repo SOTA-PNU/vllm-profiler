@@ -1,4 +1,4 @@
-"""Fresh trial validation and independent client reconciliation."""
+"""Fresh evaluation validation and independent client reconciliation."""
 
 from __future__ import annotations
 

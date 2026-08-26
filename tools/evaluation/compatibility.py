@@ -1,4 +1,4 @@
-"""Input-only identifiers for experiments created by older releases."""
+"""Input-only identifiers for evaluations created by older releases."""
 
 LEGACY_SCHEDULE_SEED_DOMAIN = "phase7b"
 LEGACY_REPORT_TYPE = "phase7b_repeatability_overhead"

@@ -1,4 +1,4 @@
-"""Strict configuration for fixed hybrid profiler experiments."""
+"""Strict configuration for fixed hybrid profiler evaluations."""
 
 from __future__ import annotations
 
@@ -10,7 +10,9 @@ from pathlib import Path
 import re
 from typing import Any
 
-from ..hybrid.runner_config import HybridRunnerConfig, load_hybrid_runner_config
+from perfetto_hetero_profiler.hybrid.runner_config import HybridRunnerConfig, load_hybrid_runner_config
+from perfetto_hetero_profiler.support.config_fields import ConfigFields
+from perfetto_hetero_profiler.support.files import sha256_file as _sha256_file
 from .paths import validate_existing_real_path, validate_safe_name
 from .compatibility import LEGACY_SCHEDULE_SEED_DOMAIN
 from .schedule import (
@@ -30,6 +32,9 @@ class ExperimentConfigError(ValueError):
     pass
 
 
+_FIELDS = ConfigFields(ExperimentConfigError)
+
+
 def _duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -40,23 +45,11 @@ def _duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _object(value: object, name: str, fields: set[str]) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ExperimentConfigError(f"{name} must be an object")
-    unknown = sorted(set(value) - fields)
-    missing = sorted(fields - set(value))
-    if unknown:
-        raise ExperimentConfigError(f"unknown {name} field: {unknown[0]}")
-    if missing:
-        raise ExperimentConfigError(f"missing {name} field: {missing[0]}")
-    return dict(value)
+    return _FIELDS.exact_object(value, name, fields)
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return _sha256_file(path)
 
 
 @dataclass(frozen=True, slots=True)

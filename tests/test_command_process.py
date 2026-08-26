@@ -95,6 +95,24 @@ class CommandTests(unittest.TestCase):
             process.start()
             self.assertEqual(process.wait().return_code, 7)
 
+    def test_context_manager_starts_and_stops_owned_process(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process = ManagedProcess(
+                CommandSpec(
+                    argv=(sys.executable, "-c", "import time; time.sleep(5)"),
+                    terminate_grace_sec=0.2,
+                ),
+                root / "stdout.log",
+                root / "stderr.log",
+            )
+            with process as active:
+                self.assertIs(active, process)
+                self.assertIsNotNone(active.process)
+            self.assertIsNotNone(process.context_result)
+            self.assertTrue(process.context_result.terminated)
+            self.assertFalse(process.context_result.killed)
+
     def test_timeout_terminates_owned_child(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

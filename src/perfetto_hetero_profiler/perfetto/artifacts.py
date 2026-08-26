@@ -24,6 +24,7 @@ from typing import Any
 import uuid
 
 from ..schema.constants import SCHEMA_VERSION
+from ..support.files import sha256_file
 
 
 ARTIFACT_MANIFEST_NAME = "artifact_manifest.json"
@@ -72,11 +73,7 @@ ArtifactError = ArtifactInventoryError
 
 
 def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return sha256_file(path)
 
 
 def _json_bytes(value: Mapping[str, Any]) -> bytes:

@@ -1,4 +1,4 @@
-"""Path validation for immutable profiler experiments.
+"""Path validation for immutable profiler evaluations.
 
 The runner never resolves a user-supplied symlink into an accepted path.  New
 outputs must have a real, existing parent and must not overlap immutable

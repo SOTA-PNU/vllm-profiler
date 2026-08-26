@@ -5,9 +5,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from perfetto_hetero_profiler.experiments.checkpoint import AttemptRecord, AttemptStatus, ExperimentCheckpoint
-from perfetto_hetero_profiler.experiments.report import build_report, canonical_json, render_report_html
-from perfetto_hetero_profiler.experiments.schedule import build_schedule
+from tools.evaluation.checkpoint import AttemptRecord, AttemptStatus, ExperimentCheckpoint
+from tools.evaluation.report import build_report, canonical_json, render_report_html
+from tools.evaluation.schedule import build_schedule
 
 
 class ReportTests(unittest.TestCase):

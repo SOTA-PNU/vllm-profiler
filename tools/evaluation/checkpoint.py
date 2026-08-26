@@ -1,4 +1,4 @@
-"""Atomic experiment checkpoints and conservative resume decisions."""
+"""Atomic evaluation checkpoints and conservative resume decisions."""
 
 from __future__ import annotations
 

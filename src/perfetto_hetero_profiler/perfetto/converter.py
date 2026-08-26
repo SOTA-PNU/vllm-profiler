@@ -5,13 +5,14 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 import ctypes
 import errno
-import hashlib
 import os
 from pathlib import Path
 import shutil
 import stat
 import tempfile
 from typing import Any, Mapping
+
+from ..support.files import sha256_file
 
 from ..schema import SCHEMA_VERSION
 from .artifacts import (
@@ -1169,10 +1170,7 @@ def _stable_file_identity(path: Path) -> tuple[int, str]:
     before = path.lstat()
     if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode):
         raise PerfettoConversionError(f"output is not a regular file: {path}")
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
+    digest = sha256_file(path)
     after = path.lstat()
     state = (
         before.st_dev,
@@ -1189,7 +1187,7 @@ def _stable_file_identity(path: Path) -> tuple[int, str]:
         after.st_mtime_ns,
     ):
         raise PerfettoConversionError(f"output changed while hashing: {path}")
-    return after.st_size, digest.hexdigest()
+    return after.st_size, digest
 
 
 def _fsync_file(path: Path) -> None:

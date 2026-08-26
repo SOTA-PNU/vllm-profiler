@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
-import os
 from pathlib import Path
 import platform
 import shutil
@@ -30,9 +29,9 @@ from ...schema import (
     RunStatus,
     SoftwareDescriptor,
     WorkloadDescriptor,
-    write_json,
     write_jsonl,
 )
+from ...schema.manifests import publish_run_manifest
 from ..command import mask_command
 from ..process import ManagedProcess
 from ..run import run_monitored_process
@@ -113,7 +112,7 @@ class GpuRunCollector:
         paths.create()
         devices, discovery_error = self._discover_devices()
         manifest = self._manifest(devices, RunStatus.RUNNING, ())
-        self._replace_manifest(paths.manifest, manifest, initial=True)
+        publish_run_manifest(paths.manifest, manifest, initial=True)
         clock = ClockDomain(
             run_id=self.config.run_id,
             clock_domain_id=HOST_CLOCK_DOMAIN,
@@ -204,7 +203,7 @@ class GpuRunCollector:
         else:
             status = RunStatus.SUCCEEDED
         final_manifest = self._manifest(devices, status, tuple(errors))
-        self._replace_manifest(paths.manifest, final_manifest)
+        publish_run_manifest(paths.manifest, final_manifest)
         return GpuRunResult(
             status=status,
             return_code=monitored.command.return_code,
@@ -390,18 +389,6 @@ class GpuRunCollector:
             size_bytes=actual_path.stat().st_size,
             attributes={},
         )
-
-    @staticmethod
-    def _replace_manifest(
-        path: Path, manifest: RunManifest, *, initial: bool = False
-    ) -> None:
-        if initial:
-            write_json(path, manifest)
-            return
-        temporary = path.with_name(f".{path.name}.tmp")
-        write_json(temporary, manifest)
-        os.replace(temporary, path)
-
 
 def format_plan_json(plan: dict[str, object]) -> str:
     return json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True)

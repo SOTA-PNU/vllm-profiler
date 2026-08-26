@@ -31,6 +31,11 @@ validated hybrid run
 - **Perfetto**: event와 metric을 track, slice, counter와 flow로 변환
 - **Overview**: KPI와 provenance를 JSON 및 offline HTML로 표현
 
+반복 schedule, checkpoint/resume, 비교 통계와 평가 report는 설치되는 core
+package에 포함하지 않습니다. 저장소의 `tools/evaluation`이 공개 core collection
+API를 호출하는 얇은 평가 계층으로 이를 제공하며, 평가 compatibility도 그 경계
+안에 유지합니다.
+
 입력 run과 raw artifact는 읽기 전용으로 취급합니다. 파생 결과는 새로운
 output directory에 생성하며 기존 결과를 덮어쓰지 않습니다.
 

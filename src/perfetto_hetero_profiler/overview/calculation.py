@@ -9,7 +9,8 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 from ..schema import Availability
-from ..schema.metric_catalog import METRIC_CATALOG
+from ..schema.catalog import METRIC_CATALOG
+from ..schema.catalog import DERIVED_LATENCY_METRICS, STAGE_BY_METRIC
 from ..schema.records import EventRecord, MetricSample
 from .resources import ResourceCalculationError, StageWindow, summarize_resources
 
@@ -18,23 +19,14 @@ class OverviewCalculationError(ValueError):
     """Raised when KPI provenance is contradictory or unsafe."""
 
 
-_PAIRINGS = (
-    ("latency.e2e", "request_received", "response_done", "request"),
-    ("latency.prefill", "prefill_start", "prefill_end", "prefill"),
-    ("latency.kv_export", "kv_export_start", "kv_export_end", "kv_export"),
+_PAIRINGS = tuple(
     (
-        "latency.kv_transfer",
-        "kv_transfer_start",
-        "kv_transfer_end",
-        "kv_transfer",
-    ),
-    (
-        "latency.kv_transform",
-        "kv_transform_start",
-        "kv_transform_end",
-        "kv_transform",
-    ),
-    ("latency.decode", "decode_loop_start", "decode_loop_end", "decode"),
+        metric_name,
+        STAGE_BY_METRIC[metric_name].start_event,
+        STAGE_BY_METRIC[metric_name].end_event,
+        STAGE_BY_METRIC[metric_name].window,
+    )
+    for metric_name in DERIVED_LATENCY_METRICS
 )
 
 

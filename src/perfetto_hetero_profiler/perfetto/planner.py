@@ -18,6 +18,12 @@ from ..schema import (
     Phase,
     RunManifest,
 )
+from ..schema.catalog import (
+    PIPELINE_STAGE_ORDER,
+    RESOURCE_DISPLAY_NAMES,
+    RESOURCE_TRACK_ORDER,
+    STAGE_DEFINITIONS,
+)
 from .model import (
     AnnotationValue,
     CounterSpec,
@@ -110,111 +116,18 @@ class _PairedSlice:
     spec: SliceSpec
 
 
-_PAIR_DEFINITIONS = (
+_PAIR_DEFINITIONS = tuple(
     _PairDefinition(
-        "request_received",
-        "response_done",
-        "request",
-        "Request lifecycle",
-        "Request",
-        Phase.REQUEST,
-        Phase.RESPONSE,
-    ),
-    _PairDefinition(
-        "prefill_start",
-        "prefill_end",
-        "gpu_prefill",
-        "GPU Prefill",
-        "GPU Prefill",
-        Phase.PREFILL,
-    ),
-    _PairDefinition(
-        "kv_export_start",
-        "kv_export_end",
-        "kv_export",
-        "KV Export",
-        "KV Export",
-        Phase.KV_EXPORT,
-    ),
-    _PairDefinition(
-        "kv_handoff_start",
-        "kv_handoff_end",
-        "kv_handoff",
-        "KV Handoff",
-        "KV Handoff",
-        Phase.KV_TRANSFER,
-        discriminator="transfer",
-    ),
-    _PairDefinition(
-        "kv_transfer_setup_start",
-        "kv_transfer_setup_end",
-        "kv_transfer_setup",
-        "KV Transfer Setup",
-        "KV Transfer Setup",
-        Phase.KV_TRANSFER,
-        discriminator="transfer",
-    ),
-    _PairDefinition(
-        "kv_transfer_start",
-        "kv_transfer_end",
-        "kv_transfer",
-        "KV Transfer",
-        "KV Transfer",
-        Phase.KV_TRANSFER,
-        discriminator="transfer",
-    ),
-    _PairDefinition(
-        "kv_transfer_wait_start",
-        "kv_transfer_wait_end",
-        "kv_transfer_wait",
-        "KV Transfer Wait",
-        "KV Transfer Wait",
-        Phase.KV_TRANSFER,
-        discriminator="transfer",
-    ),
-    _PairDefinition(
-        "kv_transform_start",
-        "kv_transform_end",
-        "kv_transform",
-        "KV Transform",
-        "KV Transform",
-        Phase.KV_TRANSFORM,
-    ),
-    _PairDefinition(
-        "decode_schedule_wait_start",
-        "decode_schedule_wait_end",
-        "decode_schedule_wait",
-        "Decode Scheduling Wait",
-        "Decode Scheduling Wait",
-        Phase.DECODE,
-        discriminator="transfer",
-    ),
-    _PairDefinition(
-        "decode_loop_start",
-        "decode_loop_end",
-        "npu_decode",
-        "NPU Decode",
-        "NPU Decode",
-        Phase.DECODE,
-    ),
-    _PairDefinition(
-        "decode_step_start",
-        "decode_step_end",
-        "npu_decode_step",
-        "NPU Decode Step",
-        "NPU Decode Step",
-        Phase.DECODE,
-        discriminator="step",
-    ),
-    _PairDefinition(
-        "sampling_start",
-        "sampling_end",
-        "sampling",
-        "Sampling",
-        "Sampling",
-        Phase.SAMPLING,
-        discriminator="step",
-    ),
+        stage.start_event,
+        stage.end_event,
+        stage.track_key,
+        stage.track_name,
+        stage.slice_name,
+        stage.phase,
+        stage.end_phase,
+        stage.discriminator,
+    )
+    for stage in STAGE_DEFINITIONS
 )
 
 _PAIR_EVENT_NAMES = {
@@ -224,60 +137,15 @@ _PAIR_EVENT_NAMES = {
 }
 
 _TRACK_DESCRIPTIONS = {
-    "request": "End-to-end request lifecycle on the canonical clock.",
-    "gpu_prefill": "GPU prefill markers paired without timestamp inference.",
-    "kv_export": "GPU KV export markers paired by explicit request identity.",
-    "kv_handoff": "Export-to-transfer handoff paired by explicit correlation identity.",
-    "kv_transfer_setup": "Host-side NIXL descriptor and handle preparation.",
-    "kv_transfer": "GPU-to-NPU KV transfer paired by explicit transfer identity.",
-    "kv_transfer_wait": "Observed incomplete-to-done NIXL polling interval.",
-    "kv_transform": "NPU KV transform markers on the canonical clock.",
-    "npu_decode": "NPU decode loop markers on the canonical clock.",
-    "decode_schedule_wait": "Decode-ready to first model-step scheduling interval.",
-    "npu_decode_step": "Ordered NPU decode steps with preserved step index.",
-    "sampling": "Ordered sampling steps with preserved step index.",
+    **{stage.track_key: stage.description for stage in STAGE_DEFINITIONS},
     "response": "Canonical response completion point.",
     "profiler": "Host API bracket for native profiler capture; partially aligned.",
     "clock_metadata": "Canonical and native clock alignment policy.",
 }
 
-_COUNTER_NAMES = {
-    "resource.cpu.utilization": "CPU utilization",
-    "resource.process.cpu_memory": "Process CPU memory",
-    "resource.process.memory_used": "Process CPU memory",
-    "resource.system.memory_used": "System memory",
-    "resource.gpu.utilization": "GPU utilization",
-    "resource.gpu.memory_used": "GPU memory",
-    "resource.gpu.power": "GPU power",
-    "resource.npu.utilization": "NPU utilization",
-    "resource.npu.memory_used": "NPU memory",
-    "resource.npu.power": "NPU power",
-}
-
-_RESOURCE_TRACK_ORDER = {
-    "resource.system.memory_used": 0,
-    "resource.cpu.utilization": 1,
-    "resource.process.cpu_memory": 2,
-    "resource.process.memory_used": 2,
-    "resource.gpu.memory_used": 0,
-    "resource.gpu.power": 1,
-    "resource.gpu.utilization": 2,
-    "resource.npu.memory_used": 0,
-    "resource.npu.power": 1,
-    "resource.npu.utilization": 2,
-}
-
-_PIPELINE_TRACK_ORDER = {
-    "gpu_prefill": 0,
-    "kv_export": 1,
-    "kv_handoff": 2,
-    "kv_transfer_setup": 3,
-    "kv_transfer": 4,
-    "kv_transfer_wait": 5,
-    "kv_transform": 6,
-    "decode_schedule_wait": 7,
-    "npu_decode": 8,
-}
+_COUNTER_NAMES = RESOURCE_DISPLAY_NAMES
+_RESOURCE_TRACK_ORDER = RESOURCE_TRACK_ORDER
+_PIPELINE_TRACK_ORDER = PIPELINE_STAGE_ORDER
 _DECODE_DETAIL_TRACK_ORDER = {"npu_decode_step": 0, "sampling": 1}
 _BOUNDARY_EVENT_NAMES = frozenset(
     {

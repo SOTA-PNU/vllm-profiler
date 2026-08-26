@@ -1,4 +1,4 @@
-"""Repeatability, accuracy, and overhead experiment support."""
+"""Repository-only profiler evaluation support."""
 
 from .accuracy import (
     AccuracyCheck,

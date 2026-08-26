@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 import ctypes
 import errno
-import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -14,6 +13,8 @@ import shutil
 import stat
 import tempfile
 from typing import Any
+
+from ..support.files import sha256_file
 
 from ..perfetto.artifacts import (
     ARTIFACT_MANIFEST_NAME,
@@ -224,10 +225,7 @@ def _file_metadata(path: Path) -> dict[str, Any]:
     before = path.lstat()
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
         raise OverviewPublicationError(f"published output is not regular: {path}")
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
+    digest = sha256_file(path)
     after = path.lstat()
     fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")
     if any(getattr(before, field) != getattr(after, field) for field in fields):
@@ -235,7 +233,7 @@ def _file_metadata(path: Path) -> dict[str, Any]:
     return {
         "relative_path": path.name,
         "size_bytes": after.st_size,
-        "sha256": digest.hexdigest(),
+        "sha256": digest,
     }
 
 

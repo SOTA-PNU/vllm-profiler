@@ -38,6 +38,7 @@ from ..schema import (
     write_json,
     write_jsonl,
 )
+from ..schema.catalog import STAGE_DEFINITIONS
 from .alignment import (
     AlignmentError,
     TimestampTransform,
@@ -64,21 +65,9 @@ from .validation import (
 
 
 _PHASE_METRICS = {
-    "latency.e2e": ("request_received", "response_done", Phase.REQUEST),
-    "latency.prefill": ("prefill_start", "prefill_end", Phase.PREFILL),
-    "latency.kv_export": ("kv_export_start", "kv_export_end", Phase.KV_EXPORT),
-    "latency.kv_transform": (
-        "kv_transform_start",
-        "kv_transform_end",
-        Phase.KV_TRANSFORM,
-    ),
-    "latency.kv_transfer": (
-        "kv_transfer_start",
-        "kv_transfer_end",
-        Phase.KV_TRANSFER,
-    ),
-    "latency.decode": ("decode_loop_start", "decode_loop_end", Phase.DECODE),
-    "latency.sampling": ("sampling_start", "sampling_end", Phase.SAMPLING),
+    stage.metric_name: (stage.start_event, stage.end_event, stage.phase)
+    for stage in STAGE_DEFINITIONS
+    if stage.metric_name is not None and stage.metric_name.startswith("latency.")
 }
 
 

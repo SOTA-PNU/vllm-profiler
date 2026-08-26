@@ -10,6 +10,7 @@ import re
 from typing import Any, Literal
 
 from ..schema.validation import validate_run_id
+from ..support.config_fields import ConfigFields
 
 
 HybridProfileMode = Literal[
@@ -24,58 +25,14 @@ class HybridRunnerConfigError(ValueError):
     """The runner configuration is malformed or unsafe."""
 
 
-def _object(value: object, field: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise HybridRunnerConfigError(f"{field} must be an object")
-    return dict(value)
-
-
-def _keys(value: dict[str, Any], allowed: set[str], field: str) -> None:
-    unknown = sorted(set(value) - allowed)
-    if unknown:
-        raise HybridRunnerConfigError(f"unknown {field} field: {unknown[0]}")
-
-
-def _string(value: object, field: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise HybridRunnerConfigError(f"{field} must be a non-empty string")
-    return value
-
-
-def _integer(value: object, field: str, minimum: int, maximum: int) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise HybridRunnerConfigError(f"{field} must be an integer")
-    if not minimum <= value <= maximum:
-        raise HybridRunnerConfigError(
-            f"{field} must be in [{minimum}, {maximum}]"
-        )
-    return value
-
-
-def _number(value: object, field: str, minimum: float, maximum: float) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise HybridRunnerConfigError(f"{field} must be a number")
-    result = float(value)
-    if not minimum <= result <= maximum:
-        raise HybridRunnerConfigError(
-            f"{field} must be in [{minimum:g}, {maximum:g}]"
-        )
-    return result
-
-
-def _boolean(value: object, field: str) -> bool:
-    if not isinstance(value, bool):
-        raise HybridRunnerConfigError(f"{field} must be a boolean")
-    return value
-
-
-def _absolute_path(value: object, field: str, *, no_symlink: bool = False) -> Path:
-    path = Path(_string(value, field))
-    if not path.is_absolute():
-        raise HybridRunnerConfigError(f"{field} must be an absolute path")
-    if no_symlink and path.exists() and path.is_symlink():
-        raise HybridRunnerConfigError(f"{field} must not be a symlink")
-    return path
+_FIELDS = ConfigFields(HybridRunnerConfigError)
+_object = _FIELDS.object
+_keys = _FIELDS.reject_unknown
+_string = _FIELDS.string
+_integer = _FIELDS.integer
+_number = _FIELDS.number
+_boolean = _FIELDS.boolean
+_absolute_path = _FIELDS.absolute_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,12 +201,7 @@ def _server(document: object, field: str) -> ServerConfig:
 
 
 def _relative_output(value: object, field: str) -> Path:
-    path = Path(_string(value, field))
-    if path.is_absolute() or not path.parts or ".." in path.parts:
-        raise HybridRunnerConfigError(
-            f"{field} must be a safe relative output path"
-        )
-    return path
+    return _FIELDS.relative_path(value, field)
 
 
 def load_hybrid_runner_config(path: Path) -> HybridRunnerConfig:

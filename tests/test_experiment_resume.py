@@ -5,23 +5,23 @@ import tempfile
 import unittest
 from unittest import mock
 
-from perfetto_hetero_profiler.experiments.checkpoint import (
+from tools.evaluation.checkpoint import (
     AttemptRecord,
     AttemptStatus,
     CheckpointIntegrityError,
     CheckpointStore,
     ExperimentCheckpoint,
 )
-from perfetto_hetero_profiler.experiments.config import canonical_config_bytes, load_experiment_config
-from perfetto_hetero_profiler.experiments.experiment import RETRYABLE, _resume
-from perfetto_hetero_profiler.experiments.failure import (
+from tools.evaluation.config import canonical_config_bytes, load_experiment_config
+from tools.evaluation.experiment import RETRYABLE, _resume
+from tools.evaluation.failure import (
     ConnectionEvidence,
     FailureClass,
     FailurePhase,
     classify_connection_failure,
 )
-from perfetto_hetero_profiler.experiments.paths import ExperimentPaths
-from perfetto_hetero_profiler.experiments.schedule import canonical_schedule_bytes
+from tools.evaluation.paths import ExperimentPaths
+from tools.evaluation.schedule import canonical_schedule_bytes
 
 from tests.test_experiment_contract import write_config
 
@@ -94,7 +94,7 @@ class ResumeTests(unittest.TestCase):
             store.initialize(initial)
             store.update(initial.with_attempt(success))
             with mock.patch(
-                "perfetto_hetero_profiler.experiments.experiment._fresh_attempt_validation",
+                "tools.evaluation.experiment._fresh_attempt_validation",
                 return_value=False,
             ):
                 with self.assertRaises(CheckpointIntegrityError):

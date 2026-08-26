@@ -10,30 +10,32 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from perfetto_hetero_profiler.experiments.checkpoint import (
+from perfetto_hetero_profiler.schema.records import RunStatus
+from tools.evaluation.checkpoint import (
     AttemptRecord,
     AttemptStatus,
     CheckpointIntegrityError,
     CheckpointStore,
     ExperimentCheckpoint,
 )
-from perfetto_hetero_profiler.experiments.config import (
+from tools.evaluation.config import (
     ExperimentConfigError,
     load_experiment_config,
 )
-from perfetto_hetero_profiler.experiments.compatibility import (
+from tools.evaluation.compatibility import (
     LEGACY_SCHEDULE_SEED_DOMAIN,
 )
-from perfetto_hetero_profiler.experiments.experiment import (
+from tools.evaluation.experiment import (
     CONDITION_MODE,
+    _AttemptLifecycle,
     build_plan,
     run_experiment,
     validate_experiment,
 )
-from perfetto_hetero_profiler.experiments.failure import FailureClass
-from perfetto_hetero_profiler.experiments.limitations import limitation_inventory
-from perfetto_hetero_profiler.experiments.paths import ExperimentPaths, ExperimentPathError
-from perfetto_hetero_profiler.experiments.schedule import (
+from tools.evaluation.failure import FailureClass
+from tools.evaluation.limitations import limitation_inventory
+from tools.evaluation.paths import ExperimentPaths, ExperimentPathError
+from tools.evaluation.schedule import (
     Condition,
     TrialKind,
     build_schedule,
@@ -103,8 +105,8 @@ class ScheduleTests(unittest.TestCase):
 class ConfigTests(unittest.TestCase):
     def test_packaged_schema_and_example_use_canonical_identity(self):
         schema_path = (
-            resources.files("perfetto_hetero_profiler.experiments")
-            / "json/v1/profiler_experiment_config.schema.json"
+            resources.files("tools.evaluation")
+            / "schema/profiler_experiment_config.schema.json"
         )
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         self.assertEqual(
@@ -117,7 +119,7 @@ class ConfigTests(unittest.TestCase):
             "Hybrid profiler experiment configuration",
         )
         example = json.loads(
-            (Path(__file__).parents[1] / "examples/profiler_experiment_config.json")
+            (Path(__file__).parents[1] / "tools/evaluation/examples/profiler_experiment_config.json")
             .read_text(encoding="utf-8")
         )
         self.assertEqual(
@@ -156,7 +158,7 @@ class ConfigTests(unittest.TestCase):
             config_path = write_config(root)
             output = root / "planned-experiment"
             with mock.patch(
-                "perfetto_hetero_profiler.experiments.experiment.HybridRunner"
+                "tools.evaluation.experiment.HybridRunner"
             ) as runner:
                 plan = run_experiment(
                     config_path=config_path,
@@ -238,6 +240,78 @@ class CheckpointTests(unittest.TestCase):
 
 
 class ExperimentValidationTests(unittest.TestCase):
+    def test_attempt_lifecycle_wraps_core_runner_with_evaluation_checks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "runs/sample-gpu/raw/client").mkdir(parents=True)
+            (root / "runs/sample-gpu/raw/client/measured_requests.jsonl").write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+            hybrid = SimpleNamespace()
+            config = SimpleNamespace(load_hybrid=lambda: hybrid)
+            runner_result = SimpleNamespace(
+                status=RunStatus.SUCCEEDED,
+                errors=(),
+            )
+            with mock.patch(
+                "tools.evaluation.experiment.wait_for_idle",
+                return_value={"stage": "before"},
+            ), mock.patch(
+                "tools.evaluation.experiment.validate_hybrid_invocation"
+            ) as preflight, mock.patch(
+                "tools.evaluation.experiment.HybridRunner"
+            ) as runner, mock.patch(
+                "tools.evaluation.experiment.validate_trial",
+                return_value={"valid": True},
+            ), mock.patch(
+                "tools.evaluation.experiment.capture_environment",
+                return_value={"stage": "after"},
+            ), mock.patch(
+                "tools.evaluation.experiment.idle_reasons",
+                return_value=[],
+            ):
+                runner.return_value.run.return_value = runner_result
+                outcome = _AttemptLifecycle(
+                    config=config,
+                    attempt_root=root,
+                    attempt_id="sample",
+                    condition=Condition.MONITOR,
+                    profile_mode="monitor",
+                    resource_telemetry=True,
+                ).execute()
+
+            self.assertTrue(outcome.valid)
+            self.assertIsNone(outcome.failure)
+            preflight.assert_called_once_with(
+                hybrid,
+                run_root=root / "runs",
+                run_id="sample",
+                profile_mode="monitor",
+            )
+            runner.assert_called_once_with(
+                hybrid,
+                run_root=root / "runs",
+                run_id="sample",
+                profile_mode="monitor",
+                enable_telemetry=True,
+            )
+            self.assertEqual(
+                json.loads((root / "environment_before.json").read_text()),
+                {"stage": "before"},
+            )
+            self.assertEqual(
+                json.loads((root / "environment_after.json").read_text()),
+                {"stage": "after"},
+            )
+            independent = json.loads(
+                (root / "independent_client.json").read_text()
+            )
+            self.assertEqual(
+                independent["source_relative_path"],
+                "runs/sample-gpu/raw/client/measured_requests.jsonl",
+            )
+
     def test_fresh_validation_is_read_only_unless_persistence_is_explicit(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -260,16 +334,16 @@ class ExperimentValidationTests(unittest.TestCase):
                 attempts=attempts,
             )
             with mock.patch(
-                "perfetto_hetero_profiler.experiments.experiment.load_experiment_config",
+                "tools.evaluation.experiment.load_experiment_config",
                 return_value=config,
             ), mock.patch(
-                "perfetto_hetero_profiler.experiments.experiment.CheckpointStore.load",
+                "tools.evaluation.experiment.CheckpointStore.load",
                 return_value=checkpoint,
             ), mock.patch(
-                "perfetto_hetero_profiler.experiments.experiment._fresh_attempt_validation",
+                "tools.evaluation.experiment._fresh_attempt_validation",
                 return_value=True,
             ), mock.patch(
-                "perfetto_hetero_profiler.experiments.experiment._write_json"
+                "tools.evaluation.experiment._write_json"
             ) as write_json:
                 result = validate_experiment(root)
                 write_json.assert_not_called()

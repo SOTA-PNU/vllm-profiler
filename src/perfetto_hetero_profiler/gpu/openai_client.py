@@ -60,6 +60,12 @@ class OpenAICompletionClient:
     def close(self) -> None:
         """Close client-owned resources (none for the stdlib implementation)."""
 
+    def __enter__(self) -> "OpenAICompletionClient":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
     def complete(
         self,
         *,

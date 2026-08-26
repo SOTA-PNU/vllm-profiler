@@ -1,4 +1,4 @@
-"""Deterministic profiler experiment JSON/HTML report generation."""
+"""Deterministic profiler evaluation JSON/HTML report generation."""
 
 from __future__ import annotations
 

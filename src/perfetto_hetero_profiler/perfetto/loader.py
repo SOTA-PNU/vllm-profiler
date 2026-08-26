@@ -31,6 +31,7 @@ from ..schema import (
     record_from_dict,
     validate_detached_artifact_manifest,
 )
+from ..support.files import sha256_file
 from .planner import NativeProfileEnvelope
 
 
@@ -336,17 +337,14 @@ def _read_schema_jsonl(
 
 def _sha256_file(path: Path) -> str:
     before = path.lstat()
-    digest = hashlib.sha256()
     try:
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
+        digest = sha256_file(path)
     except OSError as error:
         raise PerfettoInputError(f"cannot hash artifact {path}: {error}") from error
     after = path.lstat()
     if not _same_file_state(before, after):
         raise PerfettoInputError(f"artifact changed while it was hashed: {path}")
-    return digest.hexdigest()
+    return digest
 
 
 def _validate_artifacts(

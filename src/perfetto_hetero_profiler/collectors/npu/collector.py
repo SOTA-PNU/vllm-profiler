@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-import hashlib
 from importlib import metadata
 import json
-import os
 from pathlib import Path
 import platform
 import shutil
@@ -32,9 +30,10 @@ from ...schema import (
     RunStatus,
     SoftwareDescriptor,
     WorkloadDescriptor,
-    write_json,
     write_jsonl,
 )
+from ...schema.manifests import publish_run_manifest
+from ...support.files import sha256_file
 from ..command import mask_command
 from ..process import ManagedProcess
 from ..run import run_monitored_process
@@ -123,7 +122,7 @@ class NpuRunCollector:
         initial_errors = tuple(
             error for error in (version_error, discovery_error) if error is not None
         )
-        self._replace_manifest(
+        publish_run_manifest(
             paths.manifest,
             self._manifest(devices, RunStatus.RUNNING, initial_errors),
             initial=True,
@@ -230,7 +229,7 @@ class NpuRunCollector:
             status = RunStatus.PARTIAL
         else:
             status = RunStatus.SUCCEEDED
-        self._replace_manifest(
+        publish_run_manifest(
             paths.manifest, self._manifest(devices, status, tuple(errors))
         )
         return NpuRunResult(
@@ -473,29 +472,9 @@ class NpuRunCollector:
             producer="npu-monitor",
             created_at_unix_ns=self.unix_time_ns(),
             size_bytes=actual_path.stat().st_size,
-            sha256=self._sha256(actual_path),
+            sha256=sha256_file(actual_path),
             attributes={},
         )
-
-    @staticmethod
-    def _sha256(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as source:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
-
-    @staticmethod
-    def _replace_manifest(
-        path: Path, manifest: RunManifest, *, initial: bool = False
-    ) -> None:
-        if initial:
-            write_json(path, manifest)
-            return
-        temporary = path.with_name(f".{path.name}.tmp")
-        write_json(temporary, manifest)
-        os.replace(temporary, path)
-
 
 def format_plan_json(plan: dict[str, object]) -> str:
     return json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True)

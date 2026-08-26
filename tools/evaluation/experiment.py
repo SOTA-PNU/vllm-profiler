@@ -1,8 +1,8 @@
-"""Repeatability experiment orchestration on top of the HybridRunner."""
+"""Repeatability evaluation orchestration on top of the HybridRunner."""
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import os
@@ -10,9 +10,9 @@ from pathlib import Path
 import tempfile
 from typing import Any
 
-from ..hybrid.runner import HybridRunner
-from ..hybrid.runner_config import validate_hybrid_invocation
-from ..schema.records import RunStatus
+from perfetto_hetero_profiler.hybrid.runner import HybridRunner
+from perfetto_hetero_profiler.hybrid.runner_config import validate_hybrid_invocation
+from perfetto_hetero_profiler.schema.records import RunStatus
 from .checkpoint import (
     AttemptRecord,
     AttemptStatus,
@@ -250,6 +250,160 @@ def _resume(config: ExperimentConfig, paths: ExperimentPaths) -> ExperimentCheck
     return checkpoint
 
 
+@dataclass(frozen=True, slots=True)
+class _AttemptOutcome:
+    valid: bool
+    failure: FailureClass | None
+    summary: str | None
+    environment_before: dict[str, object] | None
+    environment_after: dict[str, object] | None
+
+
+class _AttemptLifecycle:
+    """Run one evaluation attempt through the core HybridRunner lifecycle.
+
+    Server launch, readiness, warm-up, measured requests, finalization, and
+    owned-process cleanup remain the responsibility of ``HybridRunner``.  This
+    repository-only layer adds evaluation preflight, detached validation, and
+    post-run idle verification around that core operation.
+    """
+
+    def __init__(
+        self,
+        *,
+        config: ExperimentConfig,
+        attempt_root: Path,
+        attempt_id: str,
+        condition: Condition,
+        profile_mode: str,
+        resource_telemetry: bool,
+    ) -> None:
+        self.hybrid = config.load_hybrid()
+        self.attempt_root = attempt_root
+        self.attempt_id = attempt_id
+        self.condition = condition
+        self.profile_mode = profile_mode
+        self.resource_telemetry = resource_telemetry
+        self.environment_before: dict[str, object] | None = None
+        self.environment_after: dict[str, object] | None = None
+
+    def preflight(self) -> None:
+        self.environment_before = wait_for_idle(self.hybrid)
+        _write_json(
+            self.attempt_root / "environment_before.json",
+            self.environment_before,
+            exclusive=True,
+        )
+        validate_hybrid_invocation(
+            self.hybrid,
+            run_root=self.attempt_root / "runs",
+            run_id=self.attempt_id,
+            profile_mode=self.profile_mode,
+        )
+
+    def launch(self) -> None:
+        result = HybridRunner(
+            self.hybrid,
+            run_root=self.attempt_root / "runs",
+            run_id=self.attempt_id,
+            profile_mode=self.profile_mode,
+            enable_telemetry=self.resource_telemetry,
+        ).run()
+        if result.status is not RunStatus.SUCCEEDED:
+            message = "; ".join(result.errors) or "hybrid runner failed"
+            raise ExperimentError(message)
+
+    def validate(self) -> None:
+        validation = validate_trial(
+            self.attempt_root,
+            attempt_id=self.attempt_id,
+            condition=self.condition.value,
+        )
+        _write_json(
+            self.attempt_root / "validation.json",
+            validation,
+            exclusive=True,
+        )
+        raw = (
+            self.attempt_root
+            / "runs"
+            / f"{self.attempt_id}-gpu"
+            / "raw/client/measured_requests.jsonl"
+        )
+        _write_json(
+            self.attempt_root / "independent_client.json",
+            {
+                "clock": "CLOCK_MONOTONIC_NS",
+                "method_id": "independent_streaming_client_v1",
+                "source_relative_path": raw.relative_to(self.attempt_root).as_posix(),
+                "sha256": sha256_file(raw),
+                "stores_response_content": False,
+            },
+            exclusive=True,
+        )
+
+    def cleanup(self) -> list[str]:
+        self.environment_after = capture_environment(self.hybrid, stage="post_trial")
+        _write_json(
+            self.attempt_root / "environment_after.json",
+            self.environment_after,
+            exclusive=True,
+        )
+        return idle_reasons(self.environment_after)
+
+    def execute(self) -> _AttemptOutcome:
+        failure: FailureClass | None = None
+        summary: str | None = None
+        valid = False
+        try:
+            self.preflight()
+            self.launch()
+            self.validate()
+            valid = True
+        except KeyboardInterrupt:
+            failure = FailureClass.INTERRUPTED
+            summary = "execution interrupted by user"
+        except EnvironmentNotIdleError as error:
+            failure = FailureClass.ENVIRONMENT_NOT_IDLE
+            summary = str(error)
+        except TrialValidationError as error:
+            failure = _classify_message(str(error))
+            summary = str(error)
+            _write_json(
+                self.attempt_root / "validation.json",
+                {
+                    "schema_version": "1.0",
+                    "attempt_id": self.attempt_id,
+                    "valid": False,
+                    "failure_class": failure.value,
+                    "reason": summary,
+                },
+                exclusive=True,
+            )
+        except Exception as error:
+            failure = _classify_message(str(error))
+            summary = f"{type(error).__name__}: {error}"
+        finally:
+            try:
+                remaining = self.cleanup()
+                if valid and remaining:
+                    failure = FailureClass.CLEANUP_FAILED
+                    summary = "; ".join(remaining)
+                    valid = False
+            except Exception as error:
+                if failure is None:
+                    failure = FailureClass.CLEANUP_FAILED
+                    summary = f"post-trial environment capture failed: {error}"
+                    valid = False
+        return _AttemptOutcome(
+            valid=valid,
+            failure=failure,
+            summary=summary,
+            environment_before=self.environment_before,
+            environment_after=self.environment_after,
+        )
+
+
 def _execute_attempt(
     *,
     config: ExperimentConfig,
@@ -276,9 +430,6 @@ def _execute_attempt(
         },
         exclusive=True,
     )
-    hybrid = config.load_hybrid()
-    before: dict[str, object] | None = None
-    after: dict[str, object] | None = None
     running = AttemptRecord(
         attempt_id=attempt_id,
         logical_trial_id=logical_trial.logical_trial_id,
@@ -288,86 +439,32 @@ def _execute_attempt(
     )
     checkpoint = checkpoint.with_attempt(running)
     store.update(checkpoint)
-    failure: FailureClass | None = None
-    summary: str | None = None
-    valid = False
-    try:
-        before = wait_for_idle(hybrid)
-        _write_json(attempt_root / "environment_before.json", before, exclusive=True)
-        validate_hybrid_invocation(
-            hybrid,
-            run_root=attempt_root / "runs",
-            run_id=attempt_id,
-            profile_mode=mode,
-        )
-        result = HybridRunner(
-            hybrid,
-            run_root=attempt_root / "runs",
-            run_id=attempt_id,
-            profile_mode=mode,
-            enable_telemetry=telemetry,
-        ).run()
-        if result.status is not RunStatus.SUCCEEDED:
-            message = "; ".join(result.errors) or "hybrid runner failed"
-            raise ExperimentError(message)
-        validation = validate_trial(
-            attempt_root,
-            attempt_id=attempt_id,
-            condition=logical_trial.condition.value,
-        )
-        _write_json(attempt_root / "validation.json", validation, exclusive=True)
-        raw = attempt_root / "runs" / f"{attempt_id}-gpu" / "raw/client/measured_requests.jsonl"
-        _write_json(
-            attempt_root / "independent_client.json",
-            {
-                "clock": "CLOCK_MONOTONIC_NS",
-                "method_id": "independent_streaming_client_v1",
-                "source_relative_path": raw.relative_to(attempt_root).as_posix(),
-                "sha256": sha256_file(raw),
-                "stores_response_content": False,
-            },
-            exclusive=True,
-        )
-        valid = True
-    except KeyboardInterrupt:
-        failure = FailureClass.INTERRUPTED
-        summary = "execution interrupted by user"
-    except EnvironmentNotIdleError as error:
-        failure = FailureClass.ENVIRONMENT_NOT_IDLE
-        summary = str(error)
-    except TrialValidationError as error:
-        failure = _classify_message(str(error))
-        summary = str(error)
-        _write_json(
-            attempt_root / "validation.json",
-            {"schema_version": "1.0", "attempt_id": attempt_id, "valid": False, "failure_class": failure.value, "reason": summary},
-            exclusive=True,
-        )
-    except Exception as error:
-        failure = _classify_message(str(error))
-        summary = f"{type(error).__name__}: {error}"
-    finally:
-        try:
-            after = capture_environment(hybrid, stage="post_trial")
-            _write_json(attempt_root / "environment_after.json", after, exclusive=True)
-            remaining = idle_reasons(after)
-            if valid and remaining:
-                failure = FailureClass.CLEANUP_FAILED
-                summary = "; ".join(remaining)
-                valid = False
-        except Exception as error:
-            if failure is None:
-                failure = FailureClass.CLEANUP_FAILED
-                summary = f"post-trial environment capture failed: {error}"
-                valid = False
-
-    fingerprint = _environment_digest(before, after)
+    outcome = _AttemptLifecycle(
+        config=config,
+        attempt_root=attempt_root,
+        attempt_id=attempt_id,
+        condition=logical_trial.condition,
+        profile_mode=mode,
+        resource_telemetry=telemetry,
+    ).execute()
+    fingerprint = _environment_digest(
+        outcome.environment_before,
+        outcome.environment_after,
+    )
     final = replace(
         running,
-        status=AttemptStatus.SUCCEEDED if valid else AttemptStatus.FAILED,
-        failure_class=None if valid else failure or FailureClass.INTERNAL_ERROR,
-        failure_summary=None if valid else (summary or "attempt failed")[:512],
-        artifact_validation_valid=valid,
+        status=AttemptStatus.SUCCEEDED if outcome.valid else AttemptStatus.FAILED,
+        failure_class=(
+            None
+            if outcome.valid
+            else outcome.failure or FailureClass.INTERNAL_ERROR
+        ),
+        failure_summary=(
+            None
+            if outcome.valid
+            else (outcome.summary or "attempt failed")[:512]
+        ),
+        artifact_validation_valid=outcome.valid,
         environment_fingerprint=fingerprint,
     )
     checkpoint = checkpoint.with_attempt(final)
@@ -382,9 +479,9 @@ def _execute_attempt(
         }
     )
     _atomic_write(attempt_root / "trial.json", canonical_bytes(trial_payload))
-    if failure is FailureClass.INTERRUPTED:
+    if outcome.failure is FailureClass.INTERRUPTED:
         raise KeyboardInterrupt
-    return checkpoint, failure
+    return checkpoint, outcome.failure
 
 
 def run_experiment(

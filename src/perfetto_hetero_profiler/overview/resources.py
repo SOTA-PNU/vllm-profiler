@@ -9,7 +9,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from ..schema import Availability
-from ..schema.metric_catalog import METRIC_CATALOG
+from ..schema.catalog import METRIC_CATALOG
+from ..schema.catalog import INTERVAL_RESOURCE_METRICS
 from ..schema.records import MetricSample
 
 
@@ -43,15 +44,7 @@ class StageWindow:
         )
 
 
-_INTERVAL_RESOURCE_METRICS = frozenset(
-    {
-        "resource.cpu.utilization",
-        "resource.gpu.utilization",
-        "resource.gpu.power",
-        "resource.npu.utilization",
-        "resource.npu.power",
-    }
-)
+_INTERVAL_RESOURCE_METRICS = INTERVAL_RESOURCE_METRICS
 
 
 def _enum_value(value: object) -> object:

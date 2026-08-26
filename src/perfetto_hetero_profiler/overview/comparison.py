@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from ..schema.constants import SCHEMA_VERSION
-from ..schema.metric_catalog import METRIC_CATALOG
+from ..schema.catalog import METRIC_CATALOG
 
 
 COMPARISON_RECORD_TYPE = "overview_comparison"

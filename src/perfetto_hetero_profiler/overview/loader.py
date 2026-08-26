@@ -48,6 +48,8 @@ from ..perfetto.timeline_summary import (
 )
 from ..perfetto.trace_attributes import TRACE_ATTRIBUTE_NAMESPACE
 from ..perfetto.validation import validate_trace
+from ..schema.catalog import PHASE_RECONCILIATION_METRICS, STAGE_BY_METRIC
+from ..support.files import sha256_file
 
 
 _EXPECTED_PERFETTO_FILES = frozenset(
@@ -190,11 +192,8 @@ def _stable_regular_file(
         raise OverviewInputError(f"input file cannot be inspected: {path}") from error
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
         raise OverviewInputError(f"input must be a real regular file: {path}")
-    digest = hashlib.sha256()
     try:
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
+        digest = sha256_file(path)
         after = path.lstat()
     except OSError as error:
         raise OverviewInputError(f"input file cannot be hashed: {path}") from error
@@ -203,7 +202,7 @@ def _stable_regular_file(
     return FileIdentity(
         relative_path=relative_path,
         size_bytes=after.st_size,
-        sha256=digest.hexdigest(),
+        sha256=digest,
         mtime_ns=after.st_mtime_ns,
         mode=stat.S_IMODE(after.st_mode),
     )
@@ -772,14 +771,13 @@ def phase_duration_reconciliation(
 ) -> list[dict[str, Any]]:
     """Reconcile event-planned integer phase durations with TP slice rows."""
 
-    mapping = (
-        ("latency.e2e", "request", "Request"),
-        ("latency.prefill", "gpu_prefill", "GPU Prefill"),
-        ("latency.kv_export", "kv_export", "KV Export"),
-        ("latency.kv_transfer", "kv_transfer", "KV Transfer"),
-        ("latency.kv_transform", "kv_transform", "KV Transform"),
-        ("latency.decode", "npu_decode", "NPU Decode"),
-        ("latency.sampling", "sampling", "Sampling"),
+    mapping = tuple(
+        (
+            metric_name,
+            STAGE_BY_METRIC[metric_name].track_key,
+            STAGE_BY_METRIC[metric_name].slice_name,
+        )
+        for metric_name in PHASE_RECONCILIATION_METRICS
     )
     expected: dict[str, list[int]] = {
         slice_name: [] for _, _, slice_name in mapping

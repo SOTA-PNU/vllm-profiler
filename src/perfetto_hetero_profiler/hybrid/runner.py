@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-import hashlib
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
 import platform
 import signal
 import shutil
-import socket
 import subprocess
 import tempfile
-import threading
 import time
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
@@ -50,6 +47,10 @@ from ..schema import (
     write_jsonl,
     create_detached_recovery,
 )
+from ..support.files import fingerprint_tree, sha256_file
+from ..support.json_io import write_jsonl_exclusive, write_pretty_json
+from ..support.network import port_available
+from ..collectors.telemetry import CollectorGroup, SampleTicket, TelemetryWorker
 from .bundle import HybridBundleMerger
 from .config import AlignmentMethod, HybridMergeConfig
 from .detailed_profile import (
@@ -214,79 +215,27 @@ class _Layout:
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return sha256_file(path)
 
 
 def _plain_json(path: Path, value: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            value,
-            allow_nan=False,
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    write_pretty_json(path, value)
 
 
 def _plain_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("x", encoding="utf-8", newline="\n") as stream:
-        for row in rows:
-            stream.write(
-                json.dumps(
-                    row,
-                    allow_nan=False,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                )
-                + "\n"
-            )
+    write_jsonl_exclusive(path, rows)
 
 
 def _cache_fingerprint(root: Path) -> list[dict[str, object]]:
-    return [
-        {
-            "relative_path": path.relative_to(root).as_posix(),
-            "size_bytes": path.stat().st_size,
-            "mtime_ns": path.stat().st_mtime_ns,
-            "sha256": _sha256(path),
-        }
-        for path in sorted(root.rglob("*.rbln"))
-        if path.is_file()
-    ]
+    return fingerprint_tree(root, pattern="*.rbln", include_mtime=True)
 
 
 def _tree_fingerprint(root: Path) -> list[dict[str, object]]:
-    return [
-        {
-            "relative_path": path.relative_to(root).as_posix(),
-            "size_bytes": path.stat().st_size,
-            "sha256": _sha256(path),
-        }
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    ]
+    return fingerprint_tree(root)
 
 
 def _port_available(host: str, port: int) -> bool:
-    family = socket.AF_INET6 if ":" in host else socket.AF_INET
-    with socket.socket(family, socket.SOCK_STREAM) as stream:
-        stream.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            stream.bind((host, port))
-        except OSError:
-            return False
-    return True
-
+    return port_available(host, port)
 
 def _wait_http(
     base_url: str,
@@ -382,186 +331,14 @@ def _wait_runtime_marker_completion(
     )
 
 
-@dataclass(frozen=True, slots=True)
-class _SampleTicket:
-    role: str
-    generation: int
-    requested_ns: int
+_SampleTicket = SampleTicket
 
 
-class _TelemetryWorker:
-    """Serialize one collector while allowing independent device polling."""
+class _TelemetryWorker(TelemetryWorker):
+    """Runner-bound compatibility name for the shared polling worker."""
 
-    def __init__(
-        self,
-        *,
-        name: str,
-        collector: object,
-        target: list,
-        interval_sec: float,
-        errors: list[str],
-    ) -> None:
-        self.name = name
-        self.collector = collector
-        self.target = target
-        self.interval_sec = interval_sec
-        self.errors = errors
-        self.condition = threading.Condition()
-        self.stopping = False
-        self.inflight = False
-        self.failed = False
-        self.sampling_complete = False
-        self.generation = 0
-        self.pending_ticket: _SampleTicket | None = None
-        self.active_boundary_ticket: _SampleTicket | None = None
-        self.completed_boundaries: dict[_SampleTicket, dict[str, Any]] = {}
-        self.last_sample: dict[str, Any] | None = None
-        self.thread = threading.Thread(
-            target=self._run,
-            name=f"hybrid-telemetry-{name}",
-            daemon=True,
-        )
-
-    def start(self) -> None:
-        self.thread.start()
-
-    def request(self, role: str) -> _SampleTicket:
-        if role not in {"baseline", "final"}:
-            raise ValueError(f"unsupported telemetry boundary role: {role}")
-        requested_ns = time.monotonic_ns()
-        with self.condition:
-            if self.stopping or self.failed or self.sampling_complete:
-                raise HybridRunnerError(f"{self.name} telemetry is not running")
-            if (
-                self.pending_ticket is not None
-                or self.active_boundary_ticket is not None
-            ):
-                raise HybridRunnerError(
-                    f"{self.name} telemetry already has a boundary request"
-                )
-            ticket = _SampleTicket(role, self.generation, requested_ns)
-            self.pending_ticket = ticket
-            self.condition.notify_all()
-            return ticket
-
-    def wait(self, ticket: _SampleTicket, timeout_sec: float) -> dict[str, Any]:
-        deadline = time.monotonic() + timeout_sec
-        with self.condition:
-            while True:
-                sample = self.completed_boundaries.pop(ticket, None)
-                if sample is not None:
-                    if sample.get("error") is not None:
-                        raise HybridRunnerError(
-                            f"{self.name} telemetry boundary failed: "
-                            f"{sample['error']}"
-                        )
-                    return dict(sample)
-                if self.failed:
-                    detail = (
-                        self.last_sample.get("error")
-                        if self.last_sample is not None
-                        else None
-                    )
-                    raise HybridRunnerError(
-                        f"{self.name} telemetry boundary failed"
-                        + (f": {detail}" if detail else "")
-                    )
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError(
-                        f"{self.name} telemetry {ticket.role} sample timed out"
-                    )
-                self.condition.wait(remaining)
-
-    def stop(self, timeout_sec: float) -> None:
-        with self.condition:
-            self.stopping = True
-            self.condition.notify_all()
-        if self.thread.ident is not None:
-            self.thread.join(timeout=timeout_sec)
-        if self.thread.is_alive():
-            self.errors.append(f"{self.name} telemetry thread did not stop")
-
-    def _run(self) -> None:
-        next_deadline = time.monotonic()
-        while True:
-            with self.condition:
-                while not self.stopping and self.pending_ticket is None:
-                    remaining = next_deadline - time.monotonic()
-                    if remaining <= 0:
-                        break
-                    self.condition.wait(remaining)
-                if self.stopping:
-                    return
-                started_ticket = self.pending_ticket
-                self.pending_ticket = None
-                self.active_boundary_ticket = started_ticket
-                self.inflight = True
-
-            query_started_ns = time.monotonic_ns()
-            try:
-                records = list(self.collector.sample())
-                error: str | None = None
-            except Exception as caught:
-                records = []
-                error = f"{type(caught).__name__}: {caught}"
-            query_completed_ns = time.monotonic_ns()
-
-            with self.condition:
-                # A boundary request arriving during an existing poll consumes that
-                # poll instead of starting a duplicate device query.
-                boundary_ticket = self.pending_ticket or self.active_boundary_ticket
-                self.pending_ticket = None
-                self.active_boundary_ticket = None
-                role = (
-                    boundary_ticket.role
-                    if boundary_ticket is not None
-                    else "background"
-                )
-                requested_ns = (
-                    boundary_ticket.requested_ns
-                    if boundary_ticket is not None
-                    else None
-                )
-                sequence = self.generation + 1
-                tagged = [
-                    replace(
-                        record,
-                        attributes={
-                            **record.attributes,
-                            "telemetry.sample_role": role,
-                            "telemetry.sample_sequence": sequence,
-                            "telemetry.query_started_ns": query_started_ns,
-                            "telemetry.query_completed_ns": query_completed_ns,
-                        },
-                    )
-                    for record in records
-                ]
-                self.target.extend(tagged)
-                timestamps = sorted({record.timestamp_ns for record in tagged})
-                self.generation = sequence
-                self.last_sample = {
-                    "role": role,
-                    "sequence": sequence,
-                    "requested_ns": requested_ns,
-                    "query_started_ns": query_started_ns,
-                    "query_completed_ns": query_completed_ns,
-                    "sample_count": len(tagged),
-                    "sample_timestamps_ns": timestamps,
-                    "error": error,
-                }
-                if boundary_ticket is not None:
-                    self.completed_boundaries[boundary_ticket] = self.last_sample
-                    if boundary_ticket.role == "final":
-                        self.sampling_complete = True
-                self.inflight = False
-                if error is not None:
-                    self.failed = True
-                    self.errors.append(f"{self.name} telemetry: {error}")
-                self.condition.notify_all()
-            if error is not None or self.sampling_complete:
-                return
-            next_deadline = time.monotonic() + self.interval_sec
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs, error_type=HybridRunnerError)
 
 
 class _Telemetry:
@@ -571,7 +348,6 @@ class _Telemetry:
         self.gpu_metrics = []
         self.npu_metrics = []
         self.system_metrics = []
-        self.started_collectors = []
         self.workers_started = False
         self.stopped = False
         self.boundaries: dict[str, dict[str, dict[str, Any]]] = {}
@@ -598,6 +374,9 @@ class _Telemetry:
             host_id=HOST_ID,
             clock_domain_id=CLOCK_DOMAIN_ID,
         )
+        self.collector_group = CollectorGroup(
+            (self.gpu, self.npu, self.system), errors=self.errors
+        )
         interval_sec = config.sample_interval_ms / 1000
         self.workers = {
             "gpu": _TelemetryWorker(
@@ -615,10 +394,7 @@ class _Telemetry:
         }
 
     def start(self) -> None:
-        for collector in (self.gpu, self.npu, self.system):
-            collector.prepare()
-            collector.start()
-            self.started_collectors.append(collector)
+        self.collector_group.start()
         for worker in self.workers.values():
             worker.start()
         self.workers_started = True
@@ -655,13 +431,7 @@ class _Telemetry:
         if self.workers_started:
             for worker in self.workers.values():
                 worker.stop(timeout_sec)
-        for collector in reversed(self.started_collectors):
-            try:
-                collector.stop()
-                collector.finalize()
-            except Exception as error:
-                self.errors.append(f"{type(collector).__name__} finalize: {error}")
-        self.started_collectors.clear()
+        self.collector_group.close()
         self.workers_started = False
         self.stopped = True
 

@@ -51,6 +51,7 @@ class ManagedProcess:
         self.process_group_id: int | None = None
         self._stdout = None
         self._stderr = None
+        self.context_result: CommandResult | None = None
 
     def start(self) -> None:
         if self.process is not None:
@@ -289,3 +290,11 @@ class ManagedProcess:
         for output in (self._stdout, self._stderr):
             if output is not None and not output.closed:
                 output.close()
+
+    def __enter__(self) -> "ManagedProcess":
+        self.start()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        if self.process is not None:
+            self.context_result = self.stop()
