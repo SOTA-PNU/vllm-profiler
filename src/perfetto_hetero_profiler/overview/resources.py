@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from ..schema import Availability
 from ..schema.catalog import METRIC_CATALOG
-from ..schema.catalog import INTERVAL_RESOURCE_METRICS
+from ..schema.catalog import INTERVAL_RESOURCE_METRICS, display_rule
 from ..schema.records import MetricSample
 
 
@@ -88,26 +88,6 @@ def percentile_r7(values: Sequence[int | float], probability: float) -> float:
     upper = math.ceil(position)
     fraction = position - lower
     return float(ordered[lower] + fraction * (ordered[upper] - ordered[lower]))
-
-
-def _display_rule(unit: str) -> dict[str, object]:
-    rules: dict[str, tuple[str, int, int, int]] = {
-        "ns": ("ms", 1, 1_000_000, 3),
-        "bytes": ("MiB", 1, 1_048_576, 3),
-        "percent": ("percent", 1, 1, 2),
-        "W": ("W", 1, 1, 3),
-        "ratio": ("ratio", 1, 1, 6),
-    }
-    display_unit, numerator, denominator, places = rules.get(
-        unit, (unit, 1, 1, 6)
-    )
-    return {
-        "unit": display_unit,
-        "scale_numerator": numerator,
-        "scale_denominator": denominator,
-        "decimal_places": places,
-        "rounding": "half_even",
-    }
 
 
 def _canonical_dimensions(dimensions: object) -> str:
@@ -302,7 +282,7 @@ def _aggregate(
         },
         "clock": clock,
         "quality_warnings": list(warnings),
-        "display": _display_rule(canonical_unit),
+        "display": display_rule(canonical_unit),
     }
 
 

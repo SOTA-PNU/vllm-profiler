@@ -17,10 +17,8 @@ from unittest import mock
 
 from perfetto_hetero_profiler.cli import main
 from perfetto_hetero_profiler.overview.bundle import (
-    load_comparison_bundle,
     load_overview_bundle,
 )
-from perfetto_hetero_profiler.overview.comparison import build_comparison
 from perfetto_hetero_profiler.overview.generator import (
     COMPARISON_HTML_NAME,
     COMPARISON_JSON_NAME,
@@ -28,11 +26,8 @@ from perfetto_hetero_profiler.overview.generator import (
     OVERVIEW_HTML_NAME,
     OVERVIEW_JSON_NAME,
     OVERVIEW_VALIDATION_NAME,
-    OverviewComparisonConfig,
     OverviewGenerationConfig,
-    compare_overviews,
     generate_overview,
-    plan_overview_comparison,
     plan_overview_generation,
 )
 from perfetto_hetero_profiler.overview.loader import OverviewInputError
@@ -41,7 +36,6 @@ from perfetto_hetero_profiler.overview.publication import (
     OverviewPublicationError,
 )
 from perfetto_hetero_profiler.overview.render import (
-    render_comparison_html,
     render_overview_html,
     validate_offline_html,
 )
@@ -50,10 +44,17 @@ from perfetto_hetero_profiler.overview.schema import (
     overview_report_from_dict,
     overview_to_dict,
 )
-from perfetto_hetero_profiler.overview.validation import (
-    OverviewValidationError,
+from perfetto_hetero_profiler.overview.validation import OverviewValidationError
+from tools.evaluation.overview import (
+    OverviewComparisonConfig,
+    build_comparison,
     build_comparison_validation,
+    compare_overviews,
+    load_comparison_bundle,
+    plan_overview_comparison,
+    render_comparison_html,
 )
+from tools.evaluation.cli import main as evaluation_main
 from perfetto_hetero_profiler.perfetto.artifacts import verify_stored_sidecar
 from perfetto_hetero_profiler.perfetto.converter import (
     PerfettoConversionConfig,
@@ -633,7 +634,7 @@ class OverviewGenerationIntegrationTests(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            code = main(
+            code = evaluation_main(
                 [
                     *base_args,
                     "--output",
@@ -648,7 +649,7 @@ class OverviewGenerationIntegrationTests(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            code = main([*base_args, "--output", str(output)])
+            code = evaluation_main([*base_args, "--output", str(output)])
         self.assertEqual(code, 0, stderr.getvalue())
         self.assertEqual(json.loads(stdout.getvalue())["status"], "succeeded")
         self.assertEqual(
@@ -659,7 +660,7 @@ class OverviewGenerationIntegrationTests(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            code = main(
+            code = evaluation_main(
                 [
                     "overview",
                     "compare",
@@ -671,7 +672,7 @@ class OverviewGenerationIntegrationTests(unittest.TestCase):
             )
         self.assertEqual(code, 2)
         self.assertEqual(stdout.getvalue(), "")
-        self.assertIn("overview error:", stderr.getvalue())
+        self.assertIn("evaluation error:", stderr.getvalue())
 
         with self.assertRaisesRegex(RuntimeError, "unique"):
             plan_overview_comparison(

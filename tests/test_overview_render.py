@@ -5,10 +5,9 @@ from __future__ import annotations
 import copy
 import unittest
 
-from perfetto_hetero_profiler.overview.comparison import build_comparison
+from tools.evaluation.overview import build_comparison, render_comparison_html
 from perfetto_hetero_profiler.overview.render import (
     OverviewRenderError,
-    render_comparison_html,
     render_overview_html,
     validate_offline_html,
 )

@@ -2131,7 +2131,6 @@ def load_json_schema(record_type: str) -> dict[str, Any]:
 
     names = {
         OVERVIEW_REPORT_RECORD_TYPE: OVERVIEW_REPORT_SCHEMA_NAME,
-        OVERVIEW_COMPARISON_RECORD_TYPE: OVERVIEW_COMPARISON_SCHEMA_NAME,
     }
     try:
         name = names[record_type]
@@ -2162,11 +2161,6 @@ def validate_json_schema_contract() -> None:
             OverviewReport,
             OVERVIEW_REPORT_SCHEMA_NAME,
         ),
-        (
-            OVERVIEW_COMPARISON_RECORD_TYPE,
-            OverviewComparison,
-            OVERVIEW_COMPARISON_SCHEMA_NAME,
-        ),
     )
     for record_type, cls, filename in contracts:
         schema = load_json_schema(record_type)
@@ -2192,23 +2186,13 @@ def validate_json_schema_contract() -> None:
 
 
 __all__ = [
-    "OVERVIEW_COMPARISON_SCHEMA_NAME",
     "OVERVIEW_REPORT_SCHEMA_NAME",
     "OverviewSchemaError",
     "canonical_json_bytes",
     "canonical_sha256",
     "load_json_schema",
-    "overview_comparison_from_dict",
-    "overview_document_from_dict",
-    "overview_document_from_json",
     "overview_report_from_dict",
     "overview_to_dict",
-    "validate_comparison_delta",
-    "validate_comparison_kpi",
-    "validate_comparison_metadata",
-    "validate_comparison_run",
-    "validate_comparison_value",
-    "validate_delta_value",
     "validate_display_rule",
     "validate_json_schema_contract",
     "validate_kpi",
@@ -2216,8 +2200,6 @@ __all__ = [
     "validate_kpi_sections",
     "validate_kpi_scope",
     "validate_kpi_source",
-    "validate_overview_comparison",
-    "validate_overview_document",
     "validate_overview_report",
     "validate_resource_summary",
 ]

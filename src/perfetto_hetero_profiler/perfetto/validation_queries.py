@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Final
 
 from .compatibility import LEGACY_TIMELINE_MAPPING_VERSION
@@ -397,7 +398,59 @@ ORDER BY s.ts, s.dur, t.name, s.name, parent.name, a.key
 """.strip()
 
 
+@dataclass(frozen=True, slots=True)
+class ValidationQuery:
+    """One stable Trace Processor query identity and its SQL text."""
+
+    name: str
+    sql: str
+
+
+BASE_VALIDATION_QUERIES: Final = (
+    ValidationQuery("process", _PROCESS_SQL),
+    ValidationQuery("tracks", _TRACK_SQL),
+    ValidationQuery("slices", _SLICE_SQL),
+    ValidationQuery("annotations", _ANNOTATION_SQL),
+    ValidationQuery("step_annotations", _STEP_ANNOTATION_SQL),
+    ValidationQuery("counters", _COUNTER_SQL),
+    ValidationQuery("flows", _FLOW_SQL),
+    ValidationQuery("dangling_flows", _DANGLING_FLOW_SQL),
+    ValidationQuery("import_errors", _IMPORT_ERROR_SQL),
+    ValidationQuery("native_policy", _NATIVE_POLICY_SQL),
+)
+NATIVE_VALIDATION_QUERIES: Final = (
+    ValidationQuery("native_event_semantics", _NATIVE_EVENT_SEMANTICS_SQL),
+)
+TIMELINE_VALIDATION_QUERIES: Final = (
+    ValidationQuery("timeline_summary_hierarchy", _TIMELINE_SUMMARY_HIERARCHY_SQL),
+    ValidationQuery("timeline_summary_slices", _TIMELINE_SUMMARY_SLICE_SQL),
+    ValidationQuery("timeline_summary_kpis", _TIMELINE_SUMMARY_KPI_SQL),
+    ValidationQuery("timeline_summary_data_quality", _TIMELINE_SUMMARY_DATA_QUALITY_SQL),
+    ValidationQuery("trace_attributes", _TRACE_ATTRIBUTE_SQL),
+)
+
+
+def _validate_query_registry() -> None:
+    queries = (
+        *BASE_VALIDATION_QUERIES,
+        *NATIVE_VALIDATION_QUERIES,
+        *TIMELINE_VALIDATION_QUERIES,
+    )
+    names = tuple(query.name for query in queries)
+    if len(names) != len(set(names)):
+        raise RuntimeError("duplicate Trace Processor validation query identity")
+    if any(not query.sql.strip() for query in queries):
+        raise RuntimeError("Trace Processor validation query SQL must be non-empty")
+
+
+_validate_query_registry()
+
+
 __all__ = [
+    "ValidationQuery",
+    "BASE_VALIDATION_QUERIES",
+    "NATIVE_VALIDATION_QUERIES",
+    "TIMELINE_VALIDATION_QUERIES",
     "_NATIVE_POLICY_KEYS",
     "_TP_NATIVE_POLICY_KEYS",
     "_PROCESS_SQL",

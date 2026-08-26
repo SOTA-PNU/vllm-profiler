@@ -35,10 +35,10 @@ binary를 `--trace-processor`로 명시하세요.
 | `hetero-profiler merge hybrid` | synthetic GPU/NPU source 병합 검증 |
 | `hetero-profiler convert perfetto` | normalized hybrid run을 Perfetto로 변환 |
 | `hetero-profiler overview generate` | 단일 run의 JSON/HTML 리포트 생성 |
-| `hetero-profiler overview compare` | 여러 Overview 비교 |
 
-설치되는 `hetero-profiler` CLI에는 반복 평가 명령이 포함되지 않습니다. 해당 기능은
-저장소 checkout에서 `PYTHONPATH=src:. python3 -m tools.evaluation`로 실행합니다.
+설치되는 `hetero-profiler` CLI에는 반복 평가와 Overview 비교 명령이 포함되지
+않습니다. 해당 기능은 저장소 checkout에서
+`PYTHONPATH=src:. python3 -m tools.evaluation`로 실행합니다.
 
 실행 전 `--dry-run`으로 경로와 child command를 확인하는 것을 권장합니다.
 
@@ -451,10 +451,10 @@ timestamp와의 실제 차이입니다. Boundary query는 request latency 계산
 보장한다는 뜻은 아닙니다. 실제 min/mean/max interval과 baseline/background/final
 sample 수는 각 source의 `summary/telemetry_lifecycle.json`에 기록됩니다.
 
-여러 Overview를 비교할 수 있습니다.
+여러 Overview의 진단용 비교는 repository-only 평가 명령으로 실행합니다.
 
 ```bash
-hetero-profiler overview compare \
+PYTHONPATH=src:. python3 -m tools.evaluation overview compare \
   --input ./outputs/control-overview \
   --input ./outputs/profile-overview \
   --output ./outputs/overview-comparison \
@@ -462,7 +462,9 @@ hetero-profiler overview compare \
 ```
 
 단일 request나 profiler 종류가 다른 결과의 비교는 진단용이며 benchmark로
-해석하지 않습니다.
+해석하지 않습니다. 비교 계약은
+[`../tools/evaluation/schema/overview_comparison.schema.json`](../tools/evaluation/schema/overview_comparison.schema.json)에
+있습니다. 이 명령과 schema는 설치 wheel에 포함되지 않습니다.
 
 ## 결과 열기
 

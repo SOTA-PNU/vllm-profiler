@@ -44,6 +44,23 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Publish a corrected report to a new, non-overlapping directory.",
     )
+    overview = commands.add_parser(
+        "overview", help="Evaluate independently validated Overview outputs."
+    )
+    overview_commands = overview.add_subparsers(dest="overview_command")
+    compare = overview_commands.add_parser(
+        "compare", help="Compare independently validated Overview outputs."
+    )
+    compare.add_argument(
+        "--input",
+        dest="overview_inputs",
+        type=Path,
+        action="append",
+        required=True,
+    )
+    compare.add_argument("--output", type=Path)
+    compare.add_argument("--baseline")
+    compare.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -65,11 +82,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = experiment_status(args.experiment_root)
         elif args.command == "validate":
             result = validate_experiment(args.experiment_root)
-        else:
+        elif args.command == "report":
             result = generate_report(
                 args.experiment_root,
                 output_root=args.output_root,
             )
+        elif args.overview_command == "compare":
+            from .overview import (
+                OverviewComparisonConfig,
+                compare_overviews,
+                plan_overview_comparison,
+            )
+
+            config = OverviewComparisonConfig(
+                input_directories=tuple(args.overview_inputs),
+                output_directory=args.output,
+                baseline_run_id=args.baseline,
+            )
+            result = (
+                plan_overview_comparison(config)
+                if args.dry_run
+                else compare_overviews(config)
+            )
+        else:
+            parser.print_help()
+            return 0
     except KeyboardInterrupt:
         print(
             "evaluation interrupted; checkpoint preserved for --resume",

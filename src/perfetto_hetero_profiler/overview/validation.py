@@ -307,9 +307,7 @@ def build_comparison_validation(
 
 
 __all__ = [
-    "COMPARISON_VALIDATION_RECORD_TYPE",
     "OVERVIEW_VALIDATION_RECORD_TYPE",
     "OverviewValidationError",
-    "build_comparison_validation",
     "build_overview_validation",
 ]

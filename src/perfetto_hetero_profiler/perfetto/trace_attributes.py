@@ -12,10 +12,8 @@ import stat
 from typing import Final
 
 from ..schema import Availability
-from ..schema.catalog import (
-    KPI_PRESENTATION_BY_IDENTITY,
-    TRACE_ATTRIBUTE_LATENCY_IDENTITIES,
-)
+from ..schema.catalog import TRACE_ATTRIBUTE_PRESENTATIONS
+from ..schema.metric_catalog import METRIC_CATALOG
 from .model import TraceAttributeSpec
 
 
@@ -28,111 +26,6 @@ TRACE_ATTRIBUTE_RECORD_TYPE: Final = "perfetto_trace_attribute_validation"
 _INT64_MIN: Final = -(2**63)
 _INT64_MAX: Final = 2**63 - 1
 _SHA256_RE: Final = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
-
-_LATENCY_EXPORTS: Final = tuple(
-    (
-        identity[0],
-        identity[1],
-        KPI_PRESENTATION_BY_IDENTITY[identity].trace_attribute_key,
-    )
-    for identity in TRACE_ATTRIBUTE_LATENCY_IDENTITIES
-)
-_THROUGHPUT_EXPORTS: Final = (
-    (
-        "throughput.requests",
-        "kpi.throughput.requests",
-        "requests/s",
-        "value_requests_milli_per_second",
-    ),
-    (
-        "throughput.input_tokens",
-        "kpi.throughput.input_tokens",
-        "tokens/s",
-        "value_input_tokens_milli_per_second",
-    ),
-    (
-        "throughput.output_tokens",
-        "kpi.throughput.output_tokens",
-        "tokens/s",
-        "value_output_tokens_milli_per_second",
-    ),
-    (
-        "throughput.total_tokens",
-        "kpi.throughput.total_tokens",
-        "tokens/s",
-        "value_total_tokens_milli_per_second",
-    ),
-)
-_TOKEN_EXPORTS: Final = (
-    ("request.count", "kpi.request.count", "requests", "value_requests"),
-    ("request.input_tokens", "kpi.tokens.input", "tokens", "value_tokens"),
-    ("request.output_tokens", "kpi.tokens.output", "tokens", "value_tokens"),
-    ("request.total_tokens", "kpi.tokens.total", "tokens", "value_tokens"),
-)
-_TRANSFER_EXPORTS: Final = (
-    ("pipeline_latency", "latency.kv_export", "transfer.kv_export_duration", "ns", "value_ns", 1),
-    (
-        "transfer",
-        "transfer.duration",
-        "transfer.duration",
-        "ns",
-        "value_ns",
-        1,
-    ),
-    (
-        "transfer",
-        "transfer.duration",
-        "transfer.kv_transfer_duration",
-        "ns",
-        "value_ns",
-        1,
-    ),
-    (
-        "transfer",
-        "transfer.transform_duration",
-        "transfer.transform_duration",
-        "ns",
-        "value_ns",
-        1,
-    ),
-    (
-        "transfer",
-        "transfer.transform_duration",
-        "transfer.kv_transform_duration",
-        "ns",
-        "value_ns",
-        1,
-    ),
-    ("transfer", "transfer.handoff_duration", "transfer.handoff_duration", "ns", "value_ns", 1),
-    ("transfer", "transfer.setup_duration", "transfer.setup_duration", "ns", "value_ns", 1),
-    ("transfer", "transfer.wait_duration", "transfer.wait_duration", "ns", "value_ns", 1),
-    (
-        "transfer",
-        "decode.schedule_wait_duration",
-        "transfer.decode_schedule_wait_duration",
-        "ns",
-        "value_ns",
-        1,
-    ),
-    ("transfer", "transfer.bytes", "transfer.bytes", "bytes", "value_bytes", 1),
-    (
-        "transfer",
-        "transfer.effective_bandwidth",
-        "transfer.effective_bandwidth",
-        "bytes/s",
-        "value_bytes_per_second",
-        1,
-    ),
-    (
-        "transfer",
-        "transfer.e2e_share",
-        "transfer.e2e_share",
-        "ratio",
-        "value_milli_percent",
-        100_000,
-    ),
-)
-
 
 class TraceAttributeExportError(ValueError):
     """A canonical KPI cannot be represented by the trace attribute contract."""
@@ -675,45 +568,20 @@ def build_performance_trace_attributes(
         if availability == Availability.AVAILABLE.value:
             _add(values, f"run.{suffix}", _int64(raw_value, field=name))
 
-    for section, name, base in _LATENCY_EXPORTS:
+    for presentation in TRACE_ATTRIBUTE_PRESENTATIONS:
+        definition = METRIC_CATALOG[presentation.metric_name]
         _emit_metric(
             values,
-            base=base,
-            metric=_find_kpi(calculated, section, name),
-            expected_name=name,
-            expected_unit="ns",
-            value_suffix="value_ns",
-            multiplier=1,
-        )
-    for name, base, unit, suffix in _THROUGHPUT_EXPORTS:
-        _emit_metric(
-            values,
-            base=base,
-            metric=_find_kpi(calculated, "throughput_and_tokens", name),
-            expected_name=name,
-            expected_unit=unit,
-            value_suffix=suffix,
-            multiplier=1_000,
-        )
-    for name, base, unit, suffix in _TOKEN_EXPORTS:
-        _emit_metric(
-            values,
-            base=base,
-            metric=_find_kpi(calculated, "throughput_and_tokens", name),
-            expected_name=name,
-            expected_unit=unit,
-            value_suffix=suffix,
-            multiplier=1,
-        )
-    for section, name, base, unit, suffix, multiplier in _TRANSFER_EXPORTS:
-        _emit_metric(
-            values,
-            base=base,
-            metric=_find_kpi(calculated, section, name),
-            expected_name=name,
-            expected_unit=unit,
-            value_suffix=suffix,
-            multiplier=multiplier,
+            base=presentation.attribute_key,
+            metric=_find_kpi(
+                calculated,
+                presentation.section,
+                presentation.metric_name,
+            ),
+            expected_name=presentation.metric_name,
+            expected_unit=definition.unit,
+            value_suffix=presentation.value_suffix,
+            multiplier=presentation.multiplier,
         )
 
     for stage in ("prefill", "transfer", "decode"):

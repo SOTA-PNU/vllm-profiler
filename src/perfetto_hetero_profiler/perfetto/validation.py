@@ -31,18 +31,11 @@ from .tooling import (
     resolve_toolchain,
 )
 from .validation_queries import (
-    _TP_NATIVE_POLICY_KEYS,
-    _PROCESS_SQL,
-    _TRACK_SQL,
-    _SLICE_SQL,
-    _ANNOTATION_SQL,
-    _STEP_ANNOTATION_SQL,
-    _NATIVE_POLICY_SQL,
-    _NATIVE_EVENT_SEMANTICS_SQL,
-    _COUNTER_SQL,
-    _FLOW_SQL,
-    _DANGLING_FLOW_SQL,
+    BASE_VALIDATION_QUERIES,
+    NATIVE_VALIDATION_QUERIES,
+    TIMELINE_VALIDATION_QUERIES,
     _IMPORT_ERROR_SQL,
+    _TP_NATIVE_POLICY_KEYS,
     _NATIVE_TRACE_SUMMARY_SQL,
     _NATIVE_TRACE_FLOW_SQL,
     _NATIVE_TRACE_PARENT_RANGE_SQL,
@@ -59,11 +52,6 @@ from .validation_queries import (
     _REQUEST_RESOURCE_ROOT_KEY,
     _REQUEST_RESOURCE_ROOT_NAME,
     _REPORT_ROW_QUERIES,
-    _TRACE_ATTRIBUTE_SQL,
-    _TIMELINE_SUMMARY_HIERARCHY_SQL,
-    _TIMELINE_SUMMARY_SLICE_SQL,
-    _TIMELINE_SUMMARY_KPI_SQL,
-    _TIMELINE_SUMMARY_DATA_QUALITY_SQL,
 )
 
 
@@ -110,72 +98,18 @@ def validate_trace(
     try:
         with TraceProcessor(trace=io.BytesIO(trace_bytes), config=config) as processor:
             actual_queries = {
-                "process": _run_query(processor, "process", _PROCESS_SQL),
-                "tracks": _run_query(processor, "tracks", _TRACK_SQL),
-                "slices": _run_query(processor, "slices", _SLICE_SQL),
-                "annotations": _run_query(
-                    processor,
-                    "annotations",
-                    _ANNOTATION_SQL,
-                ),
-                "step_annotations": _run_query(
-                    processor,
-                    "step_annotations",
-                    _STEP_ANNOTATION_SQL,
-                ),
-                "counters": _run_query(processor, "counters", _COUNTER_SQL),
-                "flows": _run_query(processor, "flows", _FLOW_SQL),
-                "dangling_flows": _run_query(
-                    processor,
-                    "dangling_flows",
-                    _DANGLING_FLOW_SQL,
-                ),
-                "import_errors": _run_query(
-                    processor,
-                    "import_errors",
-                    _IMPORT_ERROR_SQL,
-                ),
-                "native_policy": _run_query(
-                    processor,
-                    "native_policy",
-                    _NATIVE_POLICY_SQL,
-                ),
+                query.name: _run_query(processor, query.name, query.sql)
+                for query in BASE_VALIDATION_QUERIES
             }
             if _has_native_event_specs(plan):
-                actual_queries["native_event_semantics"] = _run_query(
-                    processor,
-                    "native_event_semantics",
-                    _NATIVE_EVENT_SEMANTICS_SQL,
+                actual_queries.update(
+                    (query.name, _run_query(processor, query.name, query.sql))
+                    for query in NATIVE_VALIDATION_QUERIES
                 )
             if plan.mapping_version != _LEGACY_MAPPING_VERSION:
                 actual_queries.update(
-                    {
-                        "timeline_summary_hierarchy": _run_query(
-                            processor,
-                            "timeline_summary_hierarchy",
-                            _TIMELINE_SUMMARY_HIERARCHY_SQL,
-                        ),
-                        "timeline_summary_slices": _run_query(
-                            processor,
-                            "timeline_summary_slices",
-                            _TIMELINE_SUMMARY_SLICE_SQL,
-                        ),
-                        "timeline_summary_kpis": _run_query(
-                            processor,
-                            "timeline_summary_kpis",
-                            _TIMELINE_SUMMARY_KPI_SQL,
-                        ),
-                        "timeline_summary_data_quality": _run_query(
-                            processor,
-                            "timeline_summary_data_quality",
-                            _TIMELINE_SUMMARY_DATA_QUALITY_SQL,
-                        ),
-                        "trace_attributes": _run_query(
-                            processor,
-                            "trace_attributes",
-                            _TRACE_ATTRIBUTE_SQL,
-                        ),
-                    }
+                    (query.name, _run_query(processor, query.name, query.sql))
+                    for query in TIMELINE_VALIDATION_QUERIES
                 )
     except (TraceProcessorException, OSError) as error:
         raise TraceValidationError(
@@ -183,29 +117,12 @@ def validate_trace(
         ) from error
 
     expected = _expected_rows(plan)
-    query_names = (
-        "process",
-        "tracks",
-        "slices",
-        "annotations",
-        "step_annotations",
-        "counters",
-        "flows",
-        "dangling_flows",
-        "import_errors",
-        "native_policy",
-    )
+    query_names = tuple(query.name for query in BASE_VALIDATION_QUERIES)
     if _has_native_event_specs(plan):
-        query_names += ("native_event_semantics",)
+        query_names += tuple(query.name for query in NATIVE_VALIDATION_QUERIES)
     if plan.mapping_version != _LEGACY_MAPPING_VERSION:
         expected.update(_expected_timeline_summary_rows(plan))
-        query_names += (
-            "timeline_summary_hierarchy",
-            "timeline_summary_slices",
-            "timeline_summary_kpis",
-            "timeline_summary_data_quality",
-            "trace_attributes",
-        )
+        query_names += tuple(query.name for query in TIMELINE_VALIDATION_QUERIES)
     query_reports: list[dict[str, Any]] = []
     for name in query_names:
         actual = actual_queries[name]

@@ -34,7 +34,9 @@ validated hybrid run
 반복 schedule, checkpoint/resume, 비교 통계와 평가 report는 설치되는 core
 package에 포함하지 않습니다. 저장소의 `tools/evaluation`이 공개 core collection
 API를 호출하는 얇은 평가 계층으로 이를 제공하며, 평가 compatibility도 그 경계
-안에 유지합니다.
+안에 유지합니다. Overview 비교 계약도
+[`../tools/evaluation/schema/overview_comparison.schema.json`](../tools/evaluation/schema/overview_comparison.schema.json)에
+보존되며 core wheel에는 포함되지 않습니다.
 
 입력 run과 raw artifact는 읽기 전용으로 취급합니다. 파생 결과는 새로운
 output directory에 생성하며 기존 결과를 덮어쓰지 않습니다.
@@ -98,9 +100,13 @@ Native profiler clock에 canonical anchor가 없으면 request boundary에 맞�
 
 ## Metrics and availability
 
-공식 metric은 Python `METRIC_CATALOG`에서 정의합니다. Latency, throughput,
-request count, resource, transfer와 alignment 품질을 포함합니다. 전체 목록과
-단위는 [Metric catalog](metric_catalog_v1.md)를 참고하세요.
+공식 metric은 Python `METRIC_CATALOG`에서 정의합니다. 동일한 선언형 catalog가
+stage marker pair와 순서, Overview KPI·resource 표시, Perfetto track과 Trace
+Attribute identity를 연결합니다. Record field contract는 dataclass와 committed
+JSON Schema의 field·required·enum 일치를 검사하고, Perfetto SQL registry는 query
+identity와 순서를 고정합니다. Latency, throughput, request count, resource,
+transfer와 alignment 품질의 전체 목록과 단위는
+[Metric catalog](metric_catalog_v1.md)를 참고하세요.
 
 계산 원칙은 다음과 같습니다.
 

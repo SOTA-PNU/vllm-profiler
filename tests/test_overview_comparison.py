@@ -7,7 +7,7 @@ import json
 import math
 import unittest
 
-from perfetto_hetero_profiler.overview.comparison import (
+from tools.evaluation.overview import (
     OverviewComparisonError,
     build_comparison,
 )

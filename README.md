@@ -97,6 +97,20 @@ PYTHONPATH=src:. python3 -m tools.evaluation run \
 참고하세요. 이 검증은 단일 모델·고정 partition에 대한 제한된 표본이며 일반
 하드웨어 benchmark가 아닙니다.
 
+여러 Overview의 진단용 비교도 설치 CLI가 아닌 저장소 평가 도구에서 실행합니다.
+
+```bash
+PYTHONPATH=src:. python3 -m tools.evaluation overview compare \
+  --input ./outputs/control-overview \
+  --input ./outputs/profile-overview \
+  --output ./outputs/overview-comparison \
+  --dry-run
+```
+
+비교 schema는
+[`tools/evaluation/schema/overview_comparison.schema.json`](tools/evaluation/schema/overview_comparison.schema.json)에
+있으며 wheel에는 평가 도구와 비교 schema가 포함되지 않습니다.
+
 자세한 collector와 변환 명령은 [사용 가이드](docs/usage.md)를 참고하세요.
 
 ## 결과

@@ -11,10 +11,7 @@ import sys
 def register(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "overview",
-        help=(
-            "Generate or compare external KPI Overview reports (not the "
-            "Perfetto UI)."
-        ),
+        help="Generate an external KPI Overview report (not the Perfetto UI).",
     )
     parser.set_defaults(overview_parser=parser)
     commands = parser.add_subparsers(dest="overview_command")
@@ -26,19 +23,6 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     generate.add_argument("--output", type=Path)
     generate.add_argument("--trace-processor", type=Path)
     generate.add_argument("--dry-run", action="store_true")
-    compare = commands.add_parser(
-        "compare", help="Compare independently validated Overview outputs."
-    )
-    compare.add_argument(
-        "--input",
-        dest="overview_inputs",
-        type=Path,
-        action="append",
-        required=True,
-    )
-    compare.add_argument("--output", type=Path)
-    compare.add_argument("--baseline")
-    compare.add_argument("--dry-run", action="store_true")
 
 
 def handle(args: argparse.Namespace, _: argparse.ArgumentParser) -> int:
@@ -47,11 +31,8 @@ def handle(args: argparse.Namespace, _: argparse.ArgumentParser) -> int:
         return 0
     try:
         from ..overview.generator import (
-            OverviewComparisonConfig,
             OverviewGenerationConfig,
-            compare_overviews,
             generate_overview,
-            plan_overview_comparison,
             plan_overview_generation,
         )
 
@@ -66,17 +47,6 @@ def handle(args: argparse.Namespace, _: argparse.ArgumentParser) -> int:
                 plan_overview_generation(config)
                 if args.dry_run
                 else generate_overview(config)
-            )
-        elif args.overview_command == "compare":
-            config = OverviewComparisonConfig(
-                input_directories=tuple(args.overview_inputs),
-                output_directory=args.output,
-                baseline_run_id=args.baseline,
-            )
-            result = (
-                plan_overview_comparison(config)
-                if args.dry_run
-                else compare_overviews(config)
             )
         else:  # pragma: no cover - argparse guards this branch
             args.overview_parser.print_help()

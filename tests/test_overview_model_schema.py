@@ -9,22 +9,13 @@ import math
 import unittest
 
 from perfetto_hetero_profiler.overview.model import (
-    Comparability,
-    ComparisonDelta,
-    ComparisonKpi,
-    ComparisonMetadata,
-    ComparisonRun,
-    ComparisonValue,
-    DeltaValue,
     DisplayRule,
     KpiCalculation,
     KpiClock,
-    KpiDirection,
     KpiScope,
     KpiSections,
     KpiSource,
     KpiValue,
-    OverviewComparison,
     OverviewReport,
     ResourceSummary,
 )
@@ -38,9 +29,21 @@ from perfetto_hetero_profiler.overview.schema import (
     overview_to_dict,
     validate_json_schema_contract,
     validate_kpi,
-    validate_overview_comparison,
     validate_overview_report,
     validate_resource_summary,
+)
+from tools.evaluation.overview import (
+    Comparability,
+    ComparisonDelta,
+    ComparisonKpi,
+    ComparisonMetadata,
+    ComparisonRun,
+    ComparisonValue,
+    DeltaValue,
+    KpiDirection,
+    OverviewComparison,
+    load_comparison_schema,
+    validate_overview_comparison,
 )
 from perfetto_hetero_profiler.schema import Availability
 from perfetto_hetero_profiler.schema.constants import JSON_SCHEMA_DRAFT
@@ -479,7 +482,7 @@ class OverviewSchemaContractTests(unittest.TestCase):
     def test_checked_in_draft_2020_12_contracts_match_models(self) -> None:
         validate_json_schema_contract()
         report_schema = load_json_schema("overview_report")
-        comparison_schema = load_json_schema("overview_comparison")
+        comparison_schema = load_comparison_schema()
         self.assertEqual(report_schema["$schema"], JSON_SCHEMA_DRAFT)
         self.assertEqual(comparison_schema["$schema"], JSON_SCHEMA_DRAFT)
         self.assertEqual(
@@ -758,7 +761,7 @@ class OverviewComparisonContractTests(unittest.TestCase):
         )
 
     def test_comparison_builder_output_preserves_latency_layers(self) -> None:
-        from perfetto_hetero_profiler.overview.comparison import build_comparison
+        from tools.evaluation.overview import build_comparison
 
         control = overview_to_dict(report())
         detailed = copy.deepcopy(control)

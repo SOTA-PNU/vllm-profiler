@@ -22,7 +22,6 @@ from .bundle import (
     load_overview_bundle,
     overview_bundle_identity,
 )
-from .comparison import build_comparison
 from .loader import (
     FileIdentity,
     LoadedPerfettoBundle,
@@ -348,6 +347,8 @@ def _prepare_comparison(
         requested_output,
         immutable_roots=[item.root for item in loaded_inputs],
     )
+    from tools.evaluation.overview_comparison import build_comparison
+
     comparison_plain = build_comparison(
         [item.report for item in loaded_inputs],
         baseline_run_id=config.baseline_run_id,
@@ -480,17 +481,11 @@ def compare_overviews(
 
 
 __all__ = [
-    "COMPARISON_HTML_NAME",
-    "COMPARISON_JSON_NAME",
-    "COMPARISON_VALIDATION_NAME",
     "OVERVIEW_HTML_NAME",
     "OVERVIEW_JSON_NAME",
     "OVERVIEW_VALIDATION_NAME",
-    "OverviewComparisonConfig",
     "OverviewGenerationConfig",
     "OverviewGenerationError",
-    "compare_overviews",
     "generate_overview",
-    "plan_overview_comparison",
     "plan_overview_generation",
 ]

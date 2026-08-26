@@ -420,9 +420,35 @@ _DEFINITIONS = (
     ),
 )
 
+def validate_metric_definitions(
+    definitions: tuple[MetricDefinition, ...],
+) -> None:
+    """Reject ambiguous metric identities and malformed declarative bounds."""
+
+    names = tuple(item.name for item in definitions)
+    if len(names) != len(set(names)):
+        raise RuntimeError("duplicate official metric name")
+    for item in definitions:
+        if not item.name or not item.unit or not item.allowed_scopes:
+            raise RuntimeError("metric identity, unit, and scopes must be non-empty")
+        if item.minimum is not None and item.maximum is not None:
+            if item.minimum > item.maximum:
+                raise RuntimeError(f"invalid metric bounds: {item.name}")
+        if len(item.source_events) != len(set(item.source_events)):
+            raise RuntimeError(f"duplicate source event for metric: {item.name}")
+
+
+validate_metric_definitions(_DEFINITIONS)
+
+METRIC_DEFINITIONS: tuple[MetricDefinition, ...] = _DEFINITIONS
 METRIC_CATALOG: dict[str, MetricDefinition] = {
-    definition.name: definition for definition in _DEFINITIONS
+    definition.name: definition for definition in METRIC_DEFINITIONS
 }
 
-if len(METRIC_CATALOG) != len(_DEFINITIONS):
-    raise RuntimeError("duplicate official metric name")
+
+__all__ = [
+    "METRIC_CATALOG",
+    "METRIC_DEFINITIONS",
+    "MetricDefinition",
+    "validate_metric_definitions",
+]

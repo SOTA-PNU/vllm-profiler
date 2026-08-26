@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ..schema import Availability
 from ..schema.catalog import METRIC_CATALOG
-from ..schema.catalog import DERIVED_LATENCY_METRICS, STAGE_BY_METRIC
+from ..schema.catalog import DERIVED_LATENCY_METRICS, STAGE_BY_METRIC, display_rule
 from ..schema.records import EventRecord, MetricSample
 from .resources import ResourceCalculationError, StageWindow, summarize_resources
 
@@ -46,29 +46,6 @@ def _non_bool_int(value: object, *, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise OverviewCalculationError(f"{field} must be a non-bool integer")
     return value
-
-
-def _display_rule(unit: str) -> dict[str, object]:
-    rules: dict[str, tuple[str, int, int, int]] = {
-        "ns": ("ms", 1, 1_000_000, 3),
-        "bytes": ("MiB", 1, 1_048_576, 3),
-        "bytes/s": ("MiB/s", 1, 1_048_576, 3),
-        "requests": ("requests", 1, 1, 0),
-        "requests/s": ("requests/s", 1, 1, 3),
-        "tokens": ("tokens", 1, 1, 0),
-        "tokens/s": ("tokens/s", 1, 1, 3),
-        "ratio": ("percent", 100, 1, 2),
-    }
-    display_unit, numerator, denominator, places = rules.get(
-        unit, (unit, 1, 1, 6)
-    )
-    return {
-        "unit": display_unit,
-        "scale_numerator": numerator,
-        "scale_denominator": denominator,
-        "decimal_places": places,
-        "rounding": "half_even",
-    }
 
 
 def _scope(
@@ -266,7 +243,7 @@ def _kpi(
         },
         "clock": clock,
         "quality_warnings": sorted(set(warnings)),
-        "display": _display_rule(canonical_unit),
+        "display": display_rule(canonical_unit),
     }
 
 

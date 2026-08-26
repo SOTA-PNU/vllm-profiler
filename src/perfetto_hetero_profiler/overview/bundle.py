@@ -494,16 +494,11 @@ def load_comparison_bundle(root: str | Path) -> LoadedComparisonBundle:
 
 
 __all__ = [
-    "COMPARISON_HTML_NAME",
-    "COMPARISON_JSON_NAME",
-    "COMPARISON_VALIDATION_NAME",
-    "LoadedComparisonBundle",
     "LoadedOverviewBundle",
     "OVERVIEW_HTML_NAME",
     "OVERVIEW_JSON_NAME",
     "OVERVIEW_VALIDATION_NAME",
     "OverviewBundleIdentity",
-    "load_comparison_bundle",
     "load_overview_bundle",
     "overview_bundle_identity",
 ]

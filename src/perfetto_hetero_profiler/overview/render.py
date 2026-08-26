@@ -1146,7 +1146,6 @@ def validate_offline_html(html_text: str) -> dict[str, Any]:
 
 __all__ = [
     "OverviewRenderError",
-    "render_comparison_html",
     "render_overview_html",
     "validate_offline_html",
 ]
