@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from ..artifact_compatibility import LEGACY_MEASURED_WINDOW
 from ..schema import (
     Availability,
     EventRecord,
@@ -179,7 +180,7 @@ def measured_window_metrics(
     input_tokens = sum(item.input_tokens for item in items)
     output_tokens = sum(item.output_tokens for item in items)
     total_tokens = sum(item.total_tokens for item in items)
-    dimensions = {"window": "measured_smoke"}
+    dimensions = {"window": LEGACY_MEASURED_WINDOW}
     return [
         _metric(
             run_id,
@@ -293,6 +294,6 @@ def _metric(
         interval_ns=interval_ns,
         dimensions=dimensions or {},
         attributes=attributes
-        or {"vllm.measurement_window": "measured_smoke"},
+        or {"vllm.measurement_window": LEGACY_MEASURED_WINDOW},
         source_event_ids=source_event_ids,
     )

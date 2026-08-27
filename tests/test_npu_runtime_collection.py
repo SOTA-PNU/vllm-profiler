@@ -1,4 +1,4 @@
-"""CPU-only tests for RBLN runtime normalization."""
+"""CPU-only tests for RBLN runtime collection and normalization."""
 
 import contextlib
 import io
@@ -10,14 +10,14 @@ import unittest
 from unittest import mock
 
 from perfetto_hetero_profiler.cli import main
-from perfetto_hetero_profiler.npu.runtime_smoke import (
-    NpuRuntimeSmokeConfig,
+from perfetto_hetero_profiler.npu.runtime_collection import (
+    NpuRuntimeCollectionConfig,
     _format_name,
     _profile_artifact_kind,
     _profile_files,
     _relocate_vendor_sidecars,
     _replace_jsonl,
-    build_runtime_smoke_plan,
+    build_runtime_collection_plan,
 )
 from perfetto_hetero_profiler.schema import read_jsonl
 from perfetto_hetero_profiler.npu.workload import (
@@ -109,7 +109,7 @@ class NpuWorkloadTests(unittest.TestCase):
 
 class NpuRuntimePlanningTests(unittest.TestCase):
     def config(self, root, mode=ProfileMode.MONITOR):
-        return NpuRuntimeSmokeConfig(
+        return NpuRuntimeCollectionConfig(
             run_root=Path(root),
             run_id="runtime-dry",
             artifact=Path("/tmp/existing.rbln"),
@@ -121,12 +121,12 @@ class NpuRuntimePlanningTests(unittest.TestCase):
     def test_plan_is_side_effect_free(self):
         with tempfile.TemporaryDirectory() as directory:
             config = self.config(Path(directory) / "runs")
-            plan = build_runtime_smoke_plan(config)
+            plan = build_runtime_collection_plan(config)
             self.assertFalse(config.run_directory.exists())
             self.assertIs(plan["executes"], False)
 
     def test_detailed_plan_uses_public_profiler_api(self):
-        plan = build_runtime_smoke_plan(
+        plan = build_runtime_collection_plan(
             self.config("/tmp/runs", ProfileMode.DETAILED_PROFILE)
         )
         self.assertIs(plan["profiler"]["enabled"], True)
@@ -136,7 +136,7 @@ class NpuRuntimePlanningTests(unittest.TestCase):
 
     def test_invalid_device_rejected(self):
         with self.assertRaisesRegex(ValueError, "non-negative"):
-            NpuRuntimeSmokeConfig(
+            NpuRuntimeCollectionConfig(
                 run_root=Path("/tmp/runs"),
                 run_id="bad",
                 artifact=Path("/tmp/a.rbln"),
@@ -188,7 +188,7 @@ class NpuRuntimePlanningTests(unittest.TestCase):
                 "run", parse_observations(summary(("a", 10, 20)))
             )
             with mock.patch(
-                "perfetto_hetero_profiler.npu.runtime_smoke.os.replace",
+                "perfetto_hetero_profiler.npu.runtime_collection.os.replace",
                 wraps=os.replace,
             ) as replace_call:
                 _replace_jsonl(path, rows)

@@ -1,4 +1,4 @@
-"""Validation helpers for independent hybrid detailed-profiler smokes."""
+"""Validation helpers for independent hybrid detailed-profiler captures."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,191}$")
 
 
 class DetailedProfileValidationError(RuntimeError):
-    """A detailed-profile input or artifact violates the smoke contract."""
+    """A detailed-profile input or artifact violates the capture contract."""
 
 
 @dataclass(frozen=True, slots=True)

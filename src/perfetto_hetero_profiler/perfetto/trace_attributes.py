@@ -11,6 +11,11 @@ import re
 import stat
 from typing import Final
 
+from ..artifact_compatibility import (
+    LEGACY_MEASURED_WINDOW,
+    LEGACY_MEASURED_WINDOW_SCOPE,
+    LEGACY_SINGLE_REQUEST_SCOPE,
+)
 from ..schema import Availability
 from ..schema.catalog import TRACE_ATTRIBUTE_PRESENTATIONS
 from ..schema.metric_catalog import METRIC_CATALOG
@@ -234,7 +239,8 @@ def _validate_e2e_provenance(
         if (
             ids == request_ids
             and phase is None
-            and attributes.get("vllm.measurement_window") == "measured_smoke"
+            and attributes.get("vllm.measurement_window")
+            == LEGACY_MEASURED_WINDOW
         ):
             request_matches.append(metric)
         if (
@@ -245,7 +251,7 @@ def _validate_e2e_provenance(
             pipeline_matches.append(metric)
     if len(request_matches) != 1:
         raise TraceAttributeExportError(
-            "request-facing E2E lacks unique measured_smoke provenance"
+            f"request-facing E2E lacks unique {LEGACY_MEASURED_WINDOW} provenance"
         )
     if len(pipeline_matches) != 1:
         raise TraceAttributeExportError(
@@ -529,10 +535,10 @@ def build_performance_trace_attributes(
     )
     request_count = count_contract[3]
     measurement_scope = (
-        "single_request_smoke"
+        LEGACY_SINGLE_REQUEST_SCOPE
         if count_contract[0] == Availability.AVAILABLE.value and request_count == 1
         else (
-            "measured_smoke_window"
+            LEGACY_MEASURED_WINDOW_SCOPE
             if count_contract[0] == Availability.AVAILABLE.value
             else "not_available"
         )

@@ -1,4 +1,4 @@
-"""CPU-only guards for independent hybrid detailed-profiler smokes."""
+"""CPU-only guards for independent hybrid detailed-profiler captures."""
 
 from __future__ import annotations
 

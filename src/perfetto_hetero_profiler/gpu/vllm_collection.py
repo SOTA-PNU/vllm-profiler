@@ -1,4 +1,4 @@
-"""End-to-end local vLLM smoke collection for monitor, torch, and nsys modes."""
+"""End-to-end local vLLM profiling collection for monitor, torch, and nsys."""
 
 from __future__ import annotations
 
@@ -15,6 +15,11 @@ import time
 from typing import Callable, Literal
 import uuid
 
+from ..artifact_compatibility import (
+    LEGACY_GPU_COLLECTION_PRODUCER,
+    LEGACY_GPU_COLLECTION_SUMMARY,
+    LEGACY_GPU_NSYS_OUTPUT,
+)
 from ..collectors.gpu import GpuTelemetryCollector
 from ..collectors.gpu.nvidia_smi import NvidiaSmiClient
 from ..collectors.system import ProcTelemetryCollector
@@ -60,7 +65,7 @@ PROMPT = "Explain a computer cache in one short sentence."
 
 
 @dataclass(frozen=True)
-class GpuVllmSmokeConfig:
+class GpuVllmCollectionConfig:
     run_root: Path
     run_id: str
     model: Path
@@ -116,7 +121,7 @@ class GpuVllmSmokeConfig:
             root / "raw/gpu/torch" if self.profile_mode == "torch" else None
         )
         nsys_output = (
-            root / "raw/gpu/nsys/vllm-smoke"
+            root / LEGACY_GPU_NSYS_OUTPUT
             if self.profile_mode == "nsys"
             else None
         )
@@ -135,7 +140,7 @@ class GpuVllmSmokeConfig:
 
 
 @dataclass(frozen=True)
-class GpuVllmSmokeResult:
+class GpuVllmCollectionResult:
     run_directory: Path
     status: RunStatus
     startup_ns: int | None
@@ -147,7 +152,9 @@ class GpuVllmSmokeResult:
     errors: tuple[str, ...]
 
 
-def build_smoke_plan(config: GpuVllmSmokeConfig) -> dict[str, object]:
+def build_vllm_collection_plan(
+    config: GpuVllmCollectionConfig,
+) -> dict[str, object]:
     """Return a side-effect-free, secret-free execution plan."""
     paths = config.paths
     return {
@@ -169,7 +176,7 @@ def build_smoke_plan(config: GpuVllmSmokeConfig) -> dict[str, object]:
             "events": str(paths.events),
             "metrics": str(paths.metrics),
             "artifacts": str(paths.artifacts),
-            "summary": str(paths.root / "summary/smoke.json"),
+            "summary": str(paths.root / LEGACY_GPU_COLLECTION_SUMMARY),
         },
     }
 
@@ -177,7 +184,7 @@ def build_smoke_plan(config: GpuVllmSmokeConfig) -> dict[str, object]:
 class _TelemetryThread:
     def __init__(
         self,
-        config: GpuVllmSmokeConfig,
+        config: GpuVllmCollectionConfig,
         pid_provider: Callable[[], int | None],
         gpu_client: NvidiaSmiClient,
     ) -> None:
@@ -232,10 +239,10 @@ class _TelemetryThread:
             self.stop_event.wait(interval_sec)
 
 
-class GpuVllmSmokeRunner:
+class GpuVllmCollectionRunner:
     def __init__(
         self,
-        config: GpuVllmSmokeConfig,
+        config: GpuVllmCollectionConfig,
         *,
         gpu_client: NvidiaSmiClient | None = None,
         server_factory: Callable[..., ManagedVllmServer] = ManagedVllmServer,
@@ -248,7 +255,7 @@ class GpuVllmSmokeRunner:
         self.client_factory = client_factory
         self.unix_time_ns = unix_time_ns
 
-    def run(self) -> GpuVllmSmokeResult:
+    def run(self) -> GpuVllmCollectionResult:
         config = self.config
         paths = config.paths
         paths.create()
@@ -257,7 +264,7 @@ class GpuVllmSmokeRunner:
         server_stdout = paths.root / "raw/gpu/vllm-server.stdout.log"
         server_stderr = paths.root / "raw/gpu/vllm-server.stderr.log"
         request_summary_path = paths.root / "raw/client/requests.json"
-        summary_path = paths.root / "summary/smoke.json"
+        summary_path = paths.root / LEGACY_GPU_COLLECTION_SUMMARY
 
         devices = self.gpu_client.query()
         write_json(paths.manifest, self._manifest(devices, RunStatus.RUNNING, ()))
@@ -419,7 +426,7 @@ class GpuVllmSmokeRunner:
             errors=errors,
         )
         _write_plain_json(summary_path, summary)
-        return GpuVllmSmokeResult(
+        return GpuVllmCollectionResult(
             run_directory=paths.root,
             status=status,
             startup_ns=startup_ns,
@@ -519,7 +526,7 @@ class GpuVllmSmokeRunner:
                 "server_argv": list(build_server_argv(config.server_config)),
             },
             attributes={
-                "vendor.collector": "gpu-vllm-smoke",
+                "vendor.collector": LEGACY_GPU_COLLECTION_PRODUCER,
                 "vendor.collector_errors": list(errors),
             },
         )
@@ -645,7 +652,7 @@ class GpuVllmSmokeRunner:
             artifact_kind=kind,
             relative_path=path.relative_to(root).as_posix(),
             format=format_name or "binary",
-            producer="gpu-vllm-smoke",
+            producer=LEGACY_GPU_COLLECTION_PRODUCER,
             created_at_unix_ns=self.unix_time_ns(),
             size_bytes=path.stat().st_size,
             sha256=_sha256(path),

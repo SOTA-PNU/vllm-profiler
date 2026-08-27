@@ -176,7 +176,7 @@ def _write_closeout(
 
 
 def _add_overview_metrics(hybrid: Path, *, run_id: str) -> None:
-    """Add the explicit measured-smoke contract required by Overview tests."""
+    """Add the explicit measurement-window contract required by Overview tests."""
 
     metrics_path = hybrid / "metrics/metrics.jsonl"
     interval_ns = 1_000_000_000

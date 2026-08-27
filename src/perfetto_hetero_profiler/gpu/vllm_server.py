@@ -30,7 +30,7 @@ class VllmServerConfig:
         if bool(self.server_python) == bool(self.vllm_bin):
             raise ValueError("exactly one of server_python or vllm_bin is required")
         if self.host not in {"127.0.0.1", "localhost", "::1"}:
-            raise ValueError("smoke server must bind to a loopback host")
+            raise ValueError("collection server must bind to a loopback host")
         if not 1 <= self.port <= 65535:
             raise ValueError("port must be in [1, 65535]")
         if not 0 < self.gpu_memory_utilization <= 0.50:

@@ -1,4 +1,4 @@
-"""NPU telemetry, planning, CLI, and fake CPU-only smoke tests."""
+"""NPU telemetry, planning, CLI, and fake CPU-only collection tests."""
 
 import contextlib
 import hashlib
@@ -377,8 +377,8 @@ class NpuPlanningTests(unittest.TestCase):
             self.assertFalse(root.exists())
 
 
-class NpuFakeSmokeTests(unittest.TestCase):
-    def config(self, root, run_id="fake-smoke", command=None):
+class NpuFakeCollectionTests(unittest.TestCase):
+    def config(self, root, run_id="fake-collection", command=None):
         return NpuRunConfig(
             run_root=root,
             run_id=run_id,
@@ -397,14 +397,14 @@ class NpuFakeSmokeTests(unittest.TestCase):
             ),
         )
 
-    def test_fake_cpu_only_smoke_succeeds(self):
+    def test_fake_cpu_only_collection_succeeds(self):
         with tempfile.TemporaryDirectory() as directory:
             config = self.config(Path(directory))
             result = NpuRunCollector(config, npu_client=fake_client()).run()
             self.assertIs(result.status, RunStatus.SUCCEEDED)
             self.assertEqual(result.return_code, 0)
 
-    def test_fake_smoke_bundle_validates_and_has_npu_manifest(self):
+    def test_fake_collection_bundle_validates_and_has_npu_manifest(self):
         with tempfile.TemporaryDirectory() as directory:
             config = self.config(Path(directory))
             NpuRunCollector(config, npu_client=fake_client()).run()
@@ -414,7 +414,7 @@ class NpuFakeSmokeTests(unittest.TestCase):
             self.assertEqual(manifest.devices[0].device_type, DeviceType.NPU)
             self.assertEqual(manifest.software[1].version, "3.0.0")
 
-    def test_fake_smoke_has_clock_events_metrics_artifacts(self):
+    def test_fake_collection_has_clock_events_metrics_artifacts(self):
         with tempfile.TemporaryDirectory() as directory:
             config = self.config(Path(directory))
             result = NpuRunCollector(config, npu_client=fake_client()).run()

@@ -8,6 +8,11 @@ import math
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
+from ..artifact_compatibility import (
+    LEGACY_MEASURED_COUNT_AGGREGATION,
+    LEGACY_MEASURED_WINDOW,
+    LEGACY_MEASURED_WINDOW_AGGREGATION,
+)
 from ..schema import Availability
 from ..schema.catalog import METRIC_CATALOG
 from ..schema.catalog import DERIVED_LATENCY_METRICS, STAGE_BY_METRIC, display_rule
@@ -717,7 +722,7 @@ def _aggregate_request_kpis(
                     scope_type="run",
                     observation_layer=str(scope["observation_layer"]),
                     phase=scope.get("phase"),
-                    window="measured_smoke",
+                    window=LEGACY_MEASURED_WINDOW,
                 ),
                 calculation_method="request_arithmetic_mean_v1",
                 formula=f"mean({calculation.get('formula', name)})",
@@ -1234,9 +1239,9 @@ def _throughput_and_tokens(
             for metric in metrics
             if metric.metric_name == name
             and (
-                metric.dimensions.get("window") == "measured_smoke"
+                metric.dimensions.get("window") == LEGACY_MEASURED_WINDOW
                 or metric.attributes.get("vllm.measurement_window")
-                == "measured_smoke"
+                == LEGACY_MEASURED_WINDOW
             )
         ]
         for name in (*count_names, *rate_names)
@@ -1253,7 +1258,7 @@ def _throughput_and_tokens(
         candidates = candidates_by_name[name]
         if len(candidates) > 1:
             raise OverviewCalculationError(
-                f"{name} has ambiguous measured_smoke metric provenance"
+                f"{name} has ambiguous {LEGACY_MEASURED_WINDOW} metric provenance"
             )
         selected[name] = candidates[0] if candidates else None
 
@@ -1278,17 +1283,19 @@ def _throughput_and_tokens(
         ]
     if missing:
         raise OverviewCalculationError(
-            f"{missing[0]} requires exactly one measured_smoke metric"
+            f"{missing[0]} requires exactly one {LEGACY_MEASURED_WINDOW} metric"
         )
 
     values: dict[str, int | float] = {}
     for name, metric in selected.items():
         if metric is None:  # pragma: no cover - branch above
-            raise OverviewCalculationError("measured_smoke selection changed")
+            raise OverviewCalculationError(
+                f"{LEGACY_MEASURED_WINDOW} selection changed"
+            )
         value = _metric_contract(metric, name)
         if value is None:
             raise OverviewCalculationError(
-                f"{name} measured_smoke metric is unavailable"
+                f"{name} {LEGACY_MEASURED_WINDOW} metric is unavailable"
             )
         values[name] = value
     if values["request.input_tokens"] + values["request.output_tokens"] != values[
@@ -1303,13 +1310,17 @@ def _throughput_and_tokens(
     }
     if len(intervals) != 1:
         raise OverviewCalculationError(
-            "measured_smoke throughput metrics disagree on window duration"
+            f"{LEGACY_MEASURED_WINDOW} throughput metrics disagree on "
+            "window duration"
         )
     interval = intervals.pop()
-    interval_ns = _non_bool_int(interval, field="measured_smoke interval_ns")
+    interval_ns = _non_bool_int(
+        interval,
+        field=f"{LEGACY_MEASURED_WINDOW} interval_ns",
+    )
     if interval_ns <= 0:
         raise OverviewCalculationError(
-            "measured_smoke throughput window must be positive"
+            f"{LEGACY_MEASURED_WINDOW} throughput window must be positive"
         )
     interval_seconds = interval_ns / 1_000_000_000
     expected = {
@@ -1323,31 +1334,33 @@ def _throughput_and_tokens(
     for name, recomputed in expected.items():
         if values[name] != recomputed:
             raise OverviewCalculationError(
-                f"{name} does not equal count / measured_smoke duration"
+                f"{name} does not equal count / {LEGACY_MEASURED_WINDOW} duration"
             )
 
     warning = (
-        "measured_smoke contains one request; this observation is not a "
+        f"{LEGACY_MEASURED_WINDOW} contains one request; this observation is not a "
         "generalizable throughput benchmark"
     )
     result = []
     for name in (*count_names, *rate_names):
         metric = selected[name]
         if metric is None:  # pragma: no cover - branch above
-            raise OverviewCalculationError("measured_smoke selection changed")
+            raise OverviewCalculationError(
+                f"{LEGACY_MEASURED_WINDOW} selection changed"
+            )
         result.append(
             _kpi(
                 name=name,
                 canonical_unit=METRIC_CATALOG[name].unit,
                 value=values[name],
                 unavailable_reason=None,
-                aggregation_method="measured_smoke_window_v1",
+                aggregation_method=LEGACY_MEASURED_WINDOW_AGGREGATION,
                 sample_count=1,
                 sources=[
                     _source_metric(
                         [metric],
                         details={
-                            "window": "measured_smoke",
+                            "window": LEGACY_MEASURED_WINDOW,
                             "window_duration_ns": interval_ns,
                         },
                     )
@@ -1358,10 +1371,10 @@ def _throughput_and_tokens(
                     observation_layer="request_facing_client",
                     request_id=metric.request_id,
                     host_id=metric.host_id,
-                    window="measured_smoke",
+                    window=LEGACY_MEASURED_WINDOW,
                 ),
                 calculation_method=(
-                    "measured_smoke_count_v1"
+                    LEGACY_MEASURED_COUNT_AGGREGATION
                     if name in count_names
                     else "count_per_window_second_v1"
                 ),
@@ -1390,7 +1403,7 @@ def _multi_request_throughput_and_tokens(
     for name in singleton_names:
         if len(candidates[name]) != 1:
             raise OverviewCalculationError(
-                f"{name} requires exactly one measured_smoke run metric"
+                f"{name} requires exactly one {LEGACY_MEASURED_WINDOW} run metric"
             )
     token_names = (
         "request.input_tokens",
@@ -1446,14 +1459,15 @@ def _multi_request_throughput_and_tokens(
     }
     if len(intervals) != 1:
         raise OverviewCalculationError(
-            "measured_smoke throughput metrics disagree on window duration"
+            f"{LEGACY_MEASURED_WINDOW} throughput metrics disagree on "
+            "window duration"
         )
     interval_ns = _non_bool_int(
-        intervals.pop(), field="measured_smoke interval_ns"
+        intervals.pop(), field=f"{LEGACY_MEASURED_WINDOW} interval_ns"
     )
     if interval_ns <= 0:
         raise OverviewCalculationError(
-            "measured_smoke throughput window must be positive"
+            f"{LEGACY_MEASURED_WINDOW} throughput window must be positive"
         )
     interval_seconds = interval_ns / 1_000_000_000
     expected_rates = {
@@ -1472,11 +1486,12 @@ def _multi_request_throughput_and_tokens(
         actual = _metric_contract(rate_metrics[name], name)
         if actual != expected:
             raise OverviewCalculationError(
-                f"{name} does not equal count / measured_smoke duration"
+                f"{name} does not equal count / {LEGACY_MEASURED_WINDOW} duration"
             )
 
     warning = (
-        f"measured_smoke contains {len(request_ids)} requests; this validation "
+        f"{LEGACY_MEASURED_WINDOW} contains {len(request_ids)} requests; "
+        "this validation "
         "workload is not a generalizable throughput benchmark"
     )
     result: list[dict[str, object]] = []
@@ -1491,7 +1506,7 @@ def _multi_request_throughput_and_tokens(
             source_metrics = [request_count_metric]
             value = count_values[name]
             sample_count = 1
-            method = "measured_smoke_count_v1"
+            method = LEGACY_MEASURED_COUNT_AGGREGATION
             formula = "measured count"
         else:
             source_metrics = [rate_metrics[name]]
@@ -1505,13 +1520,13 @@ def _multi_request_throughput_and_tokens(
                 canonical_unit=METRIC_CATALOG[name].unit,
                 value=value,
                 unavailable_reason=None,
-                aggregation_method="measured_smoke_window_v1",
+                aggregation_method=LEGACY_MEASURED_WINDOW_AGGREGATION,
                 sample_count=sample_count,
                 sources=[
                     _source_metric(
                         source_metrics,
                         details={
-                            "window": "measured_smoke",
+                            "window": LEGACY_MEASURED_WINDOW,
                             "window_duration_ns": interval_ns,
                             "measured_request_count": len(request_ids),
                         },
@@ -1521,7 +1536,7 @@ def _multi_request_throughput_and_tokens(
                     loaded,
                     scope_type="run",
                     observation_layer="request_facing_client",
-                    window="measured_smoke",
+                    window=LEGACY_MEASURED_WINDOW,
                 ),
                 calculation_method=method,
                 formula=formula,
@@ -1553,7 +1568,7 @@ def _transfer_kpis(
         observation_layer="hybrid_pipeline",
         request_id=correlation,
         phase="kv_transfer",
-        window="measured_smoke" if aggregate_run else None,
+        window=LEGACY_MEASURED_WINDOW if aggregate_run else None,
     )
     clock = (
         _clock(loaded, records)

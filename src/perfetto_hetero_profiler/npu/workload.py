@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..artifact_compatibility import LEGACY_MEASURED_WINDOW
 from ..schema import (
     Availability,
     EventRecord,
@@ -156,7 +157,7 @@ def measured_window_metrics(
         "origin": ValueOrigin.DERIVED,
         "interval_ns": interval_ns,
         "dimensions": {
-            "window": "measured_smoke",
+            "window": LEGACY_MEASURED_WINDOW,
             "workload.unit": "inference",
         },
         "attributes": {"rbln.warmup_excluded": True},

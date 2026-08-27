@@ -196,7 +196,7 @@ runs/<run-id>-publication/  overall result and determinism evidence
 RBLN PB는 공식 Perfetto trace이지만 canonical `CLOCK_MONOTONIC` anchor가 없는
 경우 `trace.rbln-native.pftrace`로 분리됩니다. Relative timestamp를 임의로
 Hybrid timeline에 이동하지 않습니다. HTML Overview는 Perfetto UI plugin이
-아닌 독립적인 결과 화면입니다. 한 번의 smoke 실행은 benchmark가 아닙니다.
+아닌 독립적인 결과 화면입니다. 한 번의 측정 실행은 benchmark가 아닙니다.
 Versioned runtime capability가 있으면 KV handoff, transfer setup, transfer wait,
 decode scheduling wait를 독립 marker pair로 검증합니다. 이 capability가 없는
 이전 run에는 구간을 추정하지 않고 `not_available`로 유지합니다.

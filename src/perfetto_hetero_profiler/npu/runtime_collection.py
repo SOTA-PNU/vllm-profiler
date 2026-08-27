@@ -1,4 +1,4 @@
-"""Actual direct-RBLN workload child and normalized smoke runner."""
+"""Direct-RBLN workload child and normalized profiling collection runner."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import sys
 import time
 from typing import Sequence
 
+from ..artifact_compatibility import LEGACY_NPU_COLLECTION_PRODUCER
 from ..collectors.npu import NpuRunCollector, NpuRunConfig
 from ..schema import (
     ArtifactKind,
@@ -36,7 +37,7 @@ from .workload import (
 
 
 @dataclass(frozen=True)
-class NpuRuntimeSmokeConfig:
+class NpuRuntimeCollectionConfig:
     run_root: Path
     run_id: str
     artifact: Path
@@ -80,7 +81,7 @@ class NpuRuntimeSmokeConfig:
 
 
 @dataclass(frozen=True)
-class NpuRuntimeSmokeResult:
+class NpuRuntimeCollectionResult:
     run_directory: Path
     status: RunStatus
     return_code: int
@@ -93,7 +94,9 @@ class NpuRuntimeSmokeResult:
     errors: tuple[str, ...]
 
 
-def build_runtime_smoke_plan(config: NpuRuntimeSmokeConfig) -> dict[str, object]:
+def build_runtime_collection_plan(
+    config: NpuRuntimeCollectionConfig,
+) -> dict[str, object]:
     return {
         "executes": False,
         "run_id": config.run_id,
@@ -120,11 +123,11 @@ def build_runtime_smoke_plan(config: NpuRuntimeSmokeConfig) -> dict[str, object]
     }
 
 
-class NpuRuntimeSmokeRunner:
-    def __init__(self, config: NpuRuntimeSmokeConfig) -> None:
+class NpuRuntimeCollectionRunner:
+    def __init__(self, config: NpuRuntimeCollectionConfig) -> None:
         self.config = config
 
-    def run(self) -> NpuRuntimeSmokeResult:
+    def run(self) -> NpuRuntimeCollectionResult:
         config = self.config
         paths = RunPaths(config.run_root, config.run_id)
         generic = NpuRunCollector(
@@ -173,7 +176,7 @@ class NpuRuntimeSmokeRunner:
                     config.summary_path,
                     config.run_directory,
                     ArtifactKind.RAW_LOG,
-                    "npu-runtime-smoke",
+                    LEGACY_NPU_COLLECTION_PRODUCER,
                     "json",
                 )
             )
@@ -223,7 +226,7 @@ class NpuRuntimeSmokeRunner:
         )
         manifest.attributes.update(
             {
-                "vendor.collector": "npu-runtime-smoke",
+                "vendor.collector": LEGACY_NPU_COLLECTION_PRODUCER,
                 "rbln.workload_success": bool(summary and summary.get("success")),
                 "rbln.artifact_compiler_version": (
                     summary.get("artifact_metadata", {}).get("compiler_version")
@@ -254,7 +257,7 @@ class NpuRuntimeSmokeRunner:
             ),
         )
         _replace_json(paths.manifest, manifest)
-        return NpuRuntimeSmokeResult(
+        return NpuRuntimeCollectionResult(
             run_directory=config.run_directory,
             status=status,
             return_code=generic.return_code,
@@ -268,12 +271,13 @@ class NpuRuntimeSmokeRunner:
         )
 
 
-def _child_argv(config: NpuRuntimeSmokeConfig) -> tuple[str, ...]:
+def _child_argv(config: NpuRuntimeCollectionConfig) -> tuple[str, ...]:
     argv = [
         str(config.runtime_python),
         "-c",
         (
-            "from perfetto_hetero_profiler.npu.runtime_smoke import child_main; "
+            "from perfetto_hetero_profiler.npu.runtime_collection "
+            "import child_main; "
             "raise SystemExit(child_main())"
         ),
         "--child",
@@ -323,10 +327,10 @@ def _run_child(args: argparse.Namespace) -> int:
         summary["artifact_metadata"] = metadata
         inputs = metadata.get("inputs", [])
         if len(inputs) != 1:
-            raise RuntimeError("smoke adapter requires exactly one input")
+            raise RuntimeError("runtime adapter requires exactly one input")
         input_spec = inputs[0]
         if input_spec.get("dtype") != "float32":
-            raise RuntimeError("smoke adapter requires float32 input")
+            raise RuntimeError("runtime adapter requires float32 input")
         input_array = np.zeros(tuple(input_spec["shape"]), dtype=np.float32)
         runtime = rebel.Runtime(
             artifact,

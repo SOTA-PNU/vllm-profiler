@@ -165,7 +165,7 @@ RBLN NPU에서 vLLM 기반 Hybrid workload를 수집하려면 별도
   UI plugin 통합은 선택적 후속 기능입니다.
 - CPU power는 현재 수집하거나 다른 telemetry에서 합성하지 않으며, 측정 지원은
   선택적 후속 기능입니다.
-- 단일 smoke run은 통계적 benchmark나 hardware 우열의 근거가 아닙니다.
+- 단일 diagnostic capture는 통계적 benchmark나 hardware 우열의 근거가 아닙니다.
 - 일부 NIXL/UCX 환경에서는 요청과 artifact 생성 후 종료 중 native crash가 발생할
   수 있습니다. 이 경우 결과는 `shutdown_integrity=invalid`, `demo_only=true`이며
   production 성공으로 간주하지 않습니다.

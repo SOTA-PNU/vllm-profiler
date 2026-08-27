@@ -9,7 +9,11 @@ import sys
 
 from ..collectors.gpu import GpuRunCollector, GpuRunConfig, build_gpu_run_plan
 from ..collectors.npu import NpuRunCollector, NpuRunConfig, build_npu_run_plan
-from ..gpu.smoke import GpuVllmSmokeConfig, GpuVllmSmokeRunner, build_smoke_plan
+from ..gpu.vllm_collection import (
+    GpuVllmCollectionConfig,
+    GpuVllmCollectionRunner,
+    build_vllm_collection_plan,
+)
 from ..hybrid import (
     HybridRunner,
     build_hybrid_run_plan,
@@ -17,9 +21,9 @@ from ..hybrid import (
     validate_hybrid_invocation,
 )
 from ..npu import (
-    NpuRuntimeSmokeConfig,
-    NpuRuntimeSmokeRunner,
-    build_runtime_smoke_plan,
+    NpuRuntimeCollectionConfig,
+    NpuRuntimeCollectionRunner,
+    build_runtime_collection_plan,
 )
 from ..schema import ProfileMode, RunStatus
 
@@ -77,7 +81,8 @@ def _register_npu(commands: argparse._SubParsersAction) -> None:
 
 def _register_npu_runtime(commands: argparse._SubParsersAction) -> None:
     parser = commands.add_parser(
-        "npu-runtime", help="Run or plan a direct RBLN runtime smoke test."
+        "npu-runtime",
+        help="Run or plan a direct RBLN runtime profiling collection.",
     )
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
@@ -99,7 +104,8 @@ def _register_npu_runtime(commands: argparse._SubParsersAction) -> None:
 
 def _register_gpu_vllm(commands: argparse._SubParsersAction) -> None:
     parser = commands.add_parser(
-        "gpu-vllm", help="Run or plan a local GPU-only vLLM smoke test."
+        "gpu-vllm",
+        help="Run or plan a local GPU-only vLLM profiling collection.",
     )
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
@@ -230,7 +236,7 @@ def _handle_hybrid(args: argparse.Namespace) -> int:
 
 def _handle_npu_runtime(args: argparse.Namespace) -> int:
     try:
-        config = NpuRuntimeSmokeConfig(
+        config = NpuRuntimeCollectionConfig(
             run_root=args.run_root,
             run_id=args.run_id,
             artifact=args.artifact,
@@ -244,9 +250,9 @@ def _handle_npu_runtime(args: argparse.Namespace) -> int:
             timeout_sec=args.timeout_sec,
         )
         if args.dry_run:
-            _print_json(build_runtime_smoke_plan(config))
+            _print_json(build_runtime_collection_plan(config))
             return 0
-        result = NpuRuntimeSmokeRunner(config).run()
+        result = NpuRuntimeCollectionRunner(config).run()
     except (OSError, ValueError, RuntimeError) as error:
         print(f"collection error: {error}", file=sys.stderr)
         return 2
@@ -261,7 +267,7 @@ def _handle_npu_runtime(args: argparse.Namespace) -> int:
 
 def _handle_gpu_vllm(args: argparse.Namespace) -> int:
     try:
-        config = GpuVllmSmokeConfig(
+        config = GpuVllmCollectionConfig(
             run_root=args.run_root,
             run_id=args.run_id,
             model=args.model,
@@ -282,9 +288,9 @@ def _handle_gpu_vllm(args: argparse.Namespace) -> int:
             offline=args.offline,
         )
         if args.dry_run:
-            _print_json(build_smoke_plan(config))
+            _print_json(build_vllm_collection_plan(config))
             return 0
-        result = GpuVllmSmokeRunner(config).run()
+        result = GpuVllmCollectionRunner(config).run()
     except (OSError, ValueError, RuntimeError) as error:
         print(f"collection error: {error}", file=sys.stderr)
         return 2

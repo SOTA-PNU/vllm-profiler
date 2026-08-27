@@ -1,21 +1,21 @@
-"""GPU vLLM smoke-test orchestration."""
+"""GPU vLLM profiling collection orchestration."""
 
 from .openai_client import CompletionObservation, OpenAICompletionClient
-from .smoke import (
-    GpuVllmSmokeConfig,
-    GpuVllmSmokeResult,
-    GpuVllmSmokeRunner,
-    build_smoke_plan,
+from .vllm_collection import (
+    GpuVllmCollectionConfig,
+    GpuVllmCollectionResult,
+    GpuVllmCollectionRunner,
+    build_vllm_collection_plan,
 )
 from .vllm_server import VllmServerConfig, build_server_argv
 
 __all__ = [
     "CompletionObservation",
-    "GpuVllmSmokeConfig",
-    "GpuVllmSmokeResult",
-    "GpuVllmSmokeRunner",
+    "GpuVllmCollectionConfig",
+    "GpuVllmCollectionResult",
+    "GpuVllmCollectionRunner",
     "OpenAICompletionClient",
     "VllmServerConfig",
     "build_server_argv",
-    "build_smoke_plan",
+    "build_vllm_collection_plan",
 ]

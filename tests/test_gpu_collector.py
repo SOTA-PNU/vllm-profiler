@@ -101,7 +101,7 @@ class GpuRunIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config = GpuRunConfig(
                 run_root=Path(directory),
-                run_id="smoke",
+                run_id="collection",
                 profile_mode=ProfileMode.MONITOR,
                 sample_interval_ms=100,
                 command=(sys.executable, "-c", "print('hello')"),

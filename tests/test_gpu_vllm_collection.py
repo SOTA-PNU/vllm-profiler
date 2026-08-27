@@ -1,4 +1,4 @@
-"""Configuration, dry-run, and CLI tests for GPU vLLM smoke collection."""
+"""Configuration, dry-run, and CLI tests for GPU vLLM collection."""
 
 import contextlib
 import gzip
@@ -11,10 +11,10 @@ import tempfile
 import unittest
 
 from perfetto_hetero_profiler.cli import main
-from perfetto_hetero_profiler.gpu.smoke import (
-    GpuVllmSmokeConfig,
-    GpuVllmSmokeRunner,
-    build_smoke_plan,
+from perfetto_hetero_profiler.gpu.vllm_collection import (
+    GpuVllmCollectionConfig,
+    GpuVllmCollectionRunner,
+    build_vllm_collection_plan,
 )
 from perfetto_hetero_profiler.gpu.openai_client import CompletionObservation
 from perfetto_hetero_profiler.collectors.gpu.nvidia_smi import (
@@ -29,7 +29,7 @@ from perfetto_hetero_profiler.schema import (
 )
 
 
-class SmokeConfigTests(unittest.TestCase):
+class CollectionConfigTests(unittest.TestCase):
     def config(self, **changes):
         values = {
             "run_root": Path("/runs"),
@@ -50,10 +50,10 @@ class SmokeConfigTests(unittest.TestCase):
             "vllm_bin": Path("/venv/bin/vllm"),
         }
         values.update(changes)
-        return GpuVllmSmokeConfig(**values)
+        return GpuVllmCollectionConfig(**values)
 
     def test_plan_is_nonexecuting(self) -> None:
-        plan = build_smoke_plan(self.config())
+        plan = build_vllm_collection_plan(self.config())
         self.assertFalse(plan["executes"])
         self.assertFalse(plan["workload"]["stores_prompt_or_generated_text"])
 
@@ -62,12 +62,12 @@ class SmokeConfigTests(unittest.TestCase):
             config = self.config(
                 run_root=Path(directory), run_id="does-not-exist"
             )
-            build_smoke_plan(config)
+            build_vllm_collection_plan(config)
             self.assertFalse(config.paths.root.exists())
 
     def test_torch_plan_uses_separate_directory(self) -> None:
         config = self.config(profile_mode="torch", run_id="torch-run")
-        argv = build_smoke_plan(config)["server_argv"]
+        argv = build_vllm_collection_plan(config)["server_argv"]
         self.assertIn(
             "--profiler-config.torch_profiler_dir=/runs/torch-run/raw/gpu/torch",
             argv,
@@ -75,7 +75,7 @@ class SmokeConfigTests(unittest.TestCase):
 
     def test_nsys_plan_uses_run_local_output(self) -> None:
         config = self.config(profile_mode="nsys", run_id="nsys-run")
-        argv = build_smoke_plan(config)["server_argv"]
+        argv = build_vllm_collection_plan(config)["server_argv"]
         index = argv.index("--output")
         self.assertEqual(argv[index + 1], "/runs/nsys-run/raw/gpu/nsys/vllm-smoke")
 
@@ -92,7 +92,7 @@ class SmokeConfigTests(unittest.TestCase):
             self.config(run_root=Path("runs"))
 
 
-class SmokeCliTests(unittest.TestCase):
+class CollectionCliTests(unittest.TestCase):
     def test_help_lists_profiler_modes(self) -> None:
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
@@ -174,16 +174,16 @@ class FakeCompletionClient:
         )
 
 
-class SmokeFakeIntegrationTests(unittest.TestCase):
+class CollectionFakeIntegrationTests(unittest.TestCase):
     def test_monitor_writes_valid_complete_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config = SmokeConfigTests().config(
+            config = CollectionConfigTests().config(
                 run_root=Path(directory),
                 run_id="fake-monitor",
                 warmup_requests=1,
                 measured_requests=1,
             )
-            result = GpuVllmSmokeRunner(
+            result = GpuVllmCollectionRunner(
                 config,
                 gpu_client=FakeGpuClient(),
                 server_factory=FakeServer,
@@ -207,7 +207,7 @@ class SmokeFakeIntegrationTests(unittest.TestCase):
 
     def test_torch_trace_discovery_excludes_auxiliary_text(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config = SmokeConfigTests().config(
+            config = CollectionConfigTests().config(
                 run_root=Path(directory),
                 run_id="fake-torch",
                 profile_mode="torch",
@@ -218,14 +218,14 @@ class SmokeFakeIntegrationTests(unittest.TestCase):
             trace = torch_root / "rank0.pt.trace.json.gz"
             trace.write_bytes(b"trace")
             (torch_root / "profiler_out_0.txt").write_text("table")
-            files = GpuVllmSmokeRunner(
+            files = GpuVllmCollectionRunner(
                 config, gpu_client=FakeGpuClient()
             )._profile_files(config.paths.root)
             self.assertEqual(files, [trace])
 
     def test_torch_plain_and_gzip_traces_validate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config = SmokeConfigTests().config(
+            config = CollectionConfigTests().config(
                 run_root=Path(directory),
                 run_id="valid-traces",
                 profile_mode="torch",
@@ -239,7 +239,7 @@ class SmokeFakeIntegrationTests(unittest.TestCase):
             with gzip.open(compressed, "wt", encoding="utf-8") as stream:
                 json.dump({"traceEvents": []}, stream)
             errors = []
-            result = GpuVllmSmokeRunner(
+            result = GpuVllmCollectionRunner(
                 config, gpu_client=FakeGpuClient()
             )._validate_profile_files([plain, compressed], errors)
             self.assertEqual(result["valid_files"], 2)
@@ -247,7 +247,7 @@ class SmokeFakeIntegrationTests(unittest.TestCase):
 
     def test_empty_torch_trace_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config = SmokeConfigTests().config(
+            config = CollectionConfigTests().config(
                 run_root=Path(directory),
                 run_id="empty-trace",
                 profile_mode="torch",
@@ -257,7 +257,7 @@ class SmokeFakeIntegrationTests(unittest.TestCase):
             trace.parent.mkdir(parents=True)
             trace.touch()
             errors = []
-            result = GpuVllmSmokeRunner(
+            result = GpuVllmCollectionRunner(
                 config, gpu_client=FakeGpuClient()
             )._validate_profile_files([trace], errors)
             self.assertEqual(result["valid_files"], 0)
@@ -265,7 +265,7 @@ class SmokeFakeIntegrationTests(unittest.TestCase):
 
     def test_corrupt_plain_and_gzip_traces_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config = SmokeConfigTests().config(
+            config = CollectionConfigTests().config(
                 run_root=Path(directory),
                 run_id="corrupt-traces",
                 profile_mode="torch",
@@ -278,7 +278,7 @@ class SmokeFakeIntegrationTests(unittest.TestCase):
             compressed = torch_root / "bad.pt.trace.json.gz"
             compressed.write_bytes(b"\x1f\x8btruncated")
             errors = []
-            result = GpuVllmSmokeRunner(
+            result = GpuVllmCollectionRunner(
                 config, gpu_client=FakeGpuClient()
             )._validate_profile_files([plain, compressed], errors)
             self.assertEqual(result["valid_files"], 0)
@@ -286,7 +286,7 @@ class SmokeFakeIntegrationTests(unittest.TestCase):
 
     def test_torch_auxiliary_is_raw_log_without_duplicate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config = SmokeConfigTests().config(
+            config = CollectionConfigTests().config(
                 run_root=Path(directory),
                 run_id="artifact-kinds",
                 profile_mode="torch",
@@ -305,7 +305,7 @@ class SmokeFakeIntegrationTests(unittest.TestCase):
             requests.parent.mkdir(parents=True)
             for path in (stdout, stderr, requests):
                 path.write_text("", encoding="utf-8")
-            artifacts = GpuVllmSmokeRunner(
+            artifacts = GpuVllmCollectionRunner(
                 config, gpu_client=FakeGpuClient()
             )._artifacts(root, stdout, stderr, requests, [trace], None)
             by_path = {item.relative_path: item for item in artifacts}
