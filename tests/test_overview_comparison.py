@@ -10,8 +10,6 @@ import unittest
 from tools.evaluation.overview import (
     OverviewComparisonError,
     build_comparison,
-)
-from perfetto_hetero_profiler.overview.schema import (
     overview_document_from_json,
 )
 

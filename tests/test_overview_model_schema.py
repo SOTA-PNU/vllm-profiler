@@ -42,7 +42,10 @@ from tools.evaluation.overview import (
     DeltaValue,
     KpiDirection,
     OverviewComparison,
+    canonical_comparison_json_bytes,
+    comparison_to_dict,
     load_comparison_schema,
+    overview_document_from_json as comparison_document_from_json,
     validate_overview_comparison,
 )
 from perfetto_hetero_profiler.schema import Availability
@@ -728,7 +731,7 @@ class OverviewComparisonContractTests(unittest.TestCase):
     def test_comparison_top_level_contract_and_round_trip(self) -> None:
         value = comparison()
         validate_overview_comparison(value)
-        serialized = overview_to_dict(value)
+        serialized = comparison_to_dict(value)
         self.assertEqual(
             set(serialized),
             {
@@ -741,7 +744,9 @@ class OverviewComparisonContractTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            overview_document_from_json(canonical_json_bytes(value)),
+            comparison_document_from_json(
+                canonical_comparison_json_bytes(value)
+            ),
             value,
         )
 
@@ -770,7 +775,7 @@ class OverviewComparisonContractTests(unittest.TestCase):
         detailed["run"]["profiler_kind"] = "gpu_torch"
         built = build_comparison([detailed, control])
 
-        parsed = overview_document_from_json(
+        parsed = comparison_document_from_json(
             json.dumps(built, allow_nan=False)
         )
         identities = {

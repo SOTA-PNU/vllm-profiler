@@ -7,7 +7,6 @@ import json
 import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from pathlib import Path
 from typing import Any
 
 from perfetto_hetero_profiler.schema.constants import SCHEMA_VERSION
@@ -18,16 +17,6 @@ COMPARISON_RECORD_TYPE = "overview_comparison"
 _AVAILABLE = "available"
 _UNAVAILABLE = "not_available"
 _CONCLUSION_WORD_RE = re.compile(r"\b(?:winner|fastest|best)\b", re.IGNORECASE)
-
-
-def load_comparison_schema() -> dict[str, Any]:
-    """Load the repository-only checked-in comparison schema."""
-
-    path = Path(__file__).with_name("schema") / "overview_comparison.schema.json"
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise OverviewComparisonError("comparison schema must be an object")
-    return value
 
 
 class OverviewComparisonError(ValueError):

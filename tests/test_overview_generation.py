@@ -20,9 +20,6 @@ from perfetto_hetero_profiler.overview.bundle import (
     load_overview_bundle,
 )
 from perfetto_hetero_profiler.overview.generator import (
-    COMPARISON_HTML_NAME,
-    COMPARISON_JSON_NAME,
-    COMPARISON_VALIDATION_NAME,
     OVERVIEW_HTML_NAME,
     OVERVIEW_JSON_NAME,
     OVERVIEW_VALIDATION_NAME,
@@ -46,11 +43,15 @@ from perfetto_hetero_profiler.overview.schema import (
 )
 from perfetto_hetero_profiler.overview.validation import OverviewValidationError
 from tools.evaluation.overview import (
+    COMPARISON_HTML_NAME,
+    COMPARISON_JSON_NAME,
+    COMPARISON_VALIDATION_NAME,
     OverviewComparisonConfig,
     build_comparison,
     build_comparison_validation,
     compare_overviews,
     load_comparison_bundle,
+    overview_input_evidence,
     plan_overview_comparison,
     render_comparison_html,
 )
@@ -709,7 +710,9 @@ class OverviewGenerationIntegrationTests(unittest.TestCase):
         html_validation = validate_offline_html(
             render_comparison_html(comparison)
         )
-        evidence = [copy.deepcopy(item.evidence) for item in inputs]
+        evidence = [
+            copy.deepcopy(overview_input_evidence(item)) for item in inputs
+        ]
         evidence[0]["overview_sha256"] = "0" * 64
         with self.assertRaisesRegex(
             OverviewValidationError,

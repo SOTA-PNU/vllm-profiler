@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import fields, replace
+import importlib
 import json
 from pathlib import Path
 import unittest
@@ -238,6 +239,20 @@ class ValidationQueryContractTests(unittest.TestCase):
 
 
 class EvaluationBoundaryTests(unittest.TestCase):
+    FORBIDDEN_CORE_IDENTIFIERS = (
+        "OverviewComparison",
+        "OverviewComparisonConfig",
+        "compare_overviews",
+        "plan_overview_comparison",
+        "_prepare_comparison",
+        "LoadedComparisonBundle",
+        "render_comparison_html",
+        "build_comparison_validation",
+        "COMPARISON_JSON_NAME",
+        "COMPARISON_HTML_NAME",
+        "COMPARISON_VALIDATION_NAME",
+    )
+
     def test_comparison_module_and_schema_are_repository_only(self):
         root = Path(__file__).parents[1]
         self.assertFalse(
@@ -263,6 +278,34 @@ class EvaluationBoundaryTests(unittest.TestCase):
                 self.assertFalse(
                     any("comparison" in name.casefold() for name in module.__all__)
                 )
+
+    def test_core_contains_no_evaluation_dependency_or_comparison_contract(self):
+        core = Path(__file__).parents[1] / "src/perfetto_hetero_profiler"
+        source = {
+            path.relative_to(core).as_posix(): path.read_text(encoding="utf-8")
+            for path in sorted(core.rglob("*.py"))
+        }
+        self.assertFalse(
+            [path for path, text in source.items() if "tools.evaluation" in text]
+        )
+        for identifier in self.FORBIDDEN_CORE_IDENTIFIERS:
+            with self.subTest(identifier=identifier):
+                self.assertFalse(
+                    [path for path, text in source.items() if identifier in text]
+                )
+
+    def test_core_modules_do_not_expose_moved_contract(self):
+        locations = {
+            "OverviewComparison": "perfetto_hetero_profiler.overview.model",
+            "OverviewComparisonConfig": "perfetto_hetero_profiler.overview.generator",
+            "LoadedComparisonBundle": "perfetto_hetero_profiler.overview.bundle",
+            "render_comparison_html": "perfetto_hetero_profiler.overview.render",
+            "build_comparison_validation": "perfetto_hetero_profiler.overview.validation",
+        }
+        for identifier, module_name in locations.items():
+            with self.subTest(identifier=identifier):
+                module = importlib.import_module(module_name)
+                self.assertFalse(hasattr(module, identifier))
 
     def test_documentation_uses_repository_evaluation_command(self):
         root = Path(__file__).parents[1]
