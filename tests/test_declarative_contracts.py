@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import fields, replace
 import importlib
+from importlib.util import find_spec
 import json
 from pathlib import Path
 import unittest
@@ -317,6 +318,33 @@ class EvaluationBoundaryTests(unittest.TestCase):
                     text,
                 )
                 self.assertNotIn("hetero-profiler overview compare", text)
+
+
+class DeadCodeBoundaryTests(unittest.TestCase):
+    def test_reserved_synchronization_package_is_removed(self):
+        self.assertIsNone(
+            find_spec("perfetto_hetero_profiler.synchronization")
+        )
+
+    def test_removed_internal_schema_and_support_symbols_stay_absent(self):
+        from perfetto_hetero_profiler.schema import catalog, constants
+        from perfetto_hetero_profiler.schema import field_contracts
+        from perfetto_hetero_profiler.support.config_fields import ConfigFields
+
+        for name in (
+            "RECORD_TYPES",
+            "EXTENSION_NAMESPACES",
+            "JSON_SCHEMA_FILES",
+        ):
+            with self.subTest(module=constants.__name__, name=name):
+                self.assertFalse(hasattr(constants, name))
+        for name in ("FIELD_CONTRACT_BY_CLASS", "TOP_LEVEL_FIELD_CONTRACTS"):
+            with self.subTest(module=field_contracts.__name__, name=name):
+                self.assertFalse(hasattr(field_contracts, name))
+        for name in ("STAGE_BY_TRACK", "TRACE_ATTRIBUTE_LATENCY_IDENTITIES"):
+            with self.subTest(module=catalog.__name__, name=name):
+                self.assertFalse(hasattr(catalog, name))
+        self.assertFalse(hasattr(ConfigFields, "enum"))
 
 
 if __name__ == "__main__":

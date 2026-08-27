@@ -102,7 +102,6 @@ STAGE_DEFINITIONS: tuple[StageDefinition, ...] = (
     ),
 )
 
-STAGE_BY_TRACK = {stage.track_key: stage for stage in STAGE_DEFINITIONS}
 STAGE_BY_METRIC = {
     stage.metric_name: stage
     for stage in STAGE_DEFINITIONS
@@ -175,22 +174,6 @@ KPI_PRESENTATIONS: tuple[KpiPresentation, ...] = (
 KPI_PRESENTATION_BY_IDENTITY = {
     (item.section, item.metric_name): item for item in KPI_PRESENTATIONS
 }
-TRACE_ATTRIBUTE_LATENCY_IDENTITIES = (
-    ("request_facing_latency", "latency.e2e"),
-    ("request_facing_latency", "latency.ttft"),
-    ("request_facing_latency", "latency.tpot"),
-    ("pipeline_latency", "latency.e2e"),
-    ("pipeline_latency", "latency.prefill"),
-    ("pipeline_latency", "latency.kv_export"),
-    ("transfer", "transfer.handoff_duration"),
-    ("transfer", "transfer.setup_duration"),
-    ("pipeline_latency", "latency.kv_transfer"),
-    ("transfer", "transfer.wait_duration"),
-    ("pipeline_latency", "latency.kv_transform"),
-    ("transfer", "decode.schedule_wait_duration"),
-    ("pipeline_latency", "latency.decode"),
-    ("pipeline_latency", "latency.sampling"),
-)
 KPI_SECTION_METRICS = {
     section: frozenset(
         item.metric_name for item in KPI_PRESENTATIONS if item.section == section
@@ -423,9 +406,7 @@ __all__ = [
     "RESOURCE_PRESENTATIONS",
     "RESOURCE_TRACK_ORDER",
     "STAGE_BY_METRIC",
-    "STAGE_BY_TRACK",
     "STAGE_DEFINITIONS",
-    "TRACE_ATTRIBUTE_LATENCY_IDENTITIES",
     "TRACE_ATTRIBUTE_PRESENTATIONS",
     "DisplayRule",
     "KpiPresentation",

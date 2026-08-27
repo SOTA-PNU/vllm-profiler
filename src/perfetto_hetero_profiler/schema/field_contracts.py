@@ -298,14 +298,10 @@ RECORD_FIELD_CONTRACTS: tuple[RecordFieldContract, ...] = (
     RecordFieldContract(ClockTransform, "clock_transform.schema.json", CLOCK_TRANSFORM_FIELDS, RecordType.CLOCK_TRANSFORM),
 )
 
-FIELD_CONTRACT_BY_CLASS = {
-    item.record_class: item for item in RECORD_FIELD_CONTRACTS
-}
-TOP_LEVEL_FIELD_CONTRACTS = tuple(
-    item for item in RECORD_FIELD_CONTRACTS if item.record_type is not None
-)
 FIELD_CONTRACT_BY_RECORD_TYPE = {
-    item.record_type: item for item in TOP_LEVEL_FIELD_CONTRACTS
+    item.record_type: item
+    for item in RECORD_FIELD_CONTRACTS
+    if item.record_type is not None
 }
 
 
@@ -338,11 +334,9 @@ validate_field_contracts()
 
 
 __all__ = [
-    "FIELD_CONTRACT_BY_CLASS",
     "FIELD_CONTRACT_BY_RECORD_TYPE",
     "FieldSpec",
     "RECORD_FIELD_CONTRACTS",
     "RecordFieldContract",
-    "TOP_LEVEL_FIELD_CONTRACTS",
     "validate_field_contracts",
 ]

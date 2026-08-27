@@ -66,14 +66,6 @@ class ConfigFields:
             raise self._error(f"{field} must be a boolean")
         return value
 
-    def enum(self, value: object, field: str, allowed: set[str]) -> str:
-        result = self.string(value, field)
-        if result not in allowed:
-            raise self._error(
-                f"{field} must be one of: {', '.join(sorted(allowed))}"
-            )
-        return result
-
     def absolute_path(
         self, value: object, field: str, *, no_symlink: bool = False
     ) -> Path:
