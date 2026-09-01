@@ -6,7 +6,6 @@ from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import platform
-import shutil
 import sys
 import time
 from typing import Callable
@@ -37,7 +36,12 @@ from ..process import ManagedProcess
 from ..run import run_monitored_process
 from ..system import ProcTelemetryCollector
 from .config import GpuDeviceInfo, GpuRunConfig
-from .nvidia_smi import NvidiaSmiClient, NvidiaSmiCommandError
+from .nvml import (
+    NVML_DISTRIBUTION,
+    NVML_DISTRIBUTION_VERSION,
+    NvmlClient,
+    NvmlError,
+)
 from .profiling import build_detailed_profile_plan
 from .telemetry import GpuTelemetryCollector
 
@@ -90,14 +94,14 @@ class GpuRunCollector:
         self,
         config: GpuRunConfig,
         *,
-        gpu_client: NvidiaSmiClient | None = None,
+        gpu_client: NvmlClient | None = None,
         proc_root: Path = Path("/proc"),
         monotonic_ns: Callable[[], int] = time.monotonic_ns,
         unix_time_ns: Callable[[], int] = time.time_ns,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.config = config
-        self.gpu_client = gpu_client or NvidiaSmiClient()
+        self.gpu_client = gpu_client or NvmlClient()
         self.proc_root = Path(proc_root)
         self.monotonic_ns = monotonic_ns
         self.unix_time_ns = unix_time_ns
@@ -190,7 +194,7 @@ class GpuRunCollector:
             if metric.availability.value == "error"
         )
         artifacts = self._write_raw_artifacts(
-            stdout_path, stderr_path, gpu.last_raw_output, tuple(errors)
+            stdout_path, stderr_path, gpu.last_raw_snapshot, tuple(errors)
         )
         write_jsonl(paths.events, events)
         write_jsonl(paths.metrics, monitored.metrics)
@@ -231,7 +235,7 @@ class GpuRunCollector:
                 for row in result.rows
             )
             return devices, None
-        except NvidiaSmiCommandError as error:
+        except NvmlError as error:
             return (GpuDeviceInfo(index=0, name="unknown"),), str(error)
 
     def _manifest(
@@ -281,10 +285,10 @@ class GpuRunCollector:
                     path=sys.executable,
                 ),
                 SoftwareDescriptor(
-                    name="nvidia-smi",
-                    version=None,
+                    name=NVML_DISTRIBUTION,
+                    version=NVML_DISTRIBUTION_VERSION,
                     role="gpu-telemetry",
-                    path=shutil.which("nvidia-smi"),
+                    path=None,
                 ),
             ],
             devices=[
@@ -296,7 +300,7 @@ class GpuRunCollector:
                     model=device.name,
                     status="available" if device.name != "unknown" else "unknown",
                     memory_total_bytes=device.memory_total_bytes,
-                    attributes={"nvidia_smi.gpu_index": device.index},
+                    attributes={"nvml.gpu_index": device.index},
                 )
                 for device in devices
             ],
@@ -347,11 +351,16 @@ class GpuRunCollector:
             self._artifact("child-stderr", "raw/client/stderr.log", stderr_path),
         ]
         if raw_gpu is not None:
-            raw_path = paths.root / "raw/gpu/nvidia-smi-last.csv"
+            raw_path = paths.root / "raw/gpu/nvml-last.json"
             raw_path.write_text(raw_gpu, encoding="utf-8")
             artifacts.append(
                 self._artifact(
-                    "nvidia-smi-last", "raw/gpu/nvidia-smi-last.csv", raw_path
+                    "nvml-last",
+                    "raw/gpu/nvml-last.json",
+                    raw_path,
+                    format_name="json",
+                    producer="nvml",
+                    kind=ArtifactKind.TELEMETRY,
                 )
             )
         if errors:
@@ -377,14 +386,16 @@ class GpuRunCollector:
         actual_path: Path,
         *,
         format_name: str = "text",
+        producer: str = "gpu-monitor",
+        kind: ArtifactKind = ArtifactKind.RAW_LOG,
     ) -> ArtifactReference:
         return ArtifactReference(
             run_id=self.config.run_id,
             artifact_id=artifact_id,
-            artifact_kind=ArtifactKind.RAW_LOG,
+            artifact_kind=kind,
             relative_path=relative_path,
             format=format_name,
-            producer="gpu-monitor",
+            producer=producer,
             created_at_unix_ns=self.unix_time_ns(),
             size_bytes=actual_path.stat().st_size,
             attributes={},

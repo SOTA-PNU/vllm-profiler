@@ -9,7 +9,6 @@ import json
 import os
 from pathlib import Path
 import platform
-import shutil
 import threading
 import time
 from typing import Callable, Literal
@@ -20,8 +19,12 @@ from ..artifact_compatibility import (
     LEGACY_GPU_COLLECTION_SUMMARY,
     LEGACY_GPU_NSYS_OUTPUT,
 )
-from ..collectors.gpu import GpuTelemetryCollector
-from ..collectors.gpu.nvidia_smi import NvidiaSmiClient
+from ..collectors.gpu import (
+    NVML_DISTRIBUTION,
+    NVML_DISTRIBUTION_VERSION,
+    GpuTelemetryCollector,
+    NvmlClient,
+)
 from ..collectors.system import ProcTelemetryCollector
 from ..schema import (
     Availability,
@@ -186,7 +189,7 @@ class _TelemetryThread:
         self,
         config: GpuVllmCollectionConfig,
         pid_provider: Callable[[], int | None],
-        gpu_client: NvidiaSmiClient,
+        gpu_client: NvmlClient,
     ) -> None:
         self.config = config
         self.stop_event = threading.Event()
@@ -244,13 +247,13 @@ class GpuVllmCollectionRunner:
         self,
         config: GpuVllmCollectionConfig,
         *,
-        gpu_client: NvidiaSmiClient | None = None,
+        gpu_client: NvmlClient | None = None,
         server_factory: Callable[..., ManagedVllmServer] = ManagedVllmServer,
         client_factory: Callable[..., OpenAICompletionClient] = OpenAICompletionClient,
         unix_time_ns: Callable[[], int] = time.time_ns,
     ) -> None:
         self.config = config
-        self.gpu_client = gpu_client or NvidiaSmiClient()
+        self.gpu_client = gpu_client or NvmlClient()
         self.server_factory = server_factory
         self.client_factory = client_factory
         self.unix_time_ns = unix_time_ns
@@ -266,23 +269,29 @@ class GpuVllmCollectionRunner:
         request_summary_path = paths.root / "raw/client/requests.json"
         summary_path = paths.root / LEGACY_GPU_COLLECTION_SUMMARY
 
-        devices = self.gpu_client.query()
-        write_json(paths.manifest, self._manifest(devices, RunStatus.RUNNING, ()))
-        write_jsonl(
-            paths.clock_domains,
-            [
-                ClockDomain(
-                    run_id=config.run_id,
-                    clock_domain_id=CLOCK_DOMAIN_ID,
-                    host_id=HOST_ID,
-                    clock_type=ClockType.MONOTONIC,
-                    unit="ns",
-                    monotonic=True,
-                    adjustable=False,
-                    attributes={"vendor.clock_source": "time.monotonic_ns"},
-                )
-            ],
-        )
+        try:
+            devices = self.gpu_client.query()
+            write_json(
+                paths.manifest, self._manifest(devices, RunStatus.RUNNING, ())
+            )
+            write_jsonl(
+                paths.clock_domains,
+                [
+                    ClockDomain(
+                        run_id=config.run_id,
+                        clock_domain_id=CLOCK_DOMAIN_ID,
+                        host_id=HOST_ID,
+                        clock_type=ClockType.MONOTONIC,
+                        unit="ns",
+                        monotonic=True,
+                        adjustable=False,
+                        attributes={"vendor.clock_source": "time.monotonic_ns"},
+                    )
+                ],
+            )
+        except BaseException:
+            self.gpu_client.shutdown()
+            raise
 
         server = self.server_factory(
             config.server_config, server_stdout, server_stderr
@@ -348,6 +357,10 @@ class GpuVllmCollectionRunner:
                     errors.append(f"stop_profile cleanup: {error}")
             telemetry.stop()
             try:
+                self.gpu_client.shutdown()
+            except Exception as error:
+                errors.append(f"NVML cleanup: {error}")
+            try:
                 server_return_code = server.stop(config.shutdown_timeout_sec)
             except Exception as error:
                 errors.append(f"server cleanup: {error}")
@@ -384,10 +397,10 @@ class GpuVllmCollectionRunner:
             "stores_prompt_or_generated_text": False,
         }
         _write_plain_json(request_summary_path, request_summary)
-        nvidia_raw_path = paths.root / "raw/gpu/nvidia-smi-last.csv"
-        if telemetry.gpu.last_raw_output is not None:
-            nvidia_raw_path.write_text(
-                telemetry.gpu.last_raw_output, encoding="utf-8"
+        nvml_raw_path = paths.root / "raw/gpu/nvml-last.json"
+        if telemetry.gpu.last_raw_snapshot is not None:
+            nvml_raw_path.write_text(
+                telemetry.gpu.last_raw_snapshot, encoding="utf-8"
             )
 
         profile_files = self._profile_files(paths.root)
@@ -398,7 +411,7 @@ class GpuVllmCollectionRunner:
             server_stderr,
             request_summary_path,
             profile_files,
-            nvidia_raw_path if nvidia_raw_path.exists() else None,
+            nvml_raw_path if nvml_raw_path.exists() else None,
         )
         write_jsonl(paths.artifacts, artifacts)
         succeeded = (
@@ -456,7 +469,7 @@ class GpuVllmCollectionRunner:
                     if row.memory_total_bytes.value is not None
                     else None
                 ),
-                attributes={"nvidia_smi.gpu_index": row.index},
+                attributes={"nvml.gpu_index": row.index},
             )
             for row in rows
         ]
@@ -505,10 +518,10 @@ class GpuVllmCollectionRunner:
                     path=str(config.vllm_bin or config.server_python),
                 ),
                 SoftwareDescriptor(
-                    name="nvidia-smi",
-                    version=None,
+                    name=NVML_DISTRIBUTION,
+                    version=NVML_DISTRIBUTION_VERSION,
                     role="gpu-telemetry",
-                    path=shutil.which("nvidia-smi"),
+                    path=None,
                 ),
             ],
             devices=devices,
@@ -585,7 +598,7 @@ class GpuVllmCollectionRunner:
         stderr: Path,
         requests: Path,
         profile_files: list[Path],
-        nvidia_raw: Path | None,
+        nvml_raw: Path | None,
     ) -> list[ArtifactReference]:
         items = [
             self._artifact(root, stdout, "vllm-stdout", ArtifactKind.RAW_LOG, "text"),
@@ -594,14 +607,15 @@ class GpuVllmCollectionRunner:
                 root, requests, "client-requests", ArtifactKind.RAW_LOG, "json"
             ),
         ]
-        if nvidia_raw is not None:
+        if nvml_raw is not None:
             items.append(
                 self._artifact(
                     root,
-                    nvidia_raw,
-                    "nvidia-smi-last",
+                    nvml_raw,
+                    "nvml-last",
                     ArtifactKind.TELEMETRY,
-                    "csv",
+                    "json",
+                    producer="nvml",
                 )
             )
         for index, path in enumerate(profile_files):
@@ -645,6 +659,8 @@ class GpuVllmCollectionRunner:
         artifact_id: str,
         kind: ArtifactKind,
         format_name: str,
+        *,
+        producer: str = LEGACY_GPU_COLLECTION_PRODUCER,
     ) -> ArtifactReference:
         return ArtifactReference(
             run_id=self.config.run_id,
@@ -652,7 +668,7 @@ class GpuVllmCollectionRunner:
             artifact_kind=kind,
             relative_path=path.relative_to(root).as_posix(),
             format=format_name or "binary",
-            producer=LEGACY_GPU_COLLECTION_PRODUCER,
+            producer=producer,
             created_at_unix_ns=self.unix_time_ns(),
             size_bytes=path.stat().st_size,
             sha256=_sha256(path),

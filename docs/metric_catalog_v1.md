@@ -72,6 +72,11 @@ unavailable입니다.
 Resource sample은 metric, host, scope, device와 dimensions가 같은 stream끼리
 집계합니다. 서로 다른 GPU/NPU 또는 device의 값을 합산하지 않습니다.
 
+GPU resource metric은 NVIDIA NVML API에서 측정합니다. Memory는 NVML이 반환한
+byte 단위를 그대로 보존하고 power는 milliwatt에서 watt로 변환합니다. GPU 세대에
+따라 power가 최근 구간 평균일 수 있으므로 항상 순간값을 뜻하지는 않습니다. 새
+sample의 provenance는 `nvml.*` attribute로 기록합니다.
+
 ## Availability
 
 - 실제 측정값 `0`은 `available` 값입니다.

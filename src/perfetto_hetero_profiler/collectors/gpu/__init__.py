@@ -2,12 +2,13 @@
 
 from .collector import GpuRunCollector, GpuRunResult, build_gpu_run_plan
 from .config import GpuDeviceInfo, GpuRunConfig, MIN_SAMPLE_INTERVAL_MS
-from .nvidia_smi import (
-    NvidiaSmiClient,
-    NvidiaSmiCommandError,
-    NvidiaSmiParseError,
-    NvidiaSmiRow,
-    parse_nvidia_smi_csv,
+from .nvml import (
+    NVML_DISTRIBUTION,
+    NVML_DISTRIBUTION_VERSION,
+    NvmlClient,
+    NvmlError,
+    NvmlQueryResult,
+    NvmlRow,
 )
 from .profiling import (
     DetailedProfilePlan,
@@ -25,13 +26,14 @@ __all__ = [
     "GpuRunResult",
     "GpuTelemetryCollector",
     "MIN_SAMPLE_INTERVAL_MS",
-    "NvidiaSmiClient",
-    "NvidiaSmiCommandError",
-    "NvidiaSmiParseError",
-    "NvidiaSmiRow",
+    "NVML_DISTRIBUTION",
+    "NVML_DISTRIBUTION_VERSION",
+    "NvmlClient",
+    "NvmlError",
+    "NvmlQueryResult",
+    "NvmlRow",
     "TorchProfilerPlan",
     "build_detailed_profile_plan",
     "build_gpu_run_plan",
     "build_nsys_argv",
-    "parse_nvidia_smi_csv",
 ]

@@ -12,6 +12,18 @@ python3 -m pip install -e .
 hetero-profiler --help
 ```
 
+기본 설치는 기존 run의 schema 검증, Perfetto 변환과 HTML 생성에 충분합니다.
+NVIDIA GPU telemetry 수집에는 공식 NVML Python binding extra가 필요합니다.
+
+```bash
+python3 -m pip install -e '.[gpu]'
+```
+
+이 extra는 `nvidia-ml-py==13.610.43`을 설치합니다. distribution 이름은
+`nvidia-ml-py`, Python import 이름은 `pynvml`입니다. Binding, NVML library,
+driver 또는 권한이 없으면 package import와 CLI help는 계속 동작하고 실제 GPU
+수집 시 명확한 capability error를 기록합니다.
+
 저장소에서 직접 실행할 수도 있습니다.
 
 ```bash
@@ -69,6 +81,16 @@ hetero-profiler collect gpu \
 ```
 
 `--command` 뒤의 인자는 shell string이 아니라 child argv로 처리됩니다.
+
+GPU telemetry는 collector lifecycle 동안 NVML을 한 번 초기화해 utilization,
+memory와 power를 직접 조회하고 종료 시 한 번 정리합니다. 마지막 원시 증거는
+deterministic JSON `raw/gpu/nvml-last.json`으로 저장됩니다. 과거 run의
+`raw/gpu/nvidia-smi-last.csv`는 이름이나 내용을 바꾸지 않고 계속 검증·변환할 수
+있습니다. Metric provenance attribute는 새 run에서 `nvml.*`을 사용합니다.
+
+`resource.gpu.power`는 `nvmlDeviceGetPowerUsage`의 milliwatt 값을 watt로 변환한
+값입니다. NVIDIA 문서상 일부 GPU에서는 순간값이 아니라 최근 구간의 평균값일 수
+있으므로 결과를 항상 순간 전력으로 해석하지 않습니다.
 
 ### GPU vLLM
 
@@ -447,7 +469,7 @@ timestamp와의 실제 차이입니다. Boundary query는 request latency 계산
 실행되므로 final telemetry 시간은 E2E, TTFT, TPOT에 포함되지 않습니다.
 
 `telemetry.sample_interval_ms`의 최소 요청값은 20 ms입니다. 이는 polling 요청
-간격이며 `nvidia-smi` 또는 `rbln-smi`의 실제 query latency보다 빠른 cadence를
+간격이며 NVML API 또는 `rbln-smi`의 실제 query latency보다 빠른 cadence를
 보장한다는 뜻은 아닙니다. 실제 min/mean/max interval과 baseline/background/final
 sample 수는 각 source의 `summary/telemetry_lifecycle.json`에 기록됩니다.
 

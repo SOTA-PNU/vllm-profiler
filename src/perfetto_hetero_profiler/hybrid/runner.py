@@ -17,8 +17,12 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from ..collectors.command import CommandSpec, mask_command
-from ..collectors.gpu import GpuTelemetryCollector
-from ..collectors.gpu.nvidia_smi import NvidiaSmiClient
+from ..collectors.gpu import (
+    NVML_DISTRIBUTION,
+    NVML_DISTRIBUTION_VERSION,
+    GpuTelemetryCollector,
+    NvmlClient,
+)
 from ..collectors.npu import NpuTelemetryCollector
 from ..collectors.npu.rbln_smi import RblnSmiClient
 from ..collectors.process import ManagedProcess
@@ -358,7 +362,7 @@ class _Telemetry:
             host_id=HOST_ID,
             clock_domain_id=CLOCK_DOMAIN_ID,
             sample_interval_ms=config.sample_interval_ms,
-            client=NvidiaSmiClient(),
+            client=NvmlClient(),
             known_gpu_indices=config.gpu_indices,
         )
         self.npu = NpuTelemetryCollector(
@@ -1391,9 +1395,9 @@ class HybridRunner:
         for path in sorted(marker_root.glob("runtime-markers-*")):
             if path.is_file():
                 shutil.copyfile(path, npu_marker_root / path.name)
-        if telemetry.gpu.last_raw_output is not None:
-            (self.layout.gpu / "raw/gpu/nvidia-smi-last.csv").write_text(
-                telemetry.gpu.last_raw_output, encoding="utf-8"
+        if telemetry.gpu.last_raw_snapshot is not None:
+            (self.layout.gpu / "raw/gpu/nvml-last.json").write_text(
+                telemetry.gpu.last_raw_snapshot, encoding="utf-8"
             )
         if telemetry.npu.last_raw_output is not None:
             (self.layout.npu / "raw/npu/rbln-smi-last.json").write_text(
@@ -1480,7 +1484,7 @@ class HybridRunner:
             if path.is_file():
                 files.append((path, ArtifactKind.RAW_LOG, "jsonl" if path.suffix == ".jsonl" else "json", None))
         telemetry_path = (
-            root / "raw/gpu/nvidia-smi-last.csv"
+            root / "raw/gpu/nvml-last.json"
             if role == "gpu"
             else root / "raw/npu/rbln-smi-last.json"
         )
@@ -1489,7 +1493,7 @@ class HybridRunner:
                 (
                     telemetry_path,
                     ArtifactKind.TELEMETRY,
-                    "csv" if role == "gpu" else "json",
+                    "json",
                     None,
                 )
             )
@@ -1537,11 +1541,16 @@ class HybridRunner:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(path, target)
                 path, relative = target, target.relative_to(root).as_posix()
+            is_nvml = role == "gpu" and path.name == "nvml-last.json"
             artifacts.append(
                 ArtifactReference(
-                    run_id=run_id, artifact_id=f"{role}-artifact-{index:03d}",
+                    run_id=run_id,
+                    artifact_id=(
+                        "nvml-last" if is_nvml else f"{role}-artifact-{index:03d}"
+                    ),
                     artifact_kind=kind, relative_path=relative,
-                    format=format_name, producer="hetero-profiler-hybrid-runner",
+                    format=format_name,
+                    producer=("nvml" if is_nvml else "hetero-profiler-hybrid-runner"),
                     created_at_unix_ns=path.stat().st_mtime_ns,
                     size_bytes=path.stat().st_size, sha256=_sha256(path),
                     host_id=HOST_ID, clock_domain_id=clock,
@@ -1578,17 +1587,39 @@ class HybridRunner:
                 operating_system=platform.system() or "unknown",
                 architecture=platform.machine() or "unknown",
             )],
-            software=[SoftwareDescriptor(
-                name="vllm-rbln" if role == "npu" else "vllm",
-                version=None, role=f"{role}-server",
-                path=str(config.decode.executable if role == "npu" else config.prefill.executable),
-            )],
+            software=[
+                SoftwareDescriptor(
+                    name="vllm-rbln" if role == "npu" else "vllm",
+                    version=None,
+                    role=f"{role}-server",
+                    path=str(
+                        config.decode.executable
+                        if role == "npu"
+                        else config.prefill.executable
+                    ),
+                ),
+                *(
+                    [
+                        SoftwareDescriptor(
+                            name=NVML_DISTRIBUTION,
+                            version=NVML_DISTRIBUTION_VERSION,
+                            role="gpu-telemetry",
+                            path=None,
+                        )
+                    ]
+                    if role == "gpu"
+                    else []
+                ),
+            ],
             devices=[DeviceDescriptor(
                 host_id=HOST_ID, device_type=device_type,
                 device_id=f"{role}-{index}",
                 vendor="NVIDIA" if role == "gpu" else "Rebellions",
                 model="discovered-by-telemetry", status="available",
-                memory_total_bytes=None, attributes={"device.index": index},
+                memory_total_bytes=None,
+                attributes={
+                    "nvml.gpu_index" if role == "gpu" else "device.index": index
+                },
             ) for index in indices],
             configuration={
                 "profile_mode": self.profile_mode,

@@ -17,10 +17,7 @@ from perfetto_hetero_profiler.gpu.vllm_collection import (
     build_vllm_collection_plan,
 )
 from perfetto_hetero_profiler.gpu.openai_client import CompletionObservation
-from perfetto_hetero_profiler.collectors.gpu.nvidia_smi import (
-    NvidiaSmiQueryResult,
-    parse_nvidia_smi_csv,
-)
+from perfetto_hetero_profiler.collectors.gpu import NvmlClient, NvmlError
 from perfetto_hetero_profiler.schema import (
     ArtifactKind,
     read_json,
@@ -125,13 +122,10 @@ class CollectionCliTests(unittest.TestCase):
             self.assertFalse(json.loads(output.getvalue())["executes"])
 
 
-class FakeGpuClient:
-    def query(self):
-        raw = "0, Fake GPU, 0, 0, 1024, 10\n"
-        return NvidiaSmiQueryResult(
-            rows=parse_nvidia_smi_csv(raw),
-            raw_output=raw,
-        )
+def FakeGpuClient():
+    from tests.test_gpu_telemetry import FakeBinding
+
+    return NvmlClient(binding=FakeBinding())
 
 
 class FakeServer:
@@ -175,6 +169,24 @@ class FakeCompletionClient:
 
 
 class CollectionFakeIntegrationTests(unittest.TestCase):
+    def test_discovery_failure_shuts_down_nvml_before_server_start(self) -> None:
+        from tests.test_gpu_telemetry import FakeBinding
+
+        with tempfile.TemporaryDirectory() as directory:
+            binding = FakeBinding(devices=[])
+            config = CollectionConfigTests().config(
+                run_root=Path(directory), run_id="no-gpu", measured_requests=1
+            )
+            runner = GpuVllmCollectionRunner(
+                config,
+                gpu_client=NvmlClient(binding=binding),
+                server_factory=FakeServer,
+                client_factory=FakeCompletionClient,
+            )
+            with self.assertRaisesRegex(NvmlError, "no GPUs"):
+                runner.run()
+            self.assertEqual(binding.shutdown_calls, 1)
+
     def test_monitor_writes_valid_complete_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = CollectionConfigTests().config(
@@ -196,6 +208,11 @@ class CollectionFakeIntegrationTests(unittest.TestCase):
             self.assertTrue(read_jsonl(config.paths.metrics))
             artifacts = read_jsonl(config.paths.artifacts)
             self.assertGreaterEqual(len(artifacts), 4)
+            nvml = next(
+                artifact for artifact in artifacts if artifact.artifact_id == "nvml-last"
+            )
+            self.assertEqual(nvml.relative_path, "raw/gpu/nvml-last.json")
+            self.assertEqual((nvml.format, nvml.producer), ("json", "nvml"))
             summary = json.loads(
                 (config.paths.root / "summary/smoke.json").read_text()
             )

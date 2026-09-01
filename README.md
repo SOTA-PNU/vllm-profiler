@@ -27,6 +27,17 @@ python3 -m pip install -e .
 hetero-profiler --help
 ```
 
+기존 run의 분석·변환만 수행할 때는 기본 설치로 충분합니다. NVIDIA GPU
+telemetry를 수집하려면 공식 NVML binding을 포함한 GPU extra를 설치합니다.
+
+```bash
+python3 -m pip install -e '.[gpu]'
+```
+
+GPU extra는 NVIDIA의 `nvidia-ml-py==13.610.43` distribution을 사용하며 Python
+import 이름은 `pynvml`입니다. 별도의 비공식 `pynvml` distribution은 사용하지
+않습니다.
+
 ## 빠른 시작
 
 Schema example을 검증합니다.

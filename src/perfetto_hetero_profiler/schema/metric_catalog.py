@@ -248,7 +248,7 @@ _DEFINITIONS = (
         (MetricScope.DEVICE,),
         "GPU utilization.",
         maximum=100,
-        sources=("nvidia-smi", "NVML"),
+        sources=("NVML",),
     ),
     _definition(
         "resource.gpu.memory_used",
@@ -256,7 +256,7 @@ _DEFINITIONS = (
         MetricKind.GAUGE,
         (MetricScope.DEVICE,),
         "GPU memory in use.",
-        sources=("nvidia-smi", "NVML"),
+        sources=("NVML",),
     ),
     _definition(
         "resource.gpu.power",
@@ -264,7 +264,7 @@ _DEFINITIONS = (
         MetricKind.GAUGE,
         (MetricScope.DEVICE,),
         "GPU board power.",
-        sources=("nvidia-smi", "NVML"),
+        sources=("NVML",),
     ),
     _definition(
         "resource.npu.utilization",

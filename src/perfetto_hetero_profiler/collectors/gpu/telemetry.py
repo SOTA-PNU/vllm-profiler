@@ -1,4 +1,4 @@
-"""Convert nvidia-smi samples into schema v1 MetricSample records."""
+"""Convert NVML snapshots into schema v1 GPU resource metrics."""
 
 from __future__ import annotations
 
@@ -14,7 +14,14 @@ from ...schema import (
     MetricScope,
     ValueOrigin,
 )
-from .nvidia_smi import NvidiaSmiClient, NvidiaSmiCommandError, ParsedValue
+from .nvml import NvmlClient, NvmlError, NvmlValue, nvml_error_snapshot
+
+
+_METRICS = (
+    ("resource.gpu.utilization", "percent", "utilization_percent"),
+    ("resource.gpu.memory_used", "bytes", "memory_used_bytes"),
+    ("resource.gpu.power", "W", "power_watts"),
+)
 
 
 class GpuTelemetryCollector(BaseCollector):
@@ -25,7 +32,7 @@ class GpuTelemetryCollector(BaseCollector):
         host_id: str,
         clock_domain_id: str,
         sample_interval_ms: int,
-        client: NvidiaSmiClient | None = None,
+        client: NvmlClient | None = None,
         known_gpu_indices: tuple[int, ...] = (0,),
         monotonic_ns: Callable[[], int] = time.monotonic_ns,
     ) -> None:
@@ -34,68 +41,62 @@ class GpuTelemetryCollector(BaseCollector):
         self.host_id = host_id
         self.clock_domain_id = clock_domain_id
         self.sample_interval_ms = sample_interval_ms
-        self.client = client or NvidiaSmiClient()
+        self.client = client or NvmlClient()
         self.known_gpu_indices = known_gpu_indices
         self.monotonic_ns = monotonic_ns
-        self.last_raw_output: str | None = None
+        self.last_raw_snapshot: str | None = None
         self.discovered_rows = ()
         self._previous_timestamp_ns: int | None = None
+
+    def _prepare(self) -> None:
+        # Keep lifecycle ownership explicit, but defer a capability failure to
+        # sample() so known devices receive schema-valid error evidence.
+        try:
+            self.client.initialize()
+        except NvmlError:
+            pass
+
+    def _stop(self) -> None:
+        self.client.shutdown()
 
     def _sample(self) -> list[MetricSample]:
         try:
             result = self.client.query()
-        except NvidiaSmiCommandError as error:
+        except NvmlError as error:
             timestamp_ns = self.monotonic_ns()
             interval_ns = self._interval(timestamp_ns)
+            reason = str(error)
+            self.last_raw_snapshot = nvml_error_snapshot(
+                self.known_gpu_indices, reason
+            )
             return [
                 self._metric(
                     index=index,
                     name=name,
                     unit=unit,
-                    parsed=ParsedValue(None, Availability.ERROR, str(error)),
+                    parsed=NvmlValue(None, Availability.ERROR, reason),
                     timestamp_ns=timestamp_ns,
                     interval_ns=interval_ns,
                 )
                 for index in self.known_gpu_indices
-                for name, unit in (
-                    ("resource.gpu.utilization", "percent"),
-                    ("resource.gpu.memory_used", "bytes"),
-                    ("resource.gpu.power", "W"),
-                )
+                for name, unit, _ in _METRICS
             ]
         timestamp_ns = self.monotonic_ns()
         interval_ns = self._interval(timestamp_ns)
-        self.last_raw_output = result.raw_output
+        self.last_raw_snapshot = result.raw_snapshot
         self.discovered_rows = result.rows
         records: list[MetricSample] = []
         for row in result.rows:
             records.extend(
-                (
-                    self._metric(
-                        index=row.index,
-                        name="resource.gpu.utilization",
-                        unit="percent",
-                        parsed=row.utilization_percent,
-                        timestamp_ns=timestamp_ns,
-                        interval_ns=interval_ns,
-                    ),
-                    self._metric(
-                        index=row.index,
-                        name="resource.gpu.memory_used",
-                        unit="bytes",
-                        parsed=row.memory_used_bytes,
-                        timestamp_ns=timestamp_ns,
-                        interval_ns=interval_ns,
-                    ),
-                    self._metric(
-                        index=row.index,
-                        name="resource.gpu.power",
-                        unit="W",
-                        parsed=row.power_watts,
-                        timestamp_ns=timestamp_ns,
-                        interval_ns=interval_ns,
-                    ),
+                self._metric(
+                    index=row.index,
+                    name=name,
+                    unit=unit,
+                    parsed=getattr(row, field),
+                    timestamp_ns=timestamp_ns,
+                    interval_ns=interval_ns,
                 )
+                for name, unit, field in _METRICS
             )
         return records
 
@@ -114,7 +115,7 @@ class GpuTelemetryCollector(BaseCollector):
         index: int,
         name: str,
         unit: str,
-        parsed: ParsedValue,
+        parsed: NvmlValue,
         timestamp_ns: int,
         interval_ns: int,
     ) -> MetricSample:
@@ -136,7 +137,7 @@ class GpuTelemetryCollector(BaseCollector):
             reason=parsed.reason,
             dimensions={},
             attributes={
-                "nvidia_smi.gpu_index": index,
-                "nvidia_smi.query_field": name,
+                "nvml.gpu_index": index,
+                "nvml.query_field": name,
             },
         )

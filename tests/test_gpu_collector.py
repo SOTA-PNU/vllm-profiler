@@ -4,7 +4,6 @@ import contextlib
 import io
 import json
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -14,12 +13,13 @@ from perfetto_hetero_profiler.collectors.gpu import (
     GpuDeviceInfo,
     GpuRunCollector,
     GpuRunConfig,
-    NvidiaSmiClient,
+    NvmlClient,
     build_detailed_profile_plan,
     build_gpu_run_plan,
     build_nsys_argv,
 )
 from perfetto_hetero_profiler.schema import (
+    ArtifactKind,
     ProfileMode,
     RunMode,
     RunStatus,
@@ -28,14 +28,10 @@ from perfetto_hetero_profiler.schema import (
 )
 
 
-GPU_ROW = "0, Fake GPU, 0, 0, 1000, N/A\n"
-
-
 def fake_gpu_client():
-    def runner(*args, **kwargs):
-        return subprocess.CompletedProcess(args[0], 0, GPU_ROW, "")
+    from tests.test_gpu_telemetry import FakeBinding
 
-    return NvidiaSmiClient(runner=runner)
+    return NvmlClient(binding=FakeBinding())
 
 
 class PlanningTests(unittest.TestCase):
@@ -97,6 +93,38 @@ class PlanningTests(unittest.TestCase):
 
 
 class GpuRunIntegrationTests(unittest.TestCase):
+    def test_nvml_capability_failure_writes_error_metrics_and_json(self):
+        from tests.test_gpu_telemetry import FakeBinding, FakeDriverNotLoaded
+
+        with tempfile.TemporaryDirectory() as directory:
+            binding = FakeBinding(init_error=FakeDriverNotLoaded())
+            config = GpuRunConfig(
+                run_root=Path(directory),
+                run_id="nvml-error",
+                profile_mode=ProfileMode.MONITOR,
+                sample_interval_ms=100,
+                command=(sys.executable, "-c", "pass"),
+            )
+            result = GpuRunCollector(
+                config, gpu_client=NvmlClient(binding=binding)
+            ).run()
+            metrics = read_jsonl(config.paths.metrics)
+            artifacts = read_jsonl(config.paths.artifacts)
+            self.assertIs(result.status, RunStatus.PARTIAL)
+            self.assertEqual(len([m for m in metrics if m.device_id == "gpu-0"]), 3)
+            self.assertTrue(
+                all(
+                    metric.availability.value == "error"
+                    for metric in metrics
+                    if metric.device_id == "gpu-0"
+                )
+            )
+            raw = config.paths.root / "raw/gpu/nvml-last.json"
+            self.assertEqual(json.loads(raw.read_text())["source"], "nvml")
+            self.assertIn("nvml-last", {item.artifact_id for item in artifacts})
+            self.assertEqual(binding.init_calls, 1)
+            self.assertEqual(binding.shutdown_calls, 0)
+
     def test_cpu_only_child_writes_schema_bundle(self):
         with tempfile.TemporaryDirectory() as directory:
             config = GpuRunConfig(
@@ -125,6 +153,13 @@ class GpuRunIntegrationTests(unittest.TestCase):
             )
             self.assertGreaterEqual(len(metrics), 5)
             self.assertGreaterEqual(len(artifacts), 3)
+            nvml = next(
+                artifact for artifact in artifacts if artifact.artifact_id == "nvml-last"
+            )
+            self.assertEqual(nvml.relative_path, "raw/gpu/nvml-last.json")
+            self.assertEqual((nvml.format, nvml.producer), ("json", "nvml"))
+            self.assertIs(nvml.artifact_kind, ArtifactKind.TELEMETRY)
+            self.assertTrue((config.paths.root / nvml.relative_path).is_file())
             self.assertEqual(
                 (config.paths.root / "raw/client/stdout.log").read_text().strip(),
                 "hello",

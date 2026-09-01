@@ -50,7 +50,7 @@ class _Telemetry:
         self.gpu_metrics = []
         self.npu_metrics = []
         self.system_metrics = []
-        self.gpu = mock.Mock(last_raw_output=None)
+        self.gpu = mock.Mock(last_raw_snapshot=None)
         self.npu = mock.Mock(last_raw_output=None)
         self.boundary_roles = []
         self.request_window = None
@@ -146,7 +146,7 @@ class _WrittenTelemetry:
     gpu_metrics = []
     npu_metrics = []
     system_metrics = []
-    gpu = mock.Mock(last_raw_output=None)
+    gpu = mock.Mock(last_raw_snapshot=None)
     npu = mock.Mock(last_raw_output=None)
 
     @staticmethod
@@ -577,6 +577,43 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                 self.assertEqual(
                     clock.attributes["clock.source"], "time.monotonic_ns"
                 )
+
+    def test_source_write_publishes_nvml_json_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = root / "runs"
+            runner = HybridRunner(
+                _config(root), run_root=runs, run_id="nvml-source",
+                profile_mode="monitor", process_factory=_Process,
+            )
+            RunPaths(runs, "nvml-source-gpu").create()
+            RunPaths(runs, "nvml-source-npu").create()
+            marker_root = runs / "nvml-source-coordinator/raw/runtime_markers"
+            marker_root.mkdir(parents=True)
+            (marker_root / "proxy-markers.jsonl").write_text("", encoding="utf-8")
+            telemetry = _WrittenTelemetry()
+            telemetry.gpu = mock.Mock(
+                last_raw_snapshot='{"adapter_schema_version":"1.0.0"}\n'
+            )
+            observation = CompletionObservation(
+                request_id="request-1", received_ns=10,
+                token_timestamps_ns=(20,), done_ns=30,
+                input_tokens=5, output_tokens=1, total_tokens=6,
+                http_status=200,
+            )
+            with mock.patch.object(runner, "_marker_events", return_value=([], [])):
+                runner._write_sources(
+                    warmups=[], observations=[observation], telemetry=telemetry,
+                    profile=None, errors=[],
+                )
+            gpu_root = runs / "nvml-source-gpu"
+            self.assertTrue((gpu_root / "raw/gpu/nvml-last.json").is_file())
+            artifact = next(
+                item for item in read_jsonl(gpu_root / "artifacts/artifacts.jsonl")
+                if item.artifact_id == "nvml-last"
+            )
+            self.assertEqual(artifact.relative_path, "raw/gpu/nvml-last.json")
+            self.assertEqual((artifact.format, artifact.producer), ("json", "nvml"))
 
     def test_marker_failure_preserves_request_and_telemetry_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
