@@ -9,9 +9,11 @@ import io
 import json
 import os
 from pathlib import Path
+import sqlite3
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import Trace, TrackEvent
 
@@ -39,6 +41,10 @@ from perfetto_hetero_profiler.perfetto.converter import (
 from perfetto_hetero_profiler.perfetto.loader import (
     PerfettoInputError,
     load_hybrid_run,
+)
+from perfetto_hetero_profiler.perfetto.native_details import NativeDetailError
+from perfetto_hetero_profiler.perfetto.native_nsys import (
+    _validate_nsys_sqlite_preamble,
 )
 from perfetto_hetero_profiler.perfetto.tooling import (
     TRACE_PROCESSOR_FILENAME,
@@ -641,6 +647,44 @@ def _build_monitor_family(
     "dedicated pinned Trace Processor binary is unavailable",
 )
 class PerfettoConversionIntegrationTests(unittest.TestCase):
+    def test_nsys_schema_error_never_publishes_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            family = _build_monitor_family(Path(directory))
+            output = family["runs"] / "invalid-nsys-schema-output"
+            with sqlite3.connect(":memory:") as connection:
+                connection.execute(
+                    "CREATE TABLE META_DATA_EXPORT (name TEXT, value TEXT)"
+                )
+                connection.execute(
+                    "INSERT INTO META_DATA_EXPORT VALUES (?, ?)",
+                    ("EXPORT_SCHEMA_VERSION", "3.17.0"),
+                )
+
+                def reject_schema(*_):
+                    _validate_nsys_sqlite_preamble(connection)
+
+                with mock.patch(
+                    "perfetto_hetero_profiler.perfetto.converter."
+                    "build_native_detail_plan",
+                    side_effect=reject_schema,
+                ), self.assertRaisesRegex(NativeDetailError, "unsupported"):
+                    convert_perfetto(
+                        PerfettoConversionConfig(
+                            run_directory=family["hybrid"],
+                            output_directory=output,
+                            trace_processor_path=_trace_processor_path(),
+                            include_native_details=True,
+                        )
+                    )
+            self.assertFalse(output.exists())
+            self.assertFalse(
+                tuple(
+                    family["runs"].glob(
+                        f".{output.name}.perfetto-staging-*"
+                    )
+                )
+            )
+
     def test_default_output_is_a_new_source_sibling(self):
         with tempfile.TemporaryDirectory() as directory:
             family = _build_monitor_family(Path(directory))

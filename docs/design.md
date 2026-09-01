@@ -127,6 +127,12 @@ transfer와 alignment 품질의 전체 목록과 단위는
 | NPU vLLM | Chrome trace JSON | ATen, compiled region, host event | `partial_derived` |
 | NPU RBLN | Perfetto protobuf | 별도 native Perfetto trace | `partial_unaligned` |
 
+Nsight SQLite는 공식 `META_DATA_EXPORT.EXPORT_SCHEMA_VERSION`을 먼저 확인하고,
+현재 실제 변환으로 검증된 `3.16.1`만 허용합니다. Metadata가 없거나 version이
+비어 있거나 중복·형식 오류·미지원이면 CUPTI/NVTX table을 읽기 전에 변환을
+중단합니다. 새 Nsight export schema는 실제 artifact 회귀 검증 후 명시적으로
+지원 목록에 추가해야 합니다.
+
 Native event는 source format이 제공하는 process, thread, stream, category와
 correlation ID를 보존합니다. 확인되지 않은 device execution, parent 관계나
 API-to-kernel flow를 생성하지 않습니다.

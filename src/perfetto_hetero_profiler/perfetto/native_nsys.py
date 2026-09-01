@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping
+import re
 import sqlite3
+from typing import Final
 
 from .loader import LoadedHybridRun, SourceRunMetadata
 from .model import SliceSpec, TrackSpec
@@ -28,6 +30,15 @@ from .native_details import (
     _stable_token,
     _stable_uint64,
     _validate_mapped_interval,
+)
+
+
+SUPPORTED_NSYS_EXPORT_SCHEMA_VERSIONS: Final = ("3.16.1",)
+_NSYS_EXPORT_SCHEMA_VERSION_KEY: Final = "EXPORT_SCHEMA_VERSION"
+_NSYS_EXPORT_SCHEMA_VERSION_RE: Final = re.compile(
+    r"(?:0|[1-9][0-9]*)\."
+    r"(?:0|[1-9][0-9]*)\."
+    r"(?:0|[1-9][0-9]*)"
 )
 
 
@@ -80,20 +91,7 @@ def nsys_detail_result(
     uri = f"file:{sqlite_path.as_posix()}?mode=ro&immutable=1"
     connection = sqlite3.connect(uri, uri=True)
     try:
-        quick_check = connection.execute("PRAGMA quick_check").fetchone()
-        if quick_check != ("ok",):
-            raise NativeDetailError("Nsight SQLite quick_check failed")
-        tables = {
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-        }
-        missing = sorted(_NSYS_REQUIRED_TABLES - tables)
-        if missing:
-            raise NativeDetailError(
-                f"Nsight SQLite lacks required tables: {missing}"
-            )
+        _validate_nsys_sqlite_preamble(connection)
         start_rows = connection.execute(
             "SELECT utcEpochNs FROM TARGET_INFO_SESSION_START_TIME"
         ).fetchall()
@@ -188,6 +186,158 @@ def nsys_detail_result(
         flows=flows,
         summaries=(summary,),
     )
+
+
+def _validate_nsys_sqlite_preamble(connection: sqlite3.Connection) -> str:
+    """Validate integrity, export schema, and required tables in that order."""
+
+    try:
+        quick_check = connection.execute("PRAGMA quick_check").fetchall()
+    except sqlite3.DatabaseError as error:
+        raise NativeDetailError(
+            "Nsight SQLite quick_check could not be completed"
+        ) from error
+    if quick_check != [("ok",)]:
+        raise NativeDetailError("Nsight SQLite quick_check failed")
+
+    try:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+    except sqlite3.DatabaseError as error:
+        raise NativeDetailError(
+            "Nsight SQLite table inventory could not be read"
+        ) from error
+
+    version = _read_nsys_export_schema_version(connection, tables=tables)
+    missing = sorted(_NSYS_REQUIRED_TABLES - tables)
+    if missing:
+        raise NativeDetailError(
+            f"Nsight SQLite lacks required tables: {missing}"
+        )
+    return version
+
+
+def _read_nsys_export_schema_version(
+    connection: sqlite3.Connection,
+    *,
+    tables: set[str],
+) -> str:
+    """Return the one explicitly supported official export schema version."""
+
+    if "META_DATA_EXPORT" not in tables:
+        raise _nsys_schema_version_error(
+            "META_DATA_EXPORT table is missing",
+            (),
+        )
+    try:
+        table_info = connection.execute(
+            "PRAGMA table_info(META_DATA_EXPORT)"
+        ).fetchall()
+    except sqlite3.DatabaseError as error:
+        raise _nsys_schema_version_error(
+            "META_DATA_EXPORT fields could not be read",
+            (),
+        ) from error
+    columns = {
+        row[1]
+        for row in table_info
+        if len(row) > 1 and isinstance(row[1], str)
+    }
+    missing_columns = sorted({"name", "value"} - columns)
+    if missing_columns:
+        raise _nsys_schema_version_error(
+            f"META_DATA_EXPORT field is missing: {missing_columns}",
+            (),
+        )
+    try:
+        rows = connection.execute(
+            "SELECT value FROM META_DATA_EXPORT WHERE name = ?",
+            (_NSYS_EXPORT_SCHEMA_VERSION_KEY,),
+        ).fetchall()
+    except sqlite3.DatabaseError as error:
+        raise _nsys_schema_version_error(
+            "EXPORT_SCHEMA_VERSION row could not be read",
+            (),
+        ) from error
+    observed = tuple(row[0] for row in rows if len(row) == 1)
+    if len(rows) != len(observed):
+        raise _nsys_schema_version_error(
+            "EXPORT_SCHEMA_VERSION row shape is invalid",
+            observed,
+        )
+    if not observed:
+        raise _nsys_schema_version_error(
+            "EXPORT_SCHEMA_VERSION row is missing",
+            (),
+        )
+    if len(observed) != 1:
+        raise _nsys_schema_version_error(
+            "EXPORT_SCHEMA_VERSION is duplicated or conflicting",
+            observed,
+        )
+    version = observed[0]
+    if not isinstance(version, str):
+        raise _nsys_schema_version_error(
+            "EXPORT_SCHEMA_VERSION has a non-text value",
+            observed,
+        )
+    if not version.strip():
+        raise _nsys_schema_version_error(
+            "EXPORT_SCHEMA_VERSION is empty",
+            observed,
+        )
+    if _NSYS_EXPORT_SCHEMA_VERSION_RE.fullmatch(version) is None:
+        raise _nsys_schema_version_error(
+            "EXPORT_SCHEMA_VERSION format is invalid",
+            observed,
+        )
+    if version not in SUPPORTED_NSYS_EXPORT_SCHEMA_VERSIONS:
+        raise _nsys_schema_version_error(
+            "EXPORT_SCHEMA_VERSION is unsupported",
+            observed,
+        )
+    return version
+
+
+def _nsys_schema_version_error(
+    reason: str,
+    observed: tuple[object, ...],
+) -> NativeDetailError:
+    observed_values = [
+        _safe_observed_schema_version(value) for value in observed
+    ] or ["<missing>"]
+    return NativeDetailError(
+        "Nsight SQLite export schema version validation failed: "
+        f"{reason}; observed={observed_values}; "
+        f"supported={list(SUPPORTED_NSYS_EXPORT_SCHEMA_VERSIONS)}"
+    )
+
+
+def _safe_observed_schema_version(value: object) -> str:
+    if isinstance(value, str):
+        if (
+            len(value) <= 64
+            and all(character.isprintable() for character in value)
+            and "/" not in value
+            and "\\" not in value
+        ):
+            return value
+        return f"<malformed text length={len(value)}>"
+    if value is None:
+        return "<NULL>"
+    if isinstance(value, bool):
+        return f"<INTEGER {int(value)}>"
+    if isinstance(value, int):
+        return f"<INTEGER {value}>"
+    if isinstance(value, float):
+        return f"<REAL {value!r}>"
+    if isinstance(value, bytes):
+        return f"<BLOB length={len(value)}>"
+    return f"<{type(value).__name__}>"
 
 
 def _read_nsys_rows(
@@ -600,4 +750,7 @@ def _read_nsys_rows(
     return result, tracks, counts, metadata_count
 
 
-__all__ = ["nsys_detail_result"]
+__all__ = [
+    "SUPPORTED_NSYS_EXPORT_SCHEMA_VERSIONS",
+    "nsys_detail_result",
+]
