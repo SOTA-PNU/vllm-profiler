@@ -1,84 +1,46 @@
-"""Dependency-free Linux /proc monitor telemetry."""
+"""psutil-backed host and process resource telemetry."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from pathlib import Path
+from dataclasses import replace
+import math
+from numbers import Real
 import time
-from typing import Callable
+from typing import Any, Callable
+
+import psutil
 
 from .base import BaseCollector
-from ..schema import (
-    Availability,
-    MetricKind,
-    MetricSample,
-    MetricScope,
-    ValueOrigin,
-)
+from ..schema import Availability, MetricKind, MetricSample, MetricScope, ValueOrigin
 
 
-@dataclass(frozen=True)
-class CpuTimes:
-    total: int
-    idle: int
+class _MetricValueError(ValueError):
+    """A sanitized invalid measurement or counter delta."""
 
 
-def parse_proc_stat(text: str) -> CpuTimes:
-    line = next((item for item in text.splitlines() if item.startswith("cpu ")), None)
-    if line is None:
-        raise ValueError("aggregate cpu line is missing")
-    fields = line.split()[1:]
-    if len(fields) < 4:
-        raise ValueError("aggregate cpu line has too few fields")
-    try:
-        values = [int(field) for field in fields]
-    except ValueError as error:
-        raise ValueError("aggregate cpu counters must be integers") from error
-    if any(value < 0 for value in values):
-        raise ValueError("aggregate cpu counters must be non-negative")
-    idle = values[3] + (values[4] if len(values) > 4 else 0)
-    return CpuTimes(total=sum(values), idle=idle)
+def _number(value: object, field: str, *, integer: bool = False) -> int | float:
+    valid_type = isinstance(value, int) if integer else isinstance(value, Real)
+    if isinstance(value, bool) or not valid_type:
+        raise _MetricValueError(f"psutil {field} returned invalid data")
+    result = float(value)
+    if not math.isfinite(result) or result < 0:
+        raise _MetricValueError(f"psutil {field} returned invalid data")
+    return int(value) if integer else result
 
 
-def parse_meminfo(text: str) -> tuple[int, int]:
-    values: dict[str, int] = {}
-    for line in text.splitlines():
-        if ":" not in line:
-            continue
-        key, raw = line.split(":", 1)
-        fields = raw.split()
-        if not fields:
-            continue
-        try:
-            number = int(fields[0])
-        except ValueError as error:
-            raise ValueError(f"{key} must be an integer") from error
-        multiplier = 1024 if len(fields) > 1 and fields[1].lower() == "kb" else 1
-        values[key] = number * multiplier
-    if "MemTotal" not in values or "MemAvailable" not in values:
-        raise ValueError("MemTotal and MemAvailable are required")
-    if values["MemAvailable"] > values["MemTotal"]:
-        raise ValueError("MemAvailable cannot exceed MemTotal")
-    return values["MemTotal"], values["MemAvailable"]
+def _cpu_snapshot(times: object) -> tuple[tuple[float, ...], float, float]:
+    fields = getattr(times, "_fields", ())
+    if not fields or "idle" not in fields:
+        raise _MetricValueError("psutil CPU times returned invalid data")
+    names = tuple(name for name in fields if name not in {"guest", "guest_nice"})
+    values = tuple(float(_number(getattr(times, name), f"CPU {name}")) for name in names)
+    idle = float(_number(getattr(times, "idle"), "CPU idle"))
+    if "iowait" in fields:
+        idle += float(_number(getattr(times, "iowait"), "CPU iowait"))
+    return values, sum(values), idle
 
 
-def parse_process_rss(text: str) -> int:
-    for line in text.splitlines():
-        if line.startswith("VmRSS:"):
-            fields = line.split()
-            if len(fields) < 2:
-                break
-            try:
-                value = int(fields[1])
-            except ValueError as error:
-                raise ValueError("VmRSS must be an integer") from error
-            if value < 0:
-                raise ValueError("VmRSS must be non-negative")
-            return value * 1024
-    raise ValueError("VmRSS is missing")
-
-
-class ProcTelemetryCollector(BaseCollector):
+class SystemTelemetryCollector(BaseCollector):
     """Collect host CPU, host memory, and optional child RSS metrics."""
 
     def __init__(
@@ -88,7 +50,7 @@ class ProcTelemetryCollector(BaseCollector):
         host_id: str,
         clock_domain_id: str,
         pid_provider: Callable[[], int | None] | None = None,
-        proc_root: Path = Path("/proc"),
+        psutil_module: Any = psutil,
         monotonic_ns: Callable[[], int] = time.monotonic_ns,
     ) -> None:
         super().__init__()
@@ -96,21 +58,16 @@ class ProcTelemetryCollector(BaseCollector):
         self.host_id = host_id
         self.clock_domain_id = clock_domain_id
         self.pid_provider = pid_provider or (lambda: None)
-        self.proc_root = Path(proc_root)
+        self.psutil = psutil_module
         self.monotonic_ns = monotonic_ns
-        self._previous_cpu: CpuTimes | None = None
+        self._previous_cpu: tuple[tuple[float, ...], float, float] | None = None
         self._previous_timestamp_ns: int | None = None
 
     def _sample(self) -> list[MetricSample]:
-        # Read every procfs source first, then timestamp the completed query.
-        # The temporary timestamp is replaced before records leave the collector.
-        records = [
-            self._cpu_metric(0, None),
-            self._memory_metric(0, None),
-        ]
+        records = [self._cpu_metric(), self._memory_metric()]
         pid = self.pid_provider()
         if pid is not None:
-            records.append(self._process_memory_metric(pid, 0, None))
+            records.append(self._process_memory_metric(pid))
         timestamp_ns = self.monotonic_ns()
         interval_ns = (
             None
@@ -119,144 +76,109 @@ class ProcTelemetryCollector(BaseCollector):
         )
         self._previous_timestamp_ns = timestamp_ns
         return [
-            replace(
-                record,
-                timestamp_ns=timestamp_ns,
-                interval_ns=interval_ns,
-            )
+            replace(record, timestamp_ns=timestamp_ns, interval_ns=interval_ns)
             for record in records
         ]
 
-    def _cpu_metric(self, timestamp_ns: int, interval_ns: int | None) -> MetricSample:
-        current = parse_proc_stat(
-            (self.proc_root / "stat").read_text(encoding="utf-8")
-        )
-        if self._previous_cpu is None:
-            availability = Availability.NOT_AVAILABLE
-            value = None
-            reason = "first sample establishes /proc/stat baseline"
-            attributes = {"procfs.baseline": True}
-        else:
-            total_delta = current.total - self._previous_cpu.total
-            idle_delta = current.idle - self._previous_cpu.idle
-            if total_delta <= 0 or idle_delta < 0 or idle_delta > total_delta:
-                availability = Availability.ERROR
-                value = None
-                reason = "invalid /proc/stat counter delta"
+    def _cpu_metric(self) -> MetricSample:
+        try:
+            current = _cpu_snapshot(self.psutil.cpu_times())
+            previous = self._previous_cpu
+            self._previous_cpu = current
+            if previous is None:
+                availability, value = Availability.NOT_AVAILABLE, None
+                reason = "first sample establishes psutil CPU baseline"
+                attributes = {"psutil.baseline": True}
             else:
+                deltas = tuple(
+                    now - old for now, old in zip(current[0], previous[0])
+                )
+                total_delta = current[1] - previous[1]
+                idle_delta = current[2] - previous[2]
+                if (
+                    len(current[0]) != len(previous[0])
+                    or any(delta < 0 for delta in deltas)
+                    or total_delta <= 0
+                    or idle_delta < 0
+                    or idle_delta > total_delta
+                ):
+                    raise _MetricValueError("invalid psutil CPU counter delta")
                 availability = Availability.AVAILABLE
                 value = 100.0 * (total_delta - idle_delta) / total_delta
                 reason = None
-            attributes = {
-                "procfs.total_delta": total_delta,
-                "procfs.idle_delta": idle_delta,
-            }
-        self._previous_cpu = current
+                attributes = {
+                    "psutil.total_delta": total_delta,
+                    "psutil.idle_delta": idle_delta,
+                }
+        except Exception as error:
+            availability, value = Availability.ERROR, None
+            reason = str(error) if isinstance(error, _MetricValueError) else "psutil CPU query failed"
+            attributes = {"psutil.source": "cpu_times"}
         return self._metric(
-            name="resource.cpu.utilization",
-            kind=MetricKind.GAUGE,
-            scope=MetricScope.HOST,
-            unit="percent",
-            value=value,
-            availability=availability,
-            reason=reason,
-            timestamp_ns=timestamp_ns,
-            interval_ns=interval_ns,
-            attributes=attributes,
+            "resource.cpu.utilization", MetricScope.HOST, "percent",
+            value, availability, reason, attributes=attributes,
         )
 
-    def _memory_metric(
-        self, timestamp_ns: int, interval_ns: int | None
-    ) -> MetricSample:
+    def _memory_metric(self) -> MetricSample:
         try:
-            total, available = parse_meminfo(
-                (self.proc_root / "meminfo").read_text(encoding="utf-8")
-            )
-            value = total - available
-            availability = Availability.AVAILABLE
-            reason = None
+            memory = self.psutil.virtual_memory()
+            total = _number(memory.total, "total memory", integer=True)
+            available = _number(memory.available, "available memory", integer=True)
+            if available > total:
+                raise _MetricValueError("psutil available memory exceeds total memory")
+            value, availability, reason = total - available, Availability.AVAILABLE, None
             attributes = {
-                "procfs.mem_total_bytes": total,
-                "procfs.mem_available_bytes": available,
+                "psutil.mem_total_bytes": total,
+                "psutil.mem_available_bytes": available,
             }
-        except (OSError, ValueError) as error:
-            value = None
-            availability = Availability.ERROR
-            reason = str(error)
-            attributes = {"procfs.source": "meminfo"}
+        except Exception as error:
+            value, availability = None, Availability.ERROR
+            reason = str(error) if isinstance(error, _MetricValueError) else "psutil virtual memory query failed"
+            attributes = {"psutil.source": "virtual_memory"}
         return self._metric(
-            name="resource.system.memory_used",
-            kind=MetricKind.GAUGE,
-            scope=MetricScope.HOST,
-            unit="bytes",
-            value=value,
-            availability=availability,
-            reason=reason,
-            timestamp_ns=timestamp_ns,
-            interval_ns=interval_ns,
-            attributes=attributes,
+            "resource.system.memory_used", MetricScope.HOST, "bytes",
+            value, availability, reason, attributes=attributes,
         )
 
-    def _process_memory_metric(
-        self, pid: int, timestamp_ns: int, interval_ns: int | None
-    ) -> MetricSample:
+    def _process_memory_metric(self, pid: int) -> MetricSample:
         try:
-            value = parse_process_rss(
-                (self.proc_root / str(pid) / "status").read_text(encoding="utf-8")
+            value = _number(
+                self.psutil.Process(pid).memory_info().rss,
+                "process RSS",
+                integer=True,
             )
-            availability = Availability.AVAILABLE
-            reason = None
-        except FileNotFoundError:
-            value = None
-            availability = Availability.NOT_AVAILABLE
-            reason = "child process has exited"
-        except (OSError, ValueError) as error:
-            value = None
-            availability = Availability.ERROR
-            reason = str(error)
+            availability, reason = Availability.AVAILABLE, None
+        except self.psutil.ZombieProcess:
+            value, availability, reason = None, Availability.NOT_AVAILABLE, "child process is a zombie"
+        except self.psutil.NoSuchProcess:
+            value, availability, reason = None, Availability.NOT_AVAILABLE, "child process has exited"
+        except self.psutil.AccessDenied:
+            value, availability, reason = None, Availability.ERROR, "process RSS access is denied"
+        except Exception as error:
+            value, availability = None, Availability.ERROR
+            reason = str(error) if isinstance(error, _MetricValueError) else "psutil process RSS query failed"
         return self._metric(
-            name="resource.cpu.memory_used",
-            kind=MetricKind.GAUGE,
-            scope=MetricScope.PROCESS,
-            unit="bytes",
-            value=value,
-            availability=availability,
-            reason=reason,
-            timestamp_ns=timestamp_ns,
-            interval_ns=interval_ns,
-            attributes={"procfs.pid": pid},
-            dimensions={"process_id": str(pid)},
+            "resource.cpu.memory_used", MetricScope.PROCESS, "bytes",
+            value, availability, reason,
+            attributes={"psutil.pid": pid}, dimensions={"process_id": str(pid)},
         )
 
     def _metric(
         self,
-        *,
         name: str,
-        kind: MetricKind,
         scope: MetricScope,
         unit: str,
         value: int | float | None,
         availability: Availability,
         reason: str | None,
-        timestamp_ns: int,
-        interval_ns: int | None,
+        *,
         attributes: dict[str, object],
         dimensions: dict[str, object] | None = None,
     ) -> MetricSample:
         return MetricSample(
-            run_id=self.run_id,
-            metric_name=name,
-            metric_kind=kind,
-            scope=scope,
-            host_id=self.host_id,
-            clock_domain_id=self.clock_domain_id,
-            timestamp_ns=timestamp_ns,
-            availability=availability,
-            origin=ValueOrigin.MEASURED,
-            unit=unit,
-            value=value,
-            interval_ns=interval_ns,
-            reason=reason,
-            dimensions=dimensions or {},
-            attributes=attributes,
+            run_id=self.run_id, metric_name=name, metric_kind=MetricKind.GAUGE,
+            scope=scope, host_id=self.host_id, clock_domain_id=self.clock_domain_id,
+            timestamp_ns=0, availability=availability, origin=ValueOrigin.MEASURED,
+            unit=unit, value=value, interval_ns=None, reason=reason,
+            dimensions=dimensions or {}, attributes=attributes,
         )

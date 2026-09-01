@@ -25,7 +25,7 @@ from ..collectors.gpu import (
     GpuTelemetryCollector,
     NvmlClient,
 )
-from ..collectors.system import ProcTelemetryCollector
+from ..collectors.system import SystemTelemetryCollector
 from ..schema import (
     Availability,
     ArtifactKind,
@@ -203,7 +203,7 @@ class _TelemetryThread:
             client=gpu_client,
             known_gpu_indices=(0,),
         )
-        self.system = ProcTelemetryCollector(
+        self.system = SystemTelemetryCollector(
             run_id=config.run_id,
             host_id=HOST_ID,
             clock_domain_id=CLOCK_DOMAIN_ID,

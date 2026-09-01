@@ -72,6 +72,11 @@ unavailable입니다.
 Resource sample은 metric, host, scope, device와 dimensions가 같은 stream끼리
 집계합니다. 서로 다른 GPU/NPU 또는 device의 값을 합산하지 않습니다.
 
+CPU, system memory와 process RSS는 psutil에서 측정합니다. System memory used는
+플랫폼별 `used` 값이 아니라 `virtual_memory().total - available`로 계산합니다.
+CPU total에서는 Linux user/nice에 이미 포함된 guest/guest_nice를 다시 더하지 않고,
+기존 계약과 같이 idle과 iowait를 idle 시간으로 처리합니다.
+
 GPU resource metric은 NVIDIA NVML API에서 측정합니다. Memory는 NVML이 반환한
 byte 단위를 그대로 보존하고 power는 milliwatt에서 watt로 변환합니다. GPU 세대에
 따라 power가 최근 구간 평균일 수 있으므로 항상 순간값을 뜻하지는 않습니다. 새

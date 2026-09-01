@@ -26,7 +26,7 @@ from ..collectors.gpu import (
 from ..collectors.npu import NpuTelemetryCollector
 from ..collectors.npu.rbln_smi import RblnSmiClient
 from ..collectors.process import ManagedProcess
-from ..collectors.system import ProcTelemetryCollector
+from ..collectors.system import SystemTelemetryCollector
 from ..gpu.openai_client import CompletionObservation, OpenAICompletionClient
 from ..gpu.workload import measured_window_metrics, observation_metrics
 from ..schema import (
@@ -373,7 +373,7 @@ class _Telemetry:
             client=RblnSmiClient(device_ids=config.npu_indices),
             known_npu_indices=config.npu_indices,
         )
-        self.system = ProcTelemetryCollector(
+        self.system = SystemTelemetryCollector(
             run_id=f"{layout.run_id}-gpu",
             host_id=HOST_ID,
             clock_domain_id=CLOCK_DOMAIN_ID,

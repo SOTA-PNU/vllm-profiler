@@ -3,13 +3,7 @@
 from .base import BaseCollector, CollectorError, CollectorState
 from .command import CommandSpec, build_environment, mask_command, mask_environment
 from .process import CommandResult, ManagedProcess
-from .system import (
-    CpuTimes,
-    ProcTelemetryCollector,
-    parse_meminfo,
-    parse_process_rss,
-    parse_proc_stat,
-)
+from .system import SystemTelemetryCollector
 
 __all__ = [
     "BaseCollector",
@@ -17,13 +11,9 @@ __all__ = [
     "CollectorState",
     "CommandResult",
     "CommandSpec",
-    "CpuTimes",
     "ManagedProcess",
-    "ProcTelemetryCollector",
+    "SystemTelemetryCollector",
     "build_environment",
     "mask_command",
     "mask_environment",
-    "parse_meminfo",
-    "parse_process_rss",
-    "parse_proc_stat",
 ]

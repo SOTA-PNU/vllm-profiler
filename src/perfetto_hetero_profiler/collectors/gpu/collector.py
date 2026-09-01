@@ -34,7 +34,7 @@ from ...schema.manifests import publish_run_manifest
 from ..command import mask_command
 from ..process import ManagedProcess
 from ..run import run_monitored_process
-from ..system import ProcTelemetryCollector
+from ..system import SystemTelemetryCollector
 from .config import GpuDeviceInfo, GpuRunConfig
 from .nvml import (
     NVML_DISTRIBUTION,
@@ -95,14 +95,12 @@ class GpuRunCollector:
         config: GpuRunConfig,
         *,
         gpu_client: NvmlClient | None = None,
-        proc_root: Path = Path("/proc"),
         monotonic_ns: Callable[[], int] = time.monotonic_ns,
         unix_time_ns: Callable[[], int] = time.time_ns,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.config = config
         self.gpu_client = gpu_client or NvmlClient()
-        self.proc_root = Path(proc_root)
         self.monotonic_ns = monotonic_ns
         self.unix_time_ns = unix_time_ns
         self.sleep = sleep
@@ -146,14 +144,13 @@ class GpuRunCollector:
             known_gpu_indices=tuple(device.index for device in devices),
             monotonic_ns=self.monotonic_ns,
         )
-        system = ProcTelemetryCollector(
+        system = SystemTelemetryCollector(
             run_id=self.config.run_id,
             host_id=self.config.host_alias,
             clock_domain_id=HOST_CLOCK_DOMAIN,
             pid_provider=lambda: (
                 process.process.pid if process.process is not None else None
             ),
-            proc_root=self.proc_root,
             monotonic_ns=self.monotonic_ns,
         )
 

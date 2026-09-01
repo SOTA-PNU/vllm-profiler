@@ -37,7 +37,7 @@ from ...support.files import sha256_file
 from ..command import mask_command
 from ..process import ManagedProcess
 from ..run import run_monitored_process
-from ..system import ProcTelemetryCollector
+from ..system import SystemTelemetryCollector
 from .config import NpuDeviceInfo, NpuRunConfig
 from .profiling import build_rbln_profile_plan
 from .rbln_smi import RblnSmiClient, RblnSmiCommandError
@@ -93,14 +93,12 @@ class NpuRunCollector:
         config: NpuRunConfig,
         *,
         npu_client: RblnSmiClient | None = None,
-        proc_root: Path = Path("/proc"),
         monotonic_ns: Callable[[], int] = time.monotonic_ns,
         unix_time_ns: Callable[[], int] = time.time_ns,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.config = config
         self.npu_client = npu_client or RblnSmiClient(device_ids=config.device_ids)
-        self.proc_root = Path(proc_root)
         self.monotonic_ns = monotonic_ns
         self.unix_time_ns = unix_time_ns
         self.sleep = sleep
@@ -160,14 +158,13 @@ class NpuRunCollector:
             known_npu_indices=tuple(device.index for device in devices),
             monotonic_ns=self.monotonic_ns,
         )
-        system = ProcTelemetryCollector(
+        system = SystemTelemetryCollector(
             run_id=self.config.run_id,
             host_id=self.config.host_id,
             clock_domain_id=HOST_CLOCK_DOMAIN,
             pid_provider=lambda: (
                 process.process.pid if process.process is not None else None
             ),
-            proc_root=self.proc_root,
             monotonic_ns=self.monotonic_ns,
         )
         run_start_ns = self.monotonic_ns()

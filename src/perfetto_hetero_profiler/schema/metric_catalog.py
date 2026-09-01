@@ -223,7 +223,7 @@ _DEFINITIONS = (
         _RESOURCE,
         "CPU utilization.",
         maximum=100,
-        sources=("procfs", "psutil-compatible source", "system telemetry"),
+        sources=("psutil", "system telemetry"),
     ),
     _definition(
         "resource.cpu.memory_used",
@@ -231,7 +231,7 @@ _DEFINITIONS = (
         MetricKind.GAUGE,
         _RESOURCE,
         "CPU process or host memory in use.",
-        sources=("procfs", "system telemetry"),
+        sources=("psutil", "system telemetry"),
     ),
     _definition(
         "resource.system.memory_used",
@@ -239,7 +239,7 @@ _DEFINITIONS = (
         MetricKind.GAUGE,
         (MetricScope.HOST,),
         "System memory in use.",
-        sources=("procfs", "system telemetry"),
+        sources=("psutil", "system telemetry"),
     ),
     _definition(
         "resource.gpu.utilization",
