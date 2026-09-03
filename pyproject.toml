@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Perfetto Heterogeneous Profiler contributors" }]
 dependencies = [
+  "jsonschema==4.26.0",
   "perfetto==0.57.2",
   "psutil==7.2.2",
   "protobuf==6.33.6",

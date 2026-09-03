@@ -68,7 +68,7 @@ class SerializationTests(unittest.TestCase):
     def test_unknown_major_version_rejected(self) -> None:
         data = record_to_dict(event())
         data["schema_version"] = "2.0.0"
-        with self.assertRaisesRegex(SchemaValidationError, "unsupported schema major"):
+        with self.assertRaisesRegex(SchemaValidationError, "schema_version"):
             record_from_dict(data)
 
     def test_same_major_minor_version_accepted(self) -> None:

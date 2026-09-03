@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import fields, replace
+from dataclasses import MISSING, fields, replace
 import importlib
 from importlib.util import find_spec
 import json
@@ -27,13 +27,23 @@ from perfetto_hetero_profiler.schema.catalog import (
     TRACE_ATTRIBUTE_PRESENTATIONS,
     validate_catalog_contract,
 )
-from perfetto_hetero_profiler.schema.field_contracts import (
-    RECORD_FIELD_CONTRACTS,
-    validate_field_contracts,
-)
 from perfetto_hetero_profiler.schema.metric_catalog import (
     METRIC_DEFINITIONS,
     validate_metric_definitions,
+)
+from perfetto_hetero_profiler.schema.records import (
+    ArtifactReference,
+    ClockDomain,
+    ClockTransform,
+    DeviceDescriptor,
+    EventRecord,
+    HostDescriptor,
+    MetricSample,
+    ModelDescriptor,
+    RunManifest,
+    SoftwareDescriptor,
+    SyncPoint,
+    WorkloadDescriptor,
 )
 
 
@@ -47,8 +57,9 @@ SCHEMA_ROOT = (
 )
 
 
-def _schema_node(document: dict[str, object], contract: object) -> dict[str, object]:
-    definition = getattr(contract, "schema_definition")
+def _schema_node(
+    document: dict[str, object], definition: str | None
+) -> dict[str, object]:
     if definition is None:
         return document
     definitions = document.get("$defs")
@@ -57,86 +68,58 @@ def _schema_node(document: dict[str, object], contract: object) -> dict[str, obj
     assert isinstance(node, dict)
     return node
 
+_SCHEMA_RECORDS = (
+    (RunManifest, "run_manifest.schema.json", None),
+    (ModelDescriptor, "run_manifest.schema.json", "model"),
+    (WorkloadDescriptor, "run_manifest.schema.json", "workload"),
+    (HostDescriptor, "run_manifest.schema.json", "host"),
+    (SoftwareDescriptor, "run_manifest.schema.json", "software"),
+    (DeviceDescriptor, "run_manifest.schema.json", "device"),
+    (EventRecord, "event_record.schema.json", None),
+    (MetricSample, "metric_sample.schema.json", None),
+    (ArtifactReference, "artifact_reference.schema.json", None),
+    (ClockDomain, "clock_domain.schema.json", None),
+    (SyncPoint, "sync_point.schema.json", None),
+    (ClockTransform, "clock_transform.schema.json", None),
+)
 
-def _resolve_property(
-    document: dict[str, object], value: object
-) -> dict[str, object]:
-    assert isinstance(value, dict)
-    reference = value.get("$ref")
-    if not isinstance(reference, str):
-        return value
-    prefix = "#/$defs/"
-    assert reference.startswith(prefix)
-    definitions = document.get("$defs")
-    assert isinstance(definitions, dict)
-    resolved = definitions.get(reference[len(prefix):])
-    assert isinstance(resolved, dict)
-    return resolved
 
-
-class RecordFieldContractTests(unittest.TestCase):
-    def test_contract_fields_and_requiredness_match_dataclasses_and_schemas(self):
-        validate_field_contracts()
-        for contract in RECORD_FIELD_CONTRACTS:
-            with self.subTest(record=contract.record_class.__name__):
-                dataclass_fields = {item.name for item in fields(contract.record_class)}
-                self.assertEqual(set(contract.field_names), dataclass_fields)
+class RecordSchemaDriftTests(unittest.TestCase):
+    def test_dataclass_fields_match_schema_properties(self):
+        for record_class, filename, definition in _SCHEMA_RECORDS:
+            with self.subTest(record=record_class.__name__):
                 document = json.loads(
-                    (SCHEMA_ROOT / contract.schema_filename).read_text(encoding="utf-8")
+                    (SCHEMA_ROOT / filename).read_text(encoding="utf-8")
                 )
-                node = _schema_node(document, contract)
-                properties = node.get("properties")
-                required = node.get("required")
-                self.assertIsInstance(properties, dict)
-                self.assertIsInstance(required, list)
-                self.assertEqual(set(properties), dataclass_fields)
-                self.assertEqual(set(required), set(contract.required_names))
+                node = _schema_node(document, definition)
+                self.assertEqual(
+                    {item.name for item in fields(record_class)},
+                    set(node["properties"]),
+                )
 
-    def test_contract_kinds_nullability_and_enums_match_schemas(self):
-        for contract in RECORD_FIELD_CONTRACTS:
-            document = json.loads(
-                (SCHEMA_ROOT / contract.schema_filename).read_text(encoding="utf-8")
-            )
-            node = _schema_node(document, contract)
-            properties = node["properties"]
-            assert isinstance(properties, dict)
-            for field_spec in contract.fields:
-                with self.subTest(
-                    record=contract.record_class.__name__, field=field_spec.name
-                ):
-                    property_schema = _resolve_property(
-                        document, properties[field_spec.name]
-                    )
-                    enum_values = property_schema.get("enum")
-                    constant = property_schema.get("const")
-                    expected_values = field_spec.allowed_values
-                    if field_spec.enum_type is not None:
-                        expected_values = tuple(
-                            item.value for item in field_spec.enum_type
-                        )
-                        if field_spec.nullable:
-                            expected_values = (*expected_values, None)
-                    if expected_values:
-                        actual_values = (
-                            tuple(enum_values)
-                            if isinstance(enum_values, list)
-                            else (constant,)
-                        )
-                        self.assertEqual(actual_values, expected_values)
-                        continue
-                    schema_type = property_schema.get("type")
-                    actual_types = (
-                        set(schema_type)
-                        if isinstance(schema_type, list)
-                        else {schema_type}
-                    )
-                    self.assertEqual("null" in actual_types, field_spec.nullable)
-                    actual_types.discard("null")
-                    if field_spec.value_kind == "number":
-                        self.assertTrue(actual_types <= {"integer", "number"})
-                        self.assertIn("number", actual_types)
-                    else:
-                        self.assertEqual(actual_types, {field_spec.value_kind})
+    def test_top_level_record_type_constants_and_required_fields(self):
+        for record_class, filename, definition in _SCHEMA_RECORDS:
+            if definition is not None:
+                continue
+            with self.subTest(record=record_class.__name__):
+                document = json.loads(
+                    (SCHEMA_ROOT / filename).read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    document["properties"]["record_type"]["const"],
+                    record_class.__dataclass_fields__["record_type"].default.value,
+                )
+                self.assertEqual(
+                    set(document["required"]),
+                    {
+                        item.name
+                        for item in fields(record_class)
+                        if (
+                            item.default is MISSING
+                            and item.default_factory is MISSING
+                        ) or item.name in {"schema_version", "record_type"}
+                    },
+                )
 
 
 class MetricAndPresentationContractTests(unittest.TestCase):
@@ -328,7 +311,6 @@ class DeadCodeBoundaryTests(unittest.TestCase):
 
     def test_removed_internal_schema_and_support_symbols_stay_absent(self):
         from perfetto_hetero_profiler.schema import catalog, constants
-        from perfetto_hetero_profiler.schema import field_contracts
         from perfetto_hetero_profiler.support.config_fields import ConfigFields
 
         for name in (
@@ -338,9 +320,7 @@ class DeadCodeBoundaryTests(unittest.TestCase):
         ):
             with self.subTest(module=constants.__name__, name=name):
                 self.assertFalse(hasattr(constants, name))
-        for name in ("FIELD_CONTRACT_BY_CLASS", "TOP_LEVEL_FIELD_CONTRACTS"):
-            with self.subTest(module=field_contracts.__name__, name=name):
-                self.assertFalse(hasattr(field_contracts, name))
+        self.assertIsNone(find_spec("perfetto_hetero_profiler.schema.field_contracts"))
         for name in ("STAGE_BY_TRACK", "TRACE_ATTRIBUTE_LATENCY_IDENTITIES"):
             with self.subTest(module=catalog.__name__, name=name):
                 self.assertFalse(hasattr(catalog, name))
