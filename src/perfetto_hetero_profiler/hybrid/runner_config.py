@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from functools import lru_cache
+from importlib import resources
 import json
 import os
 from pathlib import Path
-import re
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
+from ..schema.jsonschema_runtime import (
+    JsonSchemaFailure,
+    compile_schema,
+    validate_schema_document,
+)
 from ..schema.validation import validate_run_id
-from ..support.config_fields import ConfigFields
+from .layout import HybridRunLayout
 
 
 HybridProfileMode = Literal[
@@ -19,20 +26,63 @@ HybridProfileMode = Literal[
 PROFILE_MODES = frozenset(
     {"monitor", "gpu-torch", "gpu-nsys", "npu-torch", "npu-rbln"}
 )
+HYBRID_RUNNER_CONFIG_SCHEMA_NAME = "hybrid_runner_config.schema.json"
 
 
 class HybridRunnerConfigError(ValueError):
     """The runner configuration is malformed or unsafe."""
 
 
-_FIELDS = ConfigFields(HybridRunnerConfigError)
-_object = _FIELDS.object
-_keys = _FIELDS.reject_unknown
-_string = _FIELDS.string
-_integer = _FIELDS.integer
-_number = _FIELDS.number
-_boolean = _FIELDS.boolean
-_absolute_path = _FIELDS.absolute_path
+@lru_cache(maxsize=1)
+def _config_validator():
+    resource = resources.files(__package__)
+    for component in ("json", "v1", HYBRID_RUNNER_CONFIG_SCHEMA_NAME):
+        resource = resource.joinpath(component)
+    return compile_schema(json.loads(resource.read_text(encoding="utf-8")))
+
+
+def _validate_structure(value: object) -> None:
+    try:
+        validate_schema_document(value, _config_validator(), root_path="config")
+    except JsonSchemaFailure as error:
+        message = (
+            "unknown config field"
+            if error.message == "unknown field"
+            else error.message
+        )
+        raise HybridRunnerConfigError(f"{error.field_path}: {message}") from error
+
+
+def _reject_nonfinite_constant(_: str) -> None:
+    raise ValueError("non-finite numeric constants are not valid JSON")
+
+
+def _absolute_path(value: str, field: str) -> Path:
+    path = Path(value)
+    if not path.is_absolute():
+        raise HybridRunnerConfigError(f"{field} must be absolute")
+    return path
+
+
+def _relative_output(value: str, field: str) -> Path:
+    windows = PureWindowsPath(value)
+    path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or windows.is_absolute()
+        or not path.parts
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise HybridRunnerConfigError(f"{field} must be a safe relative path")
+    return Path(*path.parts)
+
+
+def _bounded_int(value: int, field: str, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool) or not minimum <= value <= maximum:
+        raise HybridRunnerConfigError(
+            f"{field} must be an integer from {minimum} through {maximum}"
+        )
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,40 +183,29 @@ class HybridRunnerConfig:
         if warmup_requests is not None:
             workload = replace(
                 workload,
-                warmup_requests=_integer(
+                warmup_requests=_bounded_int(
                     warmup_requests, "--warmup-requests", 0, 1000
                 ),
             )
         if measured_requests is not None:
             workload = replace(
                 workload,
-                measured_requests=_integer(
+                measured_requests=_bounded_int(
                     measured_requests, "--measured-requests", 1, 1000
                 ),
             )
         if max_output_tokens is not None:
             workload = replace(
                 workload,
-                max_output_tokens=_integer(
+                max_output_tokens=_bounded_int(
                     max_output_tokens, "--max-output-tokens", 1, 16
                 ),
             )
         return replace(self, workload=workload)
 
 
-def _server(document: object, field: str) -> ServerConfig:
-    value = _object(document, field)
-    _keys(
-        value,
-        {
-            "executable", "working_directory", "pythonpath", "host",
-            "http_port", "nixl_port", "extra_args",
-        },
-        field,
-    )
+def _server(value: dict[str, Any], field: str) -> ServerConfig:
     extra = value.get("extra_args", [])
-    if not isinstance(extra, list) or any(not isinstance(item, str) for item in extra):
-        raise HybridRunnerConfigError(f"{field}.extra_args must be a string array")
     controlled = (
         "--host", "--port", "--block-size", "--max-model-len",
         "--max-num-seqs", "--served-model-name", "--kv-transfer-config",
@@ -179,29 +218,25 @@ def _server(document: object, field: str) -> ServerConfig:
         raise HybridRunnerConfigError(
             f"{field}.extra_args cannot override runner-controlled option: {conflict}"
         )
-    host = _string(value.get("host"), f"{field}.host")
+    host = value["host"]
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise HybridRunnerConfigError(f"{field}.host must be loopback")
     working_directory = _absolute_path(
-        value.get("working_directory"), f"{field}.working_directory"
+        value["working_directory"], f"{field}.working_directory"
     )
     pythonpath = _absolute_path(
         value.get("pythonpath", str(working_directory)),
         f"{field}.pythonpath",
     )
     return ServerConfig(
-        executable=_absolute_path(value.get("executable"), f"{field}.executable"),
+        executable=_absolute_path(value["executable"], f"{field}.executable"),
         working_directory=working_directory,
         pythonpath=pythonpath,
         host=host,
-        http_port=_integer(value.get("http_port"), f"{field}.http_port", 1, 65535),
-        nixl_port=_integer(value.get("nixl_port"), f"{field}.nixl_port", 1, 65535),
+        http_port=value["http_port"],
+        nixl_port=value["nixl_port"],
         extra_args=tuple(extra),
     )
-
-
-def _relative_output(value: object, field: str) -> Path:
-    return _FIELDS.relative_path(value, field)
 
 
 def load_hybrid_runner_config(path: Path) -> HybridRunnerConfig:
@@ -211,60 +246,43 @@ def load_hybrid_runner_config(path: Path) -> HybridRunnerConfig:
     if not path.is_absolute():
         raise HybridRunnerConfigError("--config must be an absolute path")
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        document = json.loads(
+            path.read_text(encoding="utf-8"),
+            parse_constant=_reject_nonfinite_constant,
+        )
+    except (OSError, UnicodeError, ValueError) as error:
         raise HybridRunnerConfigError(f"cannot read config: {error}") from error
-    root = _object(document, "config")
-    _keys(
-        root,
-        {
-            "schema_version", "model", "prefill", "decode", "proxy", "workload",
-            "runtime", "connectors", "profilers", "telemetry", "timeouts",
-            "tools", "offline",
-        },
-        "config",
-    )
-    if root.get("schema_version") != "1.0":
-        raise HybridRunnerConfigError("schema_version must be '1.0'")
-
-    model = _object(root.get("model"), "model")
-    _keys(model, {"path", "served_name", "rbln_cache_path"}, "model")
-    proxy = _object(root.get("proxy"), "proxy")
-    _keys(proxy, {"python", "entry_point", "host", "http_port"}, "proxy")
-    workload = _object(root.get("workload"), "workload")
-    _keys(
-        workload,
-        {"prompt", "prompt_file", "warmup_requests", "measured_requests", "max_output_tokens", "temperature", "streaming"},
-        "workload",
-    )
+    _validate_structure(document)
+    assert isinstance(document, dict)
+    root = document
+    model = root["model"]
+    proxy = root["proxy"]
+    workload = root["workload"]
+    assert isinstance(model, dict)
+    assert isinstance(proxy, dict)
+    assert isinstance(workload, dict)
     prompt = workload.get("prompt")
     prompt_file = workload.get("prompt_file")
-    if (prompt is None) == (prompt_file is None):
-        raise HybridRunnerConfigError(
-            "workload requires exactly one of prompt or prompt_file"
-        )
-    prompt_value = _string(prompt, "workload.prompt") if prompt is not None else None
+    prompt_value = prompt if prompt is not None else None
     prompt_path = (
         _absolute_path(prompt_file, "workload.prompt_file")
         if prompt_file is not None
         else None
     )
-    runtime = _object(root.get("runtime"), "runtime")
-    _keys(
-        runtime,
-        {"max_model_len", "block_size", "max_num_seqs", "gpu_memory_utilization", "gpu_indices", "npu_indices"},
-        "runtime",
+    runtime = root["runtime"]
+    telemetry = root["telemetry"]
+    timeouts = root["timeouts"]
+    tool_config = root["tools"]
+    connectors = root["connectors"]
+    profilers = root["profilers"]
+    assert all(
+        isinstance(value, dict)
+        for value in (runtime, telemetry, timeouts, tool_config, connectors, profilers)
     )
-    telemetry = _object(root.get("telemetry"), "telemetry")
-    _keys(telemetry, {"sample_interval_ms"}, "telemetry")
-    timeouts = _object(root.get("timeouts"), "timeouts")
-    _keys(timeouts, {"startup_sec", "request_sec", "shutdown_sec"}, "timeouts")
-    tools = _object(root.get("tools"), "tools")
-    _keys(tools, {"trace_processor", "nsys"}, "tools")
-    connectors = _object(root.get("connectors"), "connectors")
-    _keys(connectors, {"prefill", "decode"}, "connectors")
-    prefill_connector = _object(connectors.get("prefill"), "connectors.prefill")
-    decode_connector = _object(connectors.get("decode"), "connectors.decode")
+    prefill_connector = connectors["prefill"]
+    decode_connector = connectors["decode"]
+    assert isinstance(prefill_connector, dict)
+    assert isinstance(decode_connector, dict)
     if prefill_connector.get("kv_role") != "kv_producer":
         raise HybridRunnerConfigError(
             "connectors.prefill.kv_role must be kv_producer"
@@ -273,93 +291,66 @@ def load_hybrid_runner_config(path: Path) -> HybridRunnerConfig:
         raise HybridRunnerConfigError(
             "connectors.decode.kv_role must be kv_consumer"
         )
-    profilers = _object(root.get("profilers"), "profilers")
-    _keys(
-        profilers,
-        {"gpu_torch_subdir", "gpu_nsys_basename", "npu_torch_subdir", "npu_rbln_subdir"},
-        "profilers",
-    )
-
-    def indices(name: str) -> tuple[int, ...]:
-        values = runtime.get(name)
-        if not isinstance(values, list) or not values:
-            raise HybridRunnerConfigError(f"runtime.{name} must be a non-empty array")
-        parsed = tuple(_integer(value, f"runtime.{name}", 0, 1024) for value in values)
-        if len(parsed) != len(set(parsed)):
-            raise HybridRunnerConfigError(f"runtime.{name} contains duplicates")
-        return parsed
-
-    trace_processor = tools.get("trace_processor")
-    proxy_host = _string(proxy.get("host"), "proxy.host")
+    trace_processor = tool_config.get("trace_processor")
+    proxy_host = proxy["host"]
     if proxy_host not in {"127.0.0.1", "localhost", "::1"}:
         raise HybridRunnerConfigError("proxy.host must be loopback")
-    proxy_entry_point = _string(
-        proxy.get("entry_point"), "proxy.entry_point"
-    )
-    if re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", proxy_entry_point) is None:
-        raise HybridRunnerConfigError(
-            "proxy.entry_point must be a Python module name"
-        )
+    proxy_entry_point = proxy["entry_point"]
     return HybridRunnerConfig(
         config_path=path,
-        model_path=_absolute_path(model.get("path"), "model.path"),
-        served_model_name=_string(model.get("served_name"), "model.served_name"),
+        model_path=_absolute_path(model["path"], "model.path"),
+        served_model_name=model["served_name"],
         rbln_cache_path=_absolute_path(
-            model.get("rbln_cache_path"), "model.rbln_cache_path"
+            model["rbln_cache_path"], "model.rbln_cache_path"
         ),
-        prefill=_server(root.get("prefill"), "prefill"),
-        decode=_server(root.get("decode"), "decode"),
-        proxy_python=_absolute_path(proxy.get("python"), "proxy.python"),
+        prefill=_server(root["prefill"], "prefill"),
+        decode=_server(root["decode"], "decode"),
+        proxy_python=_absolute_path(proxy["python"], "proxy.python"),
         proxy_entry_point=proxy_entry_point,
         proxy_host=proxy_host,
-        proxy_port=_integer(proxy.get("http_port"), "proxy.http_port", 1, 65535),
+        proxy_port=proxy["http_port"],
         workload=WorkloadConfig(
             prompt=prompt_value,
             prompt_file=prompt_path,
-            warmup_requests=_integer(workload.get("warmup_requests"), "workload.warmup_requests", 0, 1000),
-            measured_requests=_integer(workload.get("measured_requests"), "workload.measured_requests", 1, 1000),
-            max_output_tokens=_integer(workload.get("max_output_tokens"), "workload.max_output_tokens", 1, 16),
-            temperature=_number(workload.get("temperature"), "workload.temperature", 0, 2),
-            streaming=_boolean(workload.get("streaming"), "workload.streaming"),
+            warmup_requests=workload["warmup_requests"],
+            measured_requests=workload["measured_requests"],
+            max_output_tokens=workload["max_output_tokens"],
+            temperature=workload["temperature"],
+            streaming=workload["streaming"],
         ),
         prefill_connector=prefill_connector,
         decode_connector=decode_connector,
         profiler_outputs=ProfilerOutputConfig(
             gpu_torch_subdir=_relative_output(
-                profilers.get("gpu_torch_subdir"), "profilers.gpu_torch_subdir"
+                profilers["gpu_torch_subdir"], "profilers.gpu_torch_subdir"
             ),
             gpu_nsys_basename=_relative_output(
-                profilers.get("gpu_nsys_basename"), "profilers.gpu_nsys_basename"
+                profilers["gpu_nsys_basename"], "profilers.gpu_nsys_basename"
             ),
             npu_torch_subdir=_relative_output(
-                profilers.get("npu_torch_subdir"), "profilers.npu_torch_subdir"
+                profilers["npu_torch_subdir"], "profilers.npu_torch_subdir"
             ),
             npu_rbln_subdir=_relative_output(
-                profilers.get("npu_rbln_subdir"), "profilers.npu_rbln_subdir"
+                profilers["npu_rbln_subdir"], "profilers.npu_rbln_subdir"
             ),
         ),
-        max_model_len=_integer(runtime.get("max_model_len"), "runtime.max_model_len", 1, 131072),
-        block_size=_integer(runtime.get("block_size"), "runtime.block_size", 1, 65536),
-        max_num_seqs=_integer(runtime.get("max_num_seqs"), "runtime.max_num_seqs", 1, 4096),
-        gpu_memory_utilization=_number(runtime.get("gpu_memory_utilization"), "runtime.gpu_memory_utilization", 0.01, 1.0),
-        gpu_indices=indices("gpu_indices"),
-        npu_indices=indices("npu_indices"),
-        sample_interval_ms=_integer(
-            telemetry.get("sample_interval_ms"),
-            "telemetry.sample_interval_ms",
-            20,
-            60000,
-        ),
-        startup_timeout_sec=_number(timeouts.get("startup_sec"), "timeouts.startup_sec", 1, 3600),
-        request_timeout_sec=_number(timeouts.get("request_sec"), "timeouts.request_sec", 1, 3600),
-        shutdown_timeout_sec=_number(timeouts.get("shutdown_sec"), "timeouts.shutdown_sec", 1, 600),
+        max_model_len=runtime["max_model_len"],
+        block_size=runtime["block_size"],
+        max_num_seqs=runtime["max_num_seqs"],
+        gpu_memory_utilization=runtime["gpu_memory_utilization"],
+        gpu_indices=tuple(runtime["gpu_indices"]),
+        npu_indices=tuple(runtime["npu_indices"]),
+        sample_interval_ms=telemetry["sample_interval_ms"],
+        startup_timeout_sec=timeouts["startup_sec"],
+        request_timeout_sec=timeouts["request_sec"],
+        shutdown_timeout_sec=timeouts["shutdown_sec"],
         trace_processor_path=(
             _absolute_path(trace_processor, "tools.trace_processor")
             if trace_processor is not None
             else None
         ),
-        nsys_executable=_absolute_path(tools.get("nsys"), "tools.nsys"),
-        offline=_boolean(root.get("offline"), "offline"),
+        nsys_executable=_absolute_path(tool_config["nsys"], "tools.nsys"),
+        offline=root["offline"],
     )
 
 
@@ -385,21 +376,11 @@ def validate_hybrid_invocation(
             raise HybridRunnerConfigError(
                 f"--run-root must not traverse a symlink: {current}"
             )
-    targets = tuple(
-        run_root / suffix
-        for suffix in (
-            run_id,
-            f"{run_id}-gpu",
-            f"{run_id}-npu",
-            f"{run_id}-coordinator",
-            f"{run_id}-perfetto",
-            f"{run_id}-perfetto-request-focused",
-            f"{run_id}-overview",
-            f"{run_id}-closeout-recovery",
-            f"{run_id}-publication",
-        )
-    )
-    existing = [path for path in targets if os.path.lexists(path)]
+    existing = [
+        path
+        for path in HybridRunLayout(run_root, run_id).all_roots
+        if os.path.lexists(path)
+    ]
     if existing:
         raise FileExistsError(f"run output already exists: {existing[0]}")
     if config.workload.max_output_tokens >= config.max_model_len:

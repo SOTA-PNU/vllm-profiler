@@ -21,7 +21,6 @@ from ..schema import (
     MetricKind,
     MetricSample,
     MetricScope,
-    ModelDescriptor,
     Phase,
     ProfileMode,
     RunManifest,
@@ -32,7 +31,6 @@ from ..schema import (
     SyncPoint,
     ValueOrigin,
     WorkloadDescriptor,
-    read_json,
     record_to_dict,
     validate_record,
     write_json,
@@ -477,6 +475,54 @@ class HybridBundleMerger:
             )
         return domains, sync_points, transforms
 
+    def _request_metric(
+        self,
+        result: JoinResult,
+        *,
+        name: str,
+        kind: MetricKind,
+        unit: str,
+        timestamp_ns: int,
+        value: int | float | None,
+        phase: Phase,
+        reason: str | None,
+        source_event_ids: list[str] | None,
+        scope: MetricScope = MetricScope.REQUEST,
+        interval_ns: int | None = None,
+        origin: ValueOrigin = ValueOrigin.DERIVED,
+        dimensions: dict[str, object] | None = None,
+        attributes: dict[str, object] | None = None,
+    ) -> MetricSample:
+        """Build one request-derived metric with shared correlation fields."""
+
+        return MetricSample(
+            run_id=self.config.run_id,
+            metric_name=name,
+            metric_kind=kind,
+            scope=scope,
+            host_id=self.config.coordinator_host_id,
+            clock_domain_id=self.config.canonical_clock_domain_id,
+            timestamp_ns=timestamp_ns,
+            availability=(
+                Availability.AVAILABLE
+                if value is not None
+                else Availability.NOT_AVAILABLE
+            ),
+            origin=origin,
+            unit=unit,
+            value=value,
+            request_id=result.request_id,
+            phase=phase,
+            interval_ns=interval_ns,
+            reason=None if value is not None else reason,
+            source_event_ids=source_event_ids,
+            dimensions={
+                "hybrid.join_method": result.join_method,
+                **(dimensions or {}),
+            },
+            attributes={"hybrid.confidence": result.confidence, **(attributes or {})},
+        )
+
     def _hybrid_metrics(
         self,
         joins: tuple[JoinResult, ...],
@@ -499,15 +545,11 @@ class HybridBundleMerger:
                 end = by_name.get(end_name)
                 reason = None
                 value = None
-                availability = Availability.AVAILABLE
                 if not alignment_accepted:
-                    availability = Availability.NOT_AVAILABLE
                     reason = "alignment uncertainty exceeds the accepted threshold"
                 elif start is None or end is None:
-                    availability = Availability.NOT_AVAILABLE
                     reason = f"required marker missing: {start_name if start is None else end_name}"
                 elif end.timestamp_ns < start.timestamp_ns:
-                    availability = Availability.NOT_AVAILABLE
                     reason = "marker ordering does not permit a duration"
                 else:
                     value = end.timestamp_ns - start.timestamp_ns
@@ -528,40 +570,30 @@ class HybridBundleMerger:
                     ),
                     default=0,
                 )
-                metrics.append(
-                    MetricSample(
-                        run_id=run_id,
-                        metric_name=metric_name,
-                        metric_kind=MetricKind.DURATION,
-                        scope=MetricScope.REQUEST,
-                        host_id=self.config.coordinator_host_id,
-                        clock_domain_id=clock,
-                        timestamp_ns=metric_timestamp,
-                        availability=availability,
-                        origin=ValueOrigin.DERIVED,
-                        unit="ns",
-                        value=value,
-                        request_id=result.request_id,
-                        phase=phase,
-                        interval_ns=value,
-                        reason=reason,
-                        source_event_ids=(
-                            [start.event_id, end.event_id]
-                            if start is not None and end is not None
-                            else None
+                metrics.append(self._request_metric(
+                    result,
+                    name=metric_name,
+                    kind=MetricKind.DURATION,
+                    unit="ns",
+                    timestamp_ns=metric_timestamp,
+                    value=value,
+                    phase=phase,
+                    interval_ns=value,
+                    reason=reason,
+                    source_event_ids=(
+                        [start.event_id, end.event_id]
+                        if start is not None and end is not None
+                        else None
+                    ),
+                    attributes={
+                        "hybrid.alignment_uncertainty_ns": uncertainty,
+                        "hybrid.duration_confidence": (
+                            "low"
+                            if value is not None and uncertainty > value
+                            else "normal"
                         ),
-                        dimensions={"hybrid.join_method": result.join_method},
-                        attributes={
-                            "hybrid.confidence": result.confidence,
-                            "hybrid.alignment_uncertainty_ns": uncertainty,
-                            "hybrid.duration_confidence": (
-                                "low"
-                                if value is not None and uncertainty > value
-                                else "normal"
-                            ),
-                        },
-                    )
-                )
+                    },
+                ))
             metrics.extend(
                 self._transfer_metrics(
                     result,
@@ -672,41 +704,6 @@ class HybridBundleMerger:
             else:
                 reason = "equal non-negative kv.transfer_bytes evidence is unavailable"
 
-        def metric(
-            name: str,
-            kind: MetricKind,
-            unit: str,
-            value: int | float | None,
-            unavailable_reason: str | None,
-            *,
-            ids: list[str] | None = source_ids,
-            origin: ValueOrigin = ValueOrigin.DERIVED,
-        ) -> MetricSample:
-            return MetricSample(
-                run_id=self.config.run_id,
-                metric_name=name,
-                metric_kind=kind,
-                scope=MetricScope.TRANSFER,
-                host_id=self.config.coordinator_host_id,
-                clock_domain_id=self.config.canonical_clock_domain_id,
-                timestamp_ns=timestamp_ns,
-                availability=(
-                    Availability.AVAILABLE
-                    if value is not None
-                    else Availability.NOT_AVAILABLE
-                ),
-                origin=origin,
-                unit=unit,
-                value=value,
-                request_id=result.request_id,
-                phase=Phase.KV_TRANSFER,
-                interval_ns=duration,
-                reason=None if value is not None else unavailable_reason,
-                source_event_ids=ids,
-                dimensions={"hybrid.join_method": result.join_method},
-                attributes={"hybrid.confidence": result.confidence},
-            )
-
         duration_reason = (
             reason
             if duration is None
@@ -753,25 +750,40 @@ class HybridBundleMerger:
             transform_reason = None
             transform_ids = [transform_start.event_id, transform_end.event_id]
         return [
-            metric(
-                "transfer.bytes", MetricKind.COUNT, "bytes", transfer_bytes,
-                reason, origin=ValueOrigin.MEASURED,
+            self._request_metric(
+                result, name="transfer.bytes", kind=MetricKind.COUNT,
+                unit="bytes", timestamp_ns=timestamp_ns, value=transfer_bytes,
+                phase=Phase.KV_TRANSFER, interval_ns=duration, reason=reason,
+                source_event_ids=source_ids, scope=MetricScope.TRANSFER,
+                origin=ValueOrigin.MEASURED,
             ),
-            metric(
-                "transfer.duration", MetricKind.DURATION, "ns", duration,
-                duration_reason,
+            self._request_metric(
+                result, name="transfer.duration", kind=MetricKind.DURATION,
+                unit="ns", timestamp_ns=timestamp_ns, value=duration,
+                phase=Phase.KV_TRANSFER, interval_ns=duration,
+                reason=duration_reason, source_event_ids=source_ids,
+                scope=MetricScope.TRANSFER,
             ),
-            metric(
-                "transfer.effective_bandwidth", MetricKind.RATE, "bytes/s",
-                bandwidth, bandwidth_reason,
+            self._request_metric(
+                result, name="transfer.effective_bandwidth", kind=MetricKind.RATE,
+                unit="bytes/s", timestamp_ns=timestamp_ns, value=bandwidth,
+                phase=Phase.KV_TRANSFER, interval_ns=duration,
+                reason=bandwidth_reason, source_event_ids=source_ids,
+                scope=MetricScope.TRANSFER,
             ),
-            metric(
-                "transfer.e2e_share", MetricKind.RATIO, "ratio", share,
-                share_reason,
+            self._request_metric(
+                result, name="transfer.e2e_share", kind=MetricKind.RATIO,
+                unit="ratio", timestamp_ns=timestamp_ns, value=share,
+                phase=Phase.KV_TRANSFER, interval_ns=duration,
+                reason=share_reason, source_event_ids=source_ids,
+                scope=MetricScope.TRANSFER,
             ),
-            metric(
-                "transfer.transform_duration", MetricKind.DURATION, "ns",
-                transform_duration, transform_reason, ids=transform_ids,
+            self._request_metric(
+                result, name="transfer.transform_duration",
+                kind=MetricKind.DURATION, unit="ns", timestamp_ns=timestamp_ns,
+                value=transform_duration, phase=Phase.KV_TRANSFER,
+                interval_ns=duration, reason=transform_reason,
+                source_event_ids=transform_ids, scope=MetricScope.TRANSFER,
             ),
         ]
 
@@ -857,42 +869,27 @@ class HybridBundleMerger:
                 if zero_evidence is not None
                 else max((event.timestamp_ns for event in events), default=0)
             )
-            return MetricSample(
-                run_id=self.config.run_id,
-                metric_name=name,
-                metric_kind=MetricKind.DURATION,
-                scope=scope,
-                host_id=self.config.coordinator_host_id,
-                clock_domain_id=self.config.canonical_clock_domain_id,
-                timestamp_ns=timestamp,
-                availability=(
-                    Availability.AVAILABLE
-                    if value is not None
-                    else Availability.NOT_AVAILABLE
-                ),
-                origin=ValueOrigin.DERIVED,
+            return self._request_metric(
+                result,
+                name=name,
+                kind=MetricKind.DURATION,
                 unit="ns",
+                timestamp_ns=timestamp,
                 value=value,
-                request_id=result.request_id,
                 phase=phase,
                 interval_ns=value,
                 reason=reason,
                 source_event_ids=sources,
-                dimensions={
-                    "hybrid.join_method": result.join_method,
-                    **(
-                        {"hybrid.transfer_id": transfer_identity}
-                        if transfer_identity is not None
-                        else {}
-                    ),
-                },
+                scope=scope,
+                dimensions=(
+                    {"hybrid.transfer_id": transfer_identity}
+                    if transfer_identity is not None
+                    else None
+                ),
                 attributes={
-                    "hybrid.confidence": result.confidence,
                     "hybrid.runtime_marker_capability": (
-                        "transfer_wait_observability_v1"
-                        if capable
-                        else "absent"
-                    ),
+                        "transfer_wait_observability_v1" if capable else "absent"
+                    )
                 },
             )
 

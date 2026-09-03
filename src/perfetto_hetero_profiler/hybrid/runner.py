@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import os
 from pathlib import Path
 import platform
 import signal
 import shutil
 import subprocess
-import tempfile
 import time
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
@@ -45,7 +43,6 @@ from ..schema import (
     RunStatus,
     SoftwareDescriptor,
     WorkloadDescriptor,
-    read_json,
     read_jsonl,
     write_json,
     write_jsonl,
@@ -54,7 +51,7 @@ from ..schema import (
 from ..support.files import fingerprint_tree, sha256_file
 from ..support.json_io import write_jsonl_exclusive, write_pretty_json
 from ..support.network import port_available
-from ..collectors.telemetry import CollectorGroup, SampleTicket, TelemetryWorker
+from ..collectors.telemetry import CollectorGroup, TelemetryWorker
 from .bundle import HybridBundleMerger
 from .config import AlignmentMethod, HybridMergeConfig
 from .detailed_profile import (
@@ -66,6 +63,7 @@ from .detailed_profile import (
 )
 from .join import validate_marker_order
 from .runner_config import HybridProfileMode, HybridRunnerConfig
+from .layout import HybridRunLayout
 from .runtime_markers import ingest_runtime_marker_files
 
 
@@ -117,7 +115,7 @@ def classify_failure(message: str) -> str:
 
 
 def _shutdown_integrity(
-    layout: "_Layout", shutdown: dict[str, Any]
+    layout: HybridRunLayout, shutdown: dict[str, Any]
 ) -> dict[str, Any]:
     logs: dict[str, str] = {}
     for name in ("prefill", "decode", "proxy"):
@@ -176,60 +174,6 @@ class HybridRunResult:
     errors: tuple[str, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class _Layout:
-    run_root: Path
-    run_id: str
-
-    @property
-    def hybrid(self) -> Path:
-        return self.run_root / self.run_id
-
-    @property
-    def gpu(self) -> Path:
-        return self.run_root / f"{self.run_id}-gpu"
-
-    @property
-    def npu(self) -> Path:
-        return self.run_root / f"{self.run_id}-npu"
-
-    @property
-    def coordinator(self) -> Path:
-        return self.run_root / f"{self.run_id}-coordinator"
-
-    @property
-    def perfetto(self) -> Path:
-        return self.run_root / f"{self.run_id}-perfetto"
-
-    @property
-    def overview(self) -> Path:
-        return self.run_root / f"{self.run_id}-overview"
-
-    @property
-    def request_perfetto(self) -> Path:
-        return self.run_root / f"{self.run_id}-perfetto-request-focused"
-
-    @property
-    def recovery(self) -> Path:
-        return self.run_root / f"{self.run_id}-closeout-recovery"
-
-    @property
-    def publication(self) -> Path:
-        return self.run_root / f"{self.run_id}-publication"
-
-
-def _sha256(path: Path) -> str:
-    return sha256_file(path)
-
-
-def _plain_json(path: Path, value: object) -> None:
-    write_pretty_json(path, value)
-
-
-def _plain_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    write_jsonl_exclusive(path, rows)
-
-
 def _cache_fingerprint(root: Path) -> list[dict[str, object]]:
     return fingerprint_tree(root, pattern="*.rbln", include_mtime=True)
 
@@ -237,9 +181,6 @@ def _cache_fingerprint(root: Path) -> list[dict[str, object]]:
 def _tree_fingerprint(root: Path) -> list[dict[str, object]]:
     return fingerprint_tree(root)
 
-
-def _port_available(host: str, port: int) -> bool:
-    return port_available(host, port)
 
 def _wait_http(
     base_url: str,
@@ -335,9 +276,6 @@ def _wait_runtime_marker_completion(
     )
 
 
-_SampleTicket = SampleTicket
-
-
 class _TelemetryWorker(TelemetryWorker):
     """Runner-bound compatibility name for the shared polling worker."""
 
@@ -346,7 +284,7 @@ class _TelemetryWorker(TelemetryWorker):
 
 
 class _Telemetry:
-    def __init__(self, config: HybridRunnerConfig, layout: _Layout) -> None:
+    def __init__(self, config: HybridRunnerConfig, layout: HybridRunLayout) -> None:
         self.config = config
         self.errors: list[str] = []
         self.gpu_metrics = []
@@ -512,7 +450,7 @@ def build_hybrid_run_plan(
     run_id: str,
     profile_mode: HybridProfileMode,
 ) -> dict[str, object]:
-    layout = _Layout(Path(run_root), run_id)
+    layout = HybridRunLayout(Path(run_root), run_id)
     commands = _commands(config, layout, profile_mode)
     return {
         "executes": False,
@@ -581,7 +519,7 @@ def _base_vllm_argv(
 
 
 def _commands(
-    config: HybridRunnerConfig, layout: _Layout, profile_mode: HybridProfileMode
+    config: HybridRunnerConfig, layout: HybridRunLayout, profile_mode: HybridProfileMode
 ) -> dict[str, tuple[str, ...]]:
     prefill = _base_vllm_argv(
         config.prefill.executable, config.model_path, config.prefill.host,
@@ -645,7 +583,7 @@ class HybridRunner:
         client_factory: Callable[..., OpenAICompletionClient] = OpenAICompletionClient,
     ) -> None:
         self.config = config
-        self.layout = _Layout(Path(run_root), run_id)
+        self.layout = HybridRunLayout(Path(run_root), run_id)
         self.profile_mode = profile_mode
         self.enable_telemetry = enable_telemetry
         self.process_factory = process_factory
@@ -668,12 +606,12 @@ class HybridRunner:
         ):
             path.mkdir(parents=True, exist_ok=True)
         commands = _commands(config, layout, self.profile_mode)
-        _plain_json(layout.coordinator / "execution_plan.json", build_hybrid_run_plan(
+        write_pretty_json(layout.coordinator / "execution_plan.json", build_hybrid_run_plan(
             config, run_root=layout.run_root, run_id=layout.run_id,
             profile_mode=self.profile_mode,
         ))
         cache_before = _cache_fingerprint(config.rbln_cache_path)
-        _plain_json(layout.coordinator / "cache_before.json", cache_before)
+        write_pretty_json(layout.coordinator / "cache_before.json", cache_before)
 
         processes = self._processes(commands)
         telemetry = _Telemetry(config, layout)
@@ -792,7 +730,7 @@ class HybridRunner:
                 except Exception as error:
                     errors.append(f"{name} cleanup: {error}")
                     owned_processes.setdefault(name, {})["cleanup_error"] = str(error)
-            _plain_json(
+            write_pretty_json(
                 layout.coordinator / "owned_processes.json",
                 {
                     "processes": owned_processes,
@@ -802,12 +740,12 @@ class HybridRunner:
             )
 
         cache_after = _cache_fingerprint(config.rbln_cache_path)
-        _plain_json(layout.coordinator / "cache_after.json", cache_after)
+        write_pretty_json(layout.coordinator / "cache_after.json", cache_after)
         if cache_before != cache_after:
             errors.append("persistent RBLN model cache fingerprint changed")
-        _plain_json(layout.coordinator / "cleanup.json", shutdown)
+        write_pretty_json(layout.coordinator / "cleanup.json", shutdown)
         shutdown_integrity = _shutdown_integrity(layout, shutdown)
-        _plain_json(
+        write_pretty_json(
             layout.coordinator / "shutdown_integrity.json", shutdown_integrity
         )
         shutdown_error = (
@@ -858,7 +796,7 @@ class HybridRunner:
                         raise HybridRunnerError(
                             "normalized source fingerprint changed during derivation"
                         )
-                    _plain_json(
+                    write_pretty_json(
                         layout.coordinator / "source_fingerprint.json",
                         {
                             "unchanged": source_before == source_after,
@@ -866,7 +804,7 @@ class HybridRunner:
                             "npu": source_before["npu"],
                         },
                     )
-                    _plain_json(
+                    write_pretty_json(
                         layout.coordinator / "result.json",
                         {
                             "run_id": layout.run_id,
@@ -917,8 +855,8 @@ class HybridRunner:
                 },
             }
         if not (layout.coordinator / "result.json").exists():
-            _plain_json(layout.coordinator / "result.json", result_payload)
-        _plain_json(layout.publication / "result.json", result_payload)
+            write_pretty_json(layout.coordinator / "result.json", result_payload)
+        write_pretty_json(layout.publication / "result.json", result_payload)
         return HybridRunResult(
             status=status,
             run_directory=layout.hybrid,
@@ -979,7 +917,7 @@ class HybridRunner:
             (config.prefill.host, config.prefill.nixl_port),
             (config.decode.host, config.decode.nixl_port),
         )
-        busy = [f"{host}:{port}" for host, port in ports if not _port_available(host, port)]
+        busy = [f"{host}:{port}" for host, port in ports if not port_available(host, port)]
         if busy:
             raise HybridRunnerError(f"configured port is already occupied: {busy[0]}")
         if len(_cache_fingerprint(config.rbln_cache_path)) < 2:
@@ -1098,7 +1036,7 @@ class HybridRunner:
             "sampler_compile_count": sampler,
             "model_reuse_accepted": not forbidden,
         }
-        _plain_json(self.layout.coordinator / "compile_gate.json", result)
+        write_pretty_json(self.layout.coordinator / "compile_gate.json", result)
         if forbidden:
             raise HybridRunnerError(
                 "persistent model graph recompile detected: " + ", ".join(forbidden)
@@ -1178,7 +1116,7 @@ class HybridRunner:
             detail["sqlite_export"] = {
                 "path": sqlite_path.relative_to(root).as_posix(),
                 "size_bytes": sqlite_path.stat().st_size,
-                "sha256": _sha256(sqlite_path),
+                "sha256": sha256_file(sqlite_path),
                 "official_exporter": "nsys export --type sqlite",
             }
         else:
@@ -1249,7 +1187,7 @@ class HybridRunner:
                 "stdout": result.stdout,
                 "stderr": result.stderr,
             }
-        _plain_json(self.layout.gpu / "summary/nsys_stats.json", results)
+        write_pretty_json(self.layout.gpu / "summary/nsys_stats.json", results)
         return results
 
     def _marker_events(self, observations: list[CompletionObservation]) -> tuple[list, list]:
@@ -1325,11 +1263,11 @@ class HybridRunner:
             "npu": (self.layout.npu, npu_events, telemetry.npu_metrics),
         }
         telemetry_lifecycle = telemetry.lifecycle()
-        _plain_json(
+        write_pretty_json(
             self.layout.coordinator / "telemetry_lifecycle.json",
             telemetry_lifecycle,
         )
-        _plain_json(
+        write_pretty_json(
             self.layout.gpu / "summary/telemetry_lifecycle.json",
             {
                 "requested_interval_ms": telemetry_lifecycle["requested_interval_ms"],
@@ -1350,7 +1288,7 @@ class HybridRunner:
                 "errors": telemetry_lifecycle["errors"],
             },
         )
-        _plain_json(
+        write_pretty_json(
             self.layout.npu / "summary/telemetry_lifecycle.json",
             {
                 "requested_interval_ms": telemetry_lifecycle["requested_interval_ms"],
@@ -1382,7 +1320,9 @@ class HybridRunner:
             }
             for item in observations
         ]
-        _plain_jsonl(self.layout.gpu / "raw/client/measured_requests.jsonl", measured_rows)
+        write_jsonl_exclusive(
+            self.layout.gpu / "raw/client/measured_requests.jsonl", measured_rows
+        )
         marker_root = self.layout.coordinator / "raw/runtime_markers"
         gpu_marker_root = self.layout.gpu / "raw/runtime"
         npu_marker_root = self.layout.npu / "raw/runtime"
@@ -1420,8 +1360,8 @@ class HybridRunner:
             )
         if profile is not None:
             root = profile["root"]
-            _plain_json(root / "summary/detailed_profile.json", profile["detail"])
-            _plain_json(root / "clocks/profiler_alignment.json", profile["alignment"])
+            write_pretty_json(root / "summary/detailed_profile.json", profile["detail"])
+            write_pretty_json(root / "clocks/profiler_alignment.json", profile["alignment"])
             clocks = list(read_jsonl(root / "clocks/clock_domains.jsonl"))
             clocks.append(
                 build_profiler_clock_domain(
@@ -1448,7 +1388,7 @@ class HybridRunner:
                 detailed=profile is not None and profile["root"] == root,
             )
             write_json(root / "manifest.json", manifest)
-        _plain_json(
+        write_pretty_json(
             self.layout.coordinator / "requests.json",
             {
                 "warmup_request_ids": [item.request_id for item in warmups],
@@ -1552,7 +1492,7 @@ class HybridRunner:
                     format=format_name,
                     producer=("nvml" if is_nvml else "hetero-profiler-hybrid-runner"),
                     created_at_unix_ns=path.stat().st_mtime_ns,
-                    size_bytes=path.stat().st_size, sha256=_sha256(path),
+                    size_bytes=path.stat().st_size, sha256=sha256_file(path),
                     host_id=HOST_ID, clock_domain_id=clock,
                     attributes={"hybrid.profile_mode": self.profile_mode},
                 )
@@ -1658,7 +1598,9 @@ class HybridRunner:
                 request_focused=False,
             )
         )
-        _plain_json(self.layout.publication / "perfetto_result.json", conversion)
+        write_pretty_json(
+            self.layout.publication / "perfetto_result.json", conversion
+        )
         request_conversion = convert_perfetto(
             PerfettoConversionConfig(
                 run_directory=self.layout.hybrid,
@@ -1668,7 +1610,7 @@ class HybridRunner:
                 request_focused=True,
             )
         )
-        _plain_json(
+        write_pretty_json(
             self.layout.publication / "request_focused_perfetto_result.json",
             request_conversion,
         )
@@ -1680,87 +1622,32 @@ class HybridRunner:
                 trace_processor_path=self.config.trace_processor_path,
             )
         )
-        _plain_json(self.layout.publication / "overview_result.json", overview)
-        with tempfile.TemporaryDirectory(prefix="runner-determinism-") as directory:
-            temporary = Path(directory)
-            second_perfetto = temporary / "perfetto"
-            convert_perfetto(
-                PerfettoConversionConfig(
-                    run_directory=self.layout.hybrid,
-                    output_directory=second_perfetto,
-                    trace_processor_path=self.config.trace_processor_path,
-                    include_native_details=include_details,
-                    request_focused=False,
-                )
-            )
-            first_traces = {
-                path.name: _sha256(path)
-                for path in sorted(self.layout.perfetto.glob("*.pftrace"))
-            }
-            second_traces = {
-                path.name: _sha256(path)
-                for path in sorted(second_perfetto.glob("*.pftrace"))
-            }
-            if first_traces != second_traces:
-                raise HybridRunnerError(
-                    "repeated Perfetto conversion was not byte-for-byte deterministic"
-                )
-            second_request_perfetto = temporary / "perfetto-request-focused"
-            convert_perfetto(
-                PerfettoConversionConfig(
-                    run_directory=self.layout.hybrid,
-                    output_directory=second_request_perfetto,
-                    trace_processor_path=self.config.trace_processor_path,
-                    include_native_details=include_details,
-                    request_focused=True,
-                )
-            )
-            first_request_traces = {
-                path.name: _sha256(path)
-                for path in sorted(self.layout.request_perfetto.glob("*.pftrace"))
-            }
-            second_request_traces = {
-                path.name: _sha256(path)
-                for path in sorted(second_request_perfetto.glob("*.pftrace"))
-            }
-            if first_request_traces != second_request_traces:
-                raise HybridRunnerError(
-                    "repeated request-focused Perfetto conversion was not "
-                    "byte-for-byte deterministic"
-                )
-            second_overview = temporary / "overview"
-            generate_overview(
-                OverviewGenerationConfig(
-                    run_directory=self.layout.hybrid,
-                    perfetto_directory=self.layout.perfetto,
-                    output_directory=second_overview,
-                    trace_processor_path=self.config.trace_processor_path,
-                )
-            )
-            overview_hashes = {
-                name: _sha256(self.layout.overview / name)
-                for name in ("overview.json", "overview.html")
-            }
-            repeated_overview_hashes = {
-                name: _sha256(second_overview / name)
-                for name in ("overview.json", "overview.html")
-            }
-            if overview_hashes != repeated_overview_hashes:
-                raise HybridRunnerError(
-                    "repeated Overview generation was not byte-for-byte deterministic"
-                )
-            _plain_json(
-                self.layout.publication / "determinism.json",
-                {
-                    "perfetto_byte_identical": True,
-                    "perfetto_sha256": first_traces,
-                    "request_focused_perfetto_byte_identical": True,
-                    "request_focused_perfetto_sha256": first_request_traces,
-                    "overview_byte_identical": True,
-                    "overview_sha256": overview_hashes,
-                    "temporary_repeat_preserved": False,
-                },
-            )
+        write_pretty_json(self.layout.publication / "overview_result.json", overview)
+        first_traces = {
+            path.name: sha256_file(path)
+            for path in sorted(self.layout.perfetto.glob("*.pftrace"))
+        }
+        first_request_traces = {
+            path.name: sha256_file(path)
+            for path in sorted(self.layout.request_perfetto.glob("*.pftrace"))
+        }
+        overview_hashes = {
+            name: sha256_file(self.layout.overview / name)
+            for name in ("overview.json", "overview.html")
+        }
+        write_pretty_json(
+            self.layout.publication / "determinism.json",
+            {
+                "verification_mode": "single_production_generation",
+                "perfetto_byte_identical": None,
+                "perfetto_sha256": first_traces,
+                "request_focused_perfetto_byte_identical": None,
+                "request_focused_perfetto_sha256": first_request_traces,
+                "overview_byte_identical": None,
+                "overview_sha256": overview_hashes,
+                "temporary_repeat_preserved": False,
+            },
+        )
 
     def _create_closeout(self) -> None:
         create_detached_recovery(

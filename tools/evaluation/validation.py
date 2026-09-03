@@ -5,13 +5,21 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+import re
 from typing import Any
+
+from perfetto_hetero_profiler.support.files import sha256_file
 
 from .accuracy import client_latency_accuracy, exact_count_accuracy, exact_marker_accuracy
 
 
 class TrialValidationError(RuntimeError):
     pass
+
+
+_SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,191}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_HASH_EVIDENCE_ERROR = "derived product hash evidence is invalid"
 
 
 def _json(path: Path) -> Any:
@@ -47,6 +55,77 @@ def _mean(values: list[float], field: str) -> float:
     if not values:
         raise TrialValidationError(f"{field} is empty")
     return math.fsum(values) / len(values)
+
+
+def _validate_hash_mapping(
+    value: object,
+    *,
+    root: Path,
+    expected_names: set[str],
+) -> None:
+    if not isinstance(value, dict) or not value:
+        raise ValueError(_HASH_EVIDENCE_ERROR)
+    for name, digest in value.items():
+        if (
+            not isinstance(name, str)
+            or _SAFE_FILENAME_RE.fullmatch(name) is None
+            or not isinstance(digest, str)
+            or _SHA256_RE.fullmatch(digest) is None
+        ):
+            raise ValueError(_HASH_EVIDENCE_ERROR)
+    if set(value) != expected_names:
+        raise ValueError(_HASH_EVIDENCE_ERROR)
+    if any(sha256_file(root / name) != value[name] for name in expected_names):
+        raise ValueError(_HASH_EVIDENCE_ERROR)
+
+
+def _validate_derived_product_hashes(
+    evidence: object,
+    roots: dict[str, Path],
+) -> None:
+    try:
+        if not isinstance(evidence, dict):
+            raise ValueError(_HASH_EVIDENCE_ERROR)
+        status_fields = (
+            "perfetto_byte_identical",
+            "request_focused_perfetto_byte_identical",
+            "overview_byte_identical",
+        )
+        hash_roots = {
+            "perfetto_sha256": (roots["perfetto"], {
+                path.name
+                for path in roots["perfetto"].glob("*.pftrace")
+                if path.is_file()
+            }),
+            "request_focused_perfetto_sha256": (roots["focused"], {
+                path.name
+                for path in roots["focused"].glob("*.pftrace")
+                if path.is_file()
+            }),
+            "overview_sha256": (
+                roots["overview"],
+                {"overview.json", "overview.html"},
+            ),
+        }
+        legacy_repeat = all(evidence.get(name) is True for name in status_fields)
+        production_single = (
+            evidence.get("verification_mode") == "single_production_generation"
+            and all(
+                name in evidence and evidence[name] is None
+                for name in status_fields
+            )
+        )
+        if not (legacy_repeat or production_single):
+            raise ValueError(_HASH_EVIDENCE_ERROR)
+        for field, (root, expected_names) in hash_roots.items():
+            if production_single or field in evidence:
+                _validate_hash_mapping(
+                    evidence.get(field),
+                    root=root,
+                    expected_names=expected_names,
+                )
+    except (OSError, TypeError, ValueError, KeyError):
+        raise TrialValidationError(_HASH_EVIDENCE_ERROR) from None
 
 
 def _paths(attempt: Path, attempt_id: str) -> dict[str, Path]:
@@ -246,15 +325,7 @@ def validate_trial(
     if any(item.get("killed") is True or item.get("terminated") is not True for item in cleanup.values()):
         raise TrialValidationError("process cleanup is incomplete")
     determinism = _json(roots["publication"] / "determinism.json")
-    if any(
-        determinism.get(name) is not True
-        for name in (
-            "perfetto_byte_identical",
-            "request_focused_perfetto_byte_identical",
-            "overview_byte_identical",
-        )
-    ):
-        raise TrialValidationError("derived output is not deterministic")
+    _validate_derived_product_hashes(determinism, roots)
 
     throughput = {
         name: _finite(run_metrics[name].get("value"), name)

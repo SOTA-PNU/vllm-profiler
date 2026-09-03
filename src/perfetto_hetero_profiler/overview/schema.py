@@ -1,23 +1,17 @@
-"""Strict semantic validation and canonical JSON for Overview model v1.
-
-The checked-in JSON Schema documents are the portable contract.  This module
-implements the same contract without depending on a third-party JSON Schema
-runtime, and adds cross-field rules that JSON Schema cannot express clearly
-(catalog units, availability/null coupling, resource count reconciliation,
-and report resource reconciliation).
-"""
+"""JSON Schema structure and semantic validation for Overview model v1."""
 
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
 from enum import Enum
+from functools import lru_cache
 import hashlib
 from importlib import resources
 import json
 import math
 from pathlib import PurePosixPath, PureWindowsPath
 import re
-from typing import Any, Iterable, Mapping, Sequence, TypeVar
+from typing import Any, Mapping, TypeVar
 
 from ..schema import Availability, METRIC_CATALOG
 from ..schema.catalog import (
@@ -25,9 +19,14 @@ from ..schema.catalog import (
     KPI_SECTION_METRICS,
     RESOURCE_AGGREGATIONS,
 )
-from ..schema.constants import JSON_SCHEMA_DRAFT, SCHEMA_VERSION, SHA256_RE
+from ..schema.constants import JSON_SCHEMA_DRAFT
+from ..schema.jsonschema_runtime import (
+    JsonSchemaFailure,
+    compile_schema,
+    validate_schema_document,
+)
+from ..support.json_io import compact_json_bytes
 from .model import (
-    OVERVIEW_MODEL_VERSION,
     OVERVIEW_REPORT_RECORD_TYPE,
     DisplayRule,
     KpiCalculation,
@@ -73,123 +72,12 @@ _ALIGNMENT_STATUSES = {
     "not_available",
     "unknown",
 }
-_RUN_MODES = {"gpu_only", "npu_only", "hybrid"}
-_RUN_STATUSES = {
-    "planned",
-    "running",
-    "succeeded",
-    "failed",
-    "partial",
-    "cancelled",
-}
-_PROFILE_MODES = {"monitor", "detailed_profile"}
 _RESOURCE_AGGREGATIONS = dict(RESOURCE_AGGREGATIONS)
 _INTERVAL_RESOURCE_METRICS = INTERVAL_RESOURCE_METRICS
-_RUN_FIELDS = {
-    "run_id",
-    "mode",
-    "profile_mode",
-    "status",
-    "profiler_kind",
-    "canonical_clock_domain_id",
-}
 _REQUEST_FACING_KPIS = KPI_SECTION_METRICS["request_facing_latency"]
 _PIPELINE_KPIS = KPI_SECTION_METRICS["pipeline_latency"]
 _THROUGHPUT_TOKEN_KPIS = KPI_SECTION_METRICS["throughput_and_tokens"]
 _TRANSFER_KPIS = KPI_SECTION_METRICS["transfer"]
-_DATA_QUALITY_FIELDS = {
-    "run_status",
-    "canonical_marker_count",
-    "marker_validation",
-    "request_join",
-    "alignment",
-    "resource_samples",
-    "profiler",
-    "source_artifact_validation",
-    "perfetto_sql_validation",
-    "trace_sha256",
-    "per_sample_stream_preserved",
-    "cleanup_complete",
-    "rbln_pb_policy",
-    "sample_limitations",
-}
-_WORKLOAD_FIELDS = {
-    "request_count",
-    "input_tokens",
-    "output_tokens",
-    "total_tokens",
-    "concurrency",
-    "request_rate_per_s",
-    "warmup_requests",
-    "max_output_tokens",
-    "temperature",
-    "retry_count",
-    "prompt_sha256",
-    "request_body_sha256",
-    "offline",
-    "max_model_len",
-    "block_size",
-}
-_MODEL_FIELDS = {"role", "model_id", "revision", "dtype"}
-_HARDWARE_FIELDS = {
-    "device_type",
-    "device_id",
-    "vendor",
-    "model",
-    "memory_total_bytes",
-}
-_NATIVE_PROFILE_FIELDS = {
-    "profiler_type",
-    "source_role",
-    "timestamp_ns",
-    "duration_ns",
-    "alignment_status",
-    "alignment_method",
-    "uncertainty_ns",
-    "native_clock_domain",
-    "native_timestamp_unit",
-    "artifact_count",
-    "opaque_rbln_pb",
-    "native_event_alignment",
-    "structure_analysis",
-}
-_INTERPRETATION_FIELDS = {
-    "comparison_scope",
-    "benchmark_claim_allowed",
-    "limitations",
-    "policies",
-}
-_INTERPRETATION_POLICY_FIELDS = {
-    "request_observation_layers_separate",
-    "timestamp_proximity_join",
-    "unavailable_zero_fill",
-    "native_clock_inference",
-    "rbln_pb_parsing",
-    "resource_device_aggregation",
-}
-_PERFETTO_FIELDS = {
-    "valid",
-    "trace",
-    "counts",
-    "query_count",
-    "queries",
-    "mismatches",
-    "flow_endpoint_reconciliation",
-    "artifact_validation",
-    "toolchain",
-}
-_PERFETTO_COUNT_FIELDS = {
-    "annotations",
-    "counters",
-    "dangling_flows",
-    "flows",
-    "import_errors",
-    "native_policy",
-    "process",
-    "slices",
-    "step_annotations",
-    "tracks",
-}
 _DISPLAY_SCALES: dict[str, dict[str, tuple[int, int]]] = {
     "ns": {
         "ns": (1, 1),
@@ -232,6 +120,22 @@ class OverviewSchemaError(ValueError):
 
 def _fail(path: str, message: str) -> None:
     raise OverviewSchemaError(path, message)
+
+
+@lru_cache(maxsize=1)
+def _overview_validator():
+    return compile_schema(load_json_schema(OVERVIEW_REPORT_RECORD_TYPE))
+
+
+def _validate_report_structure(value: object) -> None:
+    try:
+        validate_schema_document(
+            value,
+            _overview_validator(),
+            root_path="overview",
+        )
+    except JsonSchemaFailure as error:
+        raise OverviewSchemaError(error.field_path, error.message) from error
 
 
 def _require_type(value: object, expected: type[_ModelT], path: str) -> _ModelT:
@@ -876,164 +780,31 @@ def _exact_mapping(
 
 
 def _validate_data_quality(value: object, path: str) -> None:
-    data = _exact_mapping(
-        value,
-        fields=_DATA_QUALITY_FIELDS,
-        path=path,
-    )
-    if data["run_status"] not in _RUN_STATUSES:
-        _fail(f"{path}.run_status", "is not a valid run status")
-    _integer(
-        data["canonical_marker_count"],
-        f"{path}.canonical_marker_count",
-        minimum=0,
-    )
-
-    marker = _exact_mapping(
-        data["marker_validation"],
-        fields={
-            "status",
-            "missing_count",
-            "duplicate_count",
-            "pairing_violation_count",
-            "order_violation_count",
-        },
-        path=f"{path}.marker_validation",
-    )
-    _nonempty(marker["status"], f"{path}.marker_validation.status")
-    for name in (
-        "missing_count",
-        "duplicate_count",
-        "pairing_violation_count",
-        "order_violation_count",
-    ):
-        _integer(
-            marker[name],
-            f"{path}.marker_validation.{name}",
-            minimum=0,
-        )
-
-    joined = _exact_mapping(
-        data["request_join"],
-        fields={"joined_count", "unjoined_count", "method"},
-        path=f"{path}.request_join",
-    )
-    _integer(joined["joined_count"], f"{path}.request_join.joined_count", minimum=0)
-    _integer(
-        joined["unjoined_count"],
-        f"{path}.request_join.unjoined_count",
-        minimum=0,
-    )
-    _nonempty(joined["method"], f"{path}.request_join.method")
-
-    alignment = _exact_mapping(
-        data["alignment"],
-        fields={"status", "method", "offset_ns", "uncertainty_ns"},
-        path=f"{path}.alignment",
-    )
-    if alignment["status"] not in _ALIGNMENT_STATUSES:
-        _fail(f"{path}.alignment.status", "is invalid")
-    if alignment["method"] is not None:
-        _nonempty(alignment["method"], f"{path}.alignment.method")
-    _integer(
-        alignment["offset_ns"],
-        f"{path}.alignment.offset_ns",
-        nullable=True,
-    )
-    _integer(
-        alignment["uncertainty_ns"],
-        f"{path}.alignment.uncertainty_ns",
-        minimum=0,
-        nullable=True,
-    )
-
-    samples = _exact_mapping(
-        data["resource_samples"],
-        fields={"total", "available", "unavailable"},
-        path=f"{path}.resource_samples",
-    )
-    total = _integer(samples["total"], f"{path}.resource_samples.total", minimum=0)
-    available = _integer(
-        samples["available"],
-        f"{path}.resource_samples.available",
-        minimum=0,
-    )
-    unavailable = _integer(
-        samples["unavailable"],
-        f"{path}.resource_samples.unavailable",
-        minimum=0,
-    )
+    assert isinstance(value, Mapping)
+    data = value
+    samples = data["resource_samples"]
+    assert isinstance(samples, Mapping)
+    total = samples["total"]
+    available = samples["available"]
+    unavailable = samples["unavailable"]
     if total != available + unavailable:
         _fail(
             f"{path}.resource_samples",
             "total must equal available + unavailable",
         )
 
-    profiler = _exact_mapping(
-        data["profiler"],
-        fields={"kind", "native_alignment_status"},
-        path=f"{path}.profiler",
-    )
-    _nonempty(profiler["kind"], f"{path}.profiler.kind")
-    if profiler["native_alignment_status"] not in _ALIGNMENT_STATUSES:
-        _fail(f"{path}.profiler.native_alignment_status", "is invalid")
-
-    source = _exact_mapping(
-        data["source_artifact_validation"],
-        fields={
-            "valid",
-            "closeout_artifact_count",
-            "closeout_manifest_sha256",
-            "roots",
-        },
-        path=f"{path}.source_artifact_validation",
-    )
-    if not isinstance(source["valid"], bool):
-        _fail(f"{path}.source_artifact_validation.valid", "must be boolean")
-    _integer(
-        source["closeout_artifact_count"],
-        f"{path}.source_artifact_validation.closeout_artifact_count",
-        minimum=0,
-    )
-    if (
-        not isinstance(source["closeout_manifest_sha256"], str)
-        or SHA256_RE.fullmatch(source["closeout_manifest_sha256"]) is None
-    ):
-        _fail(
-            f"{path}.source_artifact_validation.closeout_manifest_sha256",
-            "must be lowercase SHA-256",
-        )
+    source = data["source_artifact_validation"]
+    assert isinstance(source, Mapping)
     roots = source["roots"]
-    if not isinstance(roots, list):
-        _fail(f"{path}.source_artifact_validation.roots", "must be an array")
+    assert isinstance(roots, list)
     root_keys: list[str] = []
     for index, root in enumerate(roots):
-        root_data = _exact_mapping(
-            root,
-            fields={"root_id", "file_count", "fingerprint_sha256"},
-            path=f"{path}.source_artifact_validation.roots[{index}]",
-        )
-        root_id = _nonempty(
-            root_data["root_id"],
-            f"{path}.source_artifact_validation.roots[{index}].root_id",
-        )
+        assert isinstance(root, Mapping)
+        root_id = str(root["root_id"])
         if _ROOT_ID_RE.fullmatch(root_id) is None:
             _fail(
                 f"{path}.source_artifact_validation.roots[{index}].root_id",
                 "is not a safe root id",
-            )
-        _integer(
-            root_data["file_count"],
-            f"{path}.source_artifact_validation.roots[{index}].file_count",
-            minimum=0,
-        )
-        if (
-            not isinstance(root_data["fingerprint_sha256"], str)
-            or SHA256_RE.fullmatch(root_data["fingerprint_sha256"]) is None
-        ):
-            _fail(
-                f"{path}.source_artifact_validation.roots[{index}].fingerprint_sha256",
-                "must be lowercase SHA-256",
             )
         root_keys.append(root_id)
     if root_keys != sorted(set(root_keys)):
@@ -1042,112 +813,23 @@ def _validate_data_quality(value: object, path: str) -> None:
             "must be sorted by unique root_id",
         )
 
-    perfetto = _exact_mapping(
-        data["perfetto_sql_validation"],
-        fields={"valid", "query_count", "mismatches"},
-        path=f"{path}.perfetto_sql_validation",
-    )
-    if not isinstance(perfetto["valid"], bool):
-        _fail(f"{path}.perfetto_sql_validation.valid", "must be boolean")
-    _integer(
-        perfetto["query_count"],
-        f"{path}.perfetto_sql_validation.query_count",
-        minimum=0,
-    )
-    mismatches = perfetto["mismatches"]
-    if not isinstance(mismatches, list):
-        _fail(f"{path}.perfetto_sql_validation.mismatches", "must be an array")
-    mismatch_values = tuple(
-        _nonempty(item, f"{path}.perfetto_sql_validation.mismatches[{index}]")
-        for index, item in enumerate(mismatches)
-    )
+    perfetto = data["perfetto_sql_validation"]
+    assert isinstance(perfetto, Mapping)
+    mismatch_values = tuple(perfetto["mismatches"])
     if mismatch_values != tuple(sorted(set(mismatch_values))):
         _fail(
             f"{path}.perfetto_sql_validation.mismatches",
             "must be sorted without duplicates",
         )
 
-    if (
-        not isinstance(data["trace_sha256"], str)
-        or SHA256_RE.fullmatch(data["trace_sha256"]) is None
-    ):
-        _fail(f"{path}.trace_sha256", "must be lowercase SHA-256")
-    for name in ("per_sample_stream_preserved", "cleanup_complete"):
-        if not isinstance(data[name], bool):
-            _fail(f"{path}.{name}", "must be boolean")
-    rbln_policy = _exact_mapping(
-        data["rbln_pb_policy"],
-        fields={"classification", "structure_analysis", "raw_bytes_embedded"},
-        path=f"{path}.rbln_pb_policy",
-    )
-    _nonempty(
-        rbln_policy["classification"],
-        f"{path}.rbln_pb_policy.classification",
-    )
-    _nonempty(
-        rbln_policy["structure_analysis"],
-        f"{path}.rbln_pb_policy.structure_analysis",
-    )
-    if not isinstance(rbln_policy["raw_bytes_embedded"], bool):
-        _fail(f"{path}.rbln_pb_policy.raw_bytes_embedded", "must be boolean")
-    if rbln_policy["raw_bytes_embedded"]:
-        _fail(
-            f"{path}.rbln_pb_policy.raw_bytes_embedded",
-            "must be false; RBLN PB is published as a separate native-relative "
-            "Perfetto trace rather than embedded in the Overview report",
-        )
-    limitations = data["sample_limitations"]
-    if not isinstance(limitations, list):
-        _fail(f"{path}.sample_limitations", "must be an array")
-    limitation_values = tuple(
-        _nonempty(item, f"{path}.sample_limitations[{index}]")
-        for index, item in enumerate(limitations)
-    )
+    limitation_values = tuple(data["sample_limitations"])
     if limitation_values != tuple(sorted(set(limitation_values))):
         _fail(f"{path}.sample_limitations", "must be sorted without duplicates")
 
 
 def _validate_workload(value: object, path: str) -> None:
-    workload = _exact_mapping(value, fields=_WORKLOAD_FIELDS, path=path)
-    integer_fields = (
-        "request_count",
-        "input_tokens",
-        "output_tokens",
-        "total_tokens",
-        "concurrency",
-        "warmup_requests",
-        "max_output_tokens",
-        "retry_count",
-        "max_model_len",
-        "block_size",
-    )
-    for name in integer_fields:
-        _integer(
-            workload[name],
-            f"{path}.{name}",
-            minimum=0,
-            nullable=True,
-        )
-    _number(
-        workload["request_rate_per_s"],
-        f"{path}.request_rate_per_s",
-        minimum=0,
-        nullable=True,
-    )
-    _number(
-        workload["temperature"],
-        f"{path}.temperature",
-        minimum=0,
-        nullable=True,
-    )
-    for name in ("prompt_sha256", "request_body_sha256"):
-        digest = workload[name]
-        if digest is not None and (
-            not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None
-        ):
-            _fail(f"{path}.{name}", "must be null or lowercase SHA-256")
-    if workload["offline"] is not None and not isinstance(workload["offline"], bool):
-        _fail(f"{path}.offline", "must be boolean or null")
+    assert isinstance(value, Mapping)
+    workload = value
     input_tokens = workload["input_tokens"]
     output_tokens = workload["output_tokens"]
     total_tokens = workload["total_tokens"]
@@ -1164,118 +846,32 @@ def _validate_workload(value: object, path: str) -> None:
 
 
 def _validate_models(values: object, path: str) -> None:
-    if not isinstance(values, tuple) or not values:
-        _fail(path, "must be a non-empty immutable tuple")
-    keys: list[bytes] = []
-    for index, value in enumerate(values):
-        item_path = f"{path}[{index}]"
-        model = _exact_mapping(value, fields=_MODEL_FIELDS, path=item_path)
-        _nonempty(model["role"], f"{item_path}.role")
-        _nonempty(model["model_id"], f"{item_path}.model_id")
-        for name in ("revision", "dtype"):
-            if model[name] is not None:
-                _nonempty(model[name], f"{item_path}.{name}")
-        keys.append(_canonical_sort_key(model))
+    assert isinstance(values, tuple)
+    keys = [_canonical_sort_key(value) for value in values]
     if keys != sorted(keys) or len(keys) != len(set(keys)):
         _fail(path, "must be deterministically sorted without duplicates")
 
 
 def _validate_hardware(values: object, path: str) -> None:
-    if not isinstance(values, tuple):
-        _fail(path, "must be an immutable tuple")
-    keys: list[bytes] = []
-    for index, value in enumerate(values):
-        item_path = f"{path}[{index}]"
-        device = _exact_mapping(
-            value,
-            fields=_HARDWARE_FIELDS,
-            path=item_path,
-        )
-        for name in ("device_type", "device_id", "vendor", "model"):
-            _nonempty(device[name], f"{item_path}.{name}")
-        _integer(
-            device["memory_total_bytes"],
-            f"{item_path}.memory_total_bytes",
-            minimum=0,
-            nullable=True,
-        )
-        keys.append(_canonical_sort_key(device))
+    assert isinstance(values, tuple)
+    keys = [_canonical_sort_key(value) for value in values]
     if keys != sorted(keys) or len(keys) != len(set(keys)):
         _fail(path, "must be deterministically sorted without duplicates")
 
 
 def _validate_native_profiles(values: object, path: str) -> None:
-    if not isinstance(values, tuple):
-        _fail(path, "must be an immutable tuple")
-    keys: list[bytes] = []
-    for index, value in enumerate(values):
-        item_path = f"{path}[{index}]"
-        profile = _exact_mapping(
-            value,
-            fields=_NATIVE_PROFILE_FIELDS,
-            path=item_path,
-        )
-        for name in (
-            "profiler_type",
-            "source_role",
-            "alignment_method",
-            "native_clock_domain",
-            "native_timestamp_unit",
-            "native_event_alignment",
-            "structure_analysis",
-        ):
-            _nonempty(profile[name], f"{item_path}.{name}")
-        for name in ("timestamp_ns", "duration_ns", "uncertainty_ns", "artifact_count"):
-            _integer(profile[name], f"{item_path}.{name}", minimum=0)
-        if profile["alignment_status"] not in _ALIGNMENT_STATUSES:
-            _fail(f"{item_path}.alignment_status", "is invalid")
-        if not isinstance(profile["opaque_rbln_pb"], bool):
-            _fail(f"{item_path}.opaque_rbln_pb", "must be boolean")
-        keys.append(_canonical_sort_key(profile))
+    assert isinstance(values, tuple)
+    keys = [_canonical_sort_key(value) for value in values]
     if keys != sorted(keys) or len(keys) != len(set(keys)):
         _fail(path, "must be deterministically sorted without duplicates")
 
 
 def _validate_interpretation(value: object, path: str) -> None:
-    interpretation = _exact_mapping(
-        value,
-        fields=_INTERPRETATION_FIELDS,
-        path=path,
-    )
-    _nonempty(interpretation["comparison_scope"], f"{path}.comparison_scope")
-    if not isinstance(interpretation["benchmark_claim_allowed"], bool):
-        _fail(f"{path}.benchmark_claim_allowed", "must be boolean")
-    limitations = interpretation["limitations"]
-    if not isinstance(limitations, list) or not limitations:
-        _fail(f"{path}.limitations", "must be a non-empty array")
-    limitation_values = tuple(
-        _nonempty(item, f"{path}.limitations[{index}]")
-        for index, item in enumerate(limitations)
-    )
+    assert isinstance(value, Mapping)
+    interpretation = value
+    limitation_values = tuple(interpretation["limitations"])
     if limitation_values != tuple(sorted(set(limitation_values))):
         _fail(f"{path}.limitations", "must be sorted without duplicates")
-    policies = _exact_mapping(
-        interpretation["policies"],
-        fields=_INTERPRETATION_POLICY_FIELDS,
-        path=f"{path}.policies",
-    )
-    for name in _INTERPRETATION_POLICY_FIELDS:
-        if not isinstance(policies[name], bool):
-            _fail(f"{path}.policies.{name}", "must be boolean")
-    required_policy_values = {
-        "request_observation_layers_separate": True,
-        "timestamp_proximity_join": False,
-        "unavailable_zero_fill": False,
-        "native_clock_inference": False,
-        "rbln_pb_parsing": False,
-        "resource_device_aggregation": False,
-    }
-    for name, expected in required_policy_values.items():
-        if policies[name] is not expected:
-            _fail(
-                f"{path}.policies.{name}",
-                f"must be {expected} for Overview v1",
-            )
 
 
 def _sorted_json_array(value: object, path: str) -> list[Any]:
@@ -1290,163 +886,44 @@ def _sorted_json_array(value: object, path: str) -> list[Any]:
 
 
 def _validate_perfetto(value: object, path: str) -> None:
-    perfetto = _exact_mapping(value, fields=_PERFETTO_FIELDS, path=path)
-    if not isinstance(perfetto["valid"], bool):
-        _fail(f"{path}.valid", "must be boolean")
-    trace = _exact_mapping(
-        perfetto["trace"],
-        fields={"size_bytes", "sha256"},
-        path=f"{path}.trace",
-    )
-    _integer(trace["size_bytes"], f"{path}.trace.size_bytes", minimum=0)
-    if (
-        not isinstance(trace["sha256"], str)
-        or SHA256_RE.fullmatch(trace["sha256"]) is None
-    ):
-        _fail(f"{path}.trace.sha256", "must be lowercase SHA-256")
-    counts = _exact_mapping(
-        perfetto["counts"],
-        fields=_PERFETTO_COUNT_FIELDS,
-        path=f"{path}.counts",
-    )
-    for name in _PERFETTO_COUNT_FIELDS:
-        _integer(counts[name], f"{path}.counts.{name}", minimum=0)
-    query_count = _integer(
-        perfetto["query_count"],
-        f"{path}.query_count",
-        minimum=0,
-    )
+    assert isinstance(value, Mapping)
+    perfetto = value
+    counts = perfetto["counts"]
+    assert isinstance(counts, Mapping)
+    query_count = perfetto["query_count"]
     queries = perfetto["queries"]
-    if not isinstance(queries, list):
-        _fail(f"{path}.queries", "must be an array")
+    assert isinstance(queries, list)
     query_names: list[str] = []
-    for index, value in enumerate(queries):
-        item_path = f"{path}.queries[{index}]"
-        query = _exact_mapping(
-            value,
-            fields={
-                "name",
-                "row_count",
-                "rows_sha256",
-                "expected_row_count",
-                "expected_rows_sha256",
-                "matched",
-            },
-            path=item_path,
-        )
-        query_names.append(_nonempty(query["name"], f"{item_path}.name"))
-        for name in ("row_count", "expected_row_count"):
-            _integer(query[name], f"{item_path}.{name}", minimum=0)
-        for name in ("rows_sha256", "expected_rows_sha256"):
-            if (
-                not isinstance(query[name], str)
-                or SHA256_RE.fullmatch(query[name]) is None
-            ):
-                _fail(f"{item_path}.{name}", "must be lowercase SHA-256")
-        if not isinstance(query["matched"], bool):
-            _fail(f"{item_path}.matched", "must be boolean")
+    for query in queries:
+        assert isinstance(query, Mapping)
+        query_names.append(str(query["name"]))
     if query_count != len(queries):
         _fail(f"{path}.query_count", "must equal len(queries)")
     if len(query_names) != len(set(query_names)):
         _fail(f"{path}.queries", "must contain unique query names")
 
-    mismatches = perfetto["mismatches"]
-    if not isinstance(mismatches, list):
-        _fail(f"{path}.mismatches", "must be an array")
-    mismatch_values = tuple(
-        _nonempty(item, f"{path}.mismatches[{index}]")
-        for index, item in enumerate(mismatches)
-    )
+    mismatch_values = tuple(perfetto["mismatches"])
     if mismatch_values != tuple(sorted(set(mismatch_values))):
         _fail(f"{path}.mismatches", "must be sorted without duplicates")
 
-    flow = _exact_mapping(
-        perfetto["flow_endpoint_reconciliation"],
-        fields={
-            "declared_flow_ids",
-            "source_endpoint_ids",
-            "destination_endpoint_ids",
-            "matched",
-        },
-        path=f"{path}.flow_endpoint_reconciliation",
-    )
+    flow = perfetto["flow_endpoint_reconciliation"]
+    assert isinstance(flow, Mapping)
     for name in (
         "declared_flow_ids",
         "source_endpoint_ids",
         "destination_endpoint_ids",
     ):
-        values = flow[name]
-        if not isinstance(values, list):
-            _fail(f"{path}.flow_endpoint_reconciliation.{name}", "must be an array")
-        normalized = tuple(
-            _integer(
-                item,
-                f"{path}.flow_endpoint_reconciliation.{name}[{index}]",
-                minimum=1,
-            )
-            for index, item in enumerate(values)
-        )
+        normalized = tuple(flow[name])
         if normalized != tuple(sorted(set(normalized))):
             _fail(
                 f"{path}.flow_endpoint_reconciliation.{name}",
                 "must be sorted without duplicates",
             )
-    if not isinstance(flow["matched"], bool):
-        _fail(f"{path}.flow_endpoint_reconciliation.matched", "must be boolean")
-
-    artifact = _exact_mapping(
-        perfetto["artifact_validation"],
-        fields={"valid", "checked", "mismatches", "manifest_sha256"},
-        path=f"{path}.artifact_validation",
-    )
-    if not isinstance(artifact["valid"], bool):
-        _fail(f"{path}.artifact_validation.valid", "must be boolean")
-    _integer(
-        artifact["checked"],
-        f"{path}.artifact_validation.checked",
-        minimum=0,
-    )
+    artifact = perfetto["artifact_validation"]
+    assert isinstance(artifact, Mapping)
     _sorted_json_array(
         artifact["mismatches"],
         f"{path}.artifact_validation.mismatches",
-    )
-    if (
-        not isinstance(artifact["manifest_sha256"], str)
-        or SHA256_RE.fullmatch(artifact["manifest_sha256"]) is None
-    ):
-        _fail(
-            f"{path}.artifact_validation.manifest_sha256",
-            "must be lowercase SHA-256",
-        )
-
-    toolchain = _exact_mapping(
-        perfetto["toolchain"],
-        fields={
-            "filename",
-            "version",
-            "sha256",
-            "perfetto_package_version",
-            "protobuf_package_version",
-            "trace_processor_rpc_api_version",
-        },
-        path=f"{path}.toolchain",
-    )
-    for name in (
-        "filename",
-        "version",
-        "perfetto_package_version",
-        "protobuf_package_version",
-    ):
-        _nonempty(toolchain[name], f"{path}.toolchain.{name}")
-    if (
-        not isinstance(toolchain["sha256"], str)
-        or SHA256_RE.fullmatch(toolchain["sha256"]) is None
-    ):
-        _fail(f"{path}.toolchain.sha256", "must be lowercase SHA-256")
-    _integer(
-        toolchain["trace_processor_rpc_api_version"],
-        f"{path}.toolchain.trace_processor_rpc_api_version",
-        minimum=0,
     )
     if perfetto["valid"]:
         if mismatch_values or not all(query["matched"] for query in queries):
@@ -1459,34 +936,10 @@ def _validate_perfetto(value: object, path: str) -> None:
 
 def validate_overview_report(report: OverviewReport) -> None:
     _require_type(report, OverviewReport, "overview")
-    if report.schema_version != SCHEMA_VERSION:
-        _fail("overview.schema_version", f"must be {SCHEMA_VERSION}")
-    if report.record_type != OVERVIEW_REPORT_RECORD_TYPE:
-        _fail(
-            "overview.record_type",
-            f"must be {OVERVIEW_REPORT_RECORD_TYPE}",
-        )
-    _json_object(report.run, "overview.run", nonempty=True)
-    if set(report.run) != _RUN_FIELDS:
-        _fail(
-            "overview.run",
-            f"must contain exactly {sorted(_RUN_FIELDS)}",
-        )
-    run_id = _nonempty(report.run["run_id"], "overview.run.run_id")
-    if report.run["mode"] not in _RUN_MODES:
-        _fail("overview.run.mode", f"must be one of {sorted(_RUN_MODES)}")
-    if report.run["status"] not in _RUN_STATUSES:
-        _fail("overview.run.status", f"must be one of {sorted(_RUN_STATUSES)}")
-    if report.run["profile_mode"] not in _PROFILE_MODES:
-        _fail(
-            "overview.run.profile_mode",
-            f"must be one of {sorted(_PROFILE_MODES)}",
-        )
-    _nonempty(report.run["profiler_kind"], "overview.run.profiler_kind")
-    _nonempty(
-        report.run["canonical_clock_domain_id"],
-        "overview.run.canonical_clock_domain_id",
-    )
+    primitive = _raw_primitive(report)
+    _json_value(primitive, "overview")
+    _validate_report_structure(primitive)
+    run_id = str(report.run["run_id"])
     _validate_workload(report.workload, "overview.workload")
     _validate_models(report.models, "overview.models")
     _validate_hardware(report.hardware, "overview.hardware")
@@ -1542,13 +995,7 @@ def canonical_json_bytes(document: OverviewReport) -> bytes:
 
     value = overview_to_dict(document)
     try:
-        return json.dumps(
-            value,
-            allow_nan=False,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
+        return compact_json_bytes(value)
     except (TypeError, ValueError) as error:  # pragma: no cover - guarded above
         raise OverviewSchemaError(
             "overview",
@@ -1693,6 +1140,8 @@ def _kpi_sections_from_dict(value: object, path: str) -> KpiSections:
 def overview_report_from_dict(value: object) -> OverviewReport:
     """Parse and semantically validate a strict Overview report object."""
 
+    _json_value(value, "overview")
+    _validate_report_structure(value)
     data = _strict_object(value, OverviewReport, "overview")
     data["models"] = _tuple_of(
         data["models"],

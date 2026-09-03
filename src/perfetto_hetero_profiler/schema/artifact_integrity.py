@@ -12,6 +12,7 @@ import uuid
 
 from .constants import SCHEMA_VERSION
 from ..support.files import sha256_file
+from ..support.json_io import pretty_json_bytes
 
 
 DETACHED_MANIFEST_NAME = "artifact_manifest.json"
@@ -29,30 +30,13 @@ class ArtifactIntegrityError(RuntimeError):
     """An invalid inventory contract or unsafe recovery output."""
 
 
-def _sha256_file(path: Path) -> str:
-    return sha256_file(path)
-
-
-def _json_bytes(value: Mapping[str, Any]) -> bytes:
-    return (
-        json.dumps(
-            value,
-            allow_nan=False,
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n"
-    ).encode("utf-8")
-
-
 def _write_json_atomic(
     path: Path,
     value: Mapping[str, Any],
     *,
     overwrite: bool,
 ) -> None:
-    payload = _json_bytes(value)
+    payload = pretty_json_bytes(value)
     if path.exists():
         if not overwrite:
             raise FileExistsError(f"output already exists: {path}")
@@ -169,7 +153,7 @@ def _inventory(
                     "root_id": root_id,
                     "relative_path": relative_path,
                     "size_bytes": stat.st_size,
-                    "sha256": _sha256_file(path),
+                    "sha256": sha256_file(path),
                     "mtime_ns": stat.st_mtime_ns,
                 }
             )
@@ -490,7 +474,7 @@ def validate_detached_artifact_manifest(
         "valid": not mismatches,
         "checked": len(expected),
         "mismatches": mismatches,
-        "manifest_sha256": _sha256_file(path),
+        "manifest_sha256": sha256_file(path),
     }
     if report_path is not None:
         _write_json_atomic(Path(report_path), report, overwrite=True)

@@ -5,13 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 from typing import Any
 
 from perfetto_hetero_profiler.hybrid.runner_config import HybridRunnerConfig, load_hybrid_runner_config
-from perfetto_hetero_profiler.support.config_fields import ConfigFields
 from perfetto_hetero_profiler.support.files import sha256_file as _sha256_file
 from .paths import validate_existing_real_path, validate_safe_name
 from .compatibility import LEGACY_SCHEDULE_SEED_DOMAIN
@@ -32,9 +30,6 @@ class ExperimentConfigError(ValueError):
     pass
 
 
-_FIELDS = ConfigFields(ExperimentConfigError)
-
-
 def _duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -45,7 +40,15 @@ def _duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _object(value: object, name: str, fields: set[str]) -> dict[str, Any]:
-    return _FIELDS.exact_object(value, name, fields)
+    if not isinstance(value, dict):
+        raise ExperimentConfigError(f"{name} must be an object")
+    unknown = sorted(set(value) - fields)
+    if unknown:
+        raise ExperimentConfigError(f"unknown {name} field: {unknown[0]}")
+    missing = sorted(fields - set(value))
+    if missing:
+        raise ExperimentConfigError(f"missing {name} field: {missing[0]}")
+    return dict(value)
 
 
 def sha256_file(path: Path) -> str:

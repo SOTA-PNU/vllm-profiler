@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-import ctypes
-import errno
-import json
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -15,6 +12,8 @@ import tempfile
 from typing import Any
 
 from ..support.files import sha256_file
+from ..support.json_io import pretty_json_bytes
+from ..support.publication import fsync_directory, publish_directory_no_replace
 
 from ..perfetto.artifacts import (
     ARTIFACT_MANIFEST_NAME,
@@ -27,8 +26,6 @@ from ..perfetto.artifacts import (
 
 
 OVERVIEW_OUTPUT_ROOT_ID = "overview"
-_RENAME_NOREPLACE = 1
-_AT_FDCWD = -100
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,191}$")
 
 
@@ -39,16 +36,7 @@ class OverviewPublicationError(RuntimeError):
 def canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
     """Encode deterministic, finite JSON with the repository line policy."""
 
-    return (
-        json.dumps(
-            value,
-            allow_nan=False,
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n"
-    ).encode("utf-8")
+    return pretty_json_bytes(value)
 
 
 def _absolute_without_resolving(path: Path) -> Path:
@@ -149,57 +137,6 @@ def _write_bytes_exclusive(path: Path, data: bytes) -> None:
         except OSError:
             pass
         raise
-
-
-def _fsync_directory(path: Path) -> None:
-    flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    descriptor = os.open(path, flags)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _publish_directory_no_replace(staging: Path, output: Path) -> None:
-    if os.path.lexists(output):
-        raise FileExistsError(f"output already exists: {output}")
-    libc = ctypes.CDLL(None, use_errno=True)
-    renameat2 = getattr(libc, "renameat2", None)
-    if renameat2 is None:
-        raise OverviewPublicationError(
-            "atomic no-replace directory publication is unavailable"
-        )
-    renameat2.argtypes = [
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_uint,
-    ]
-    renameat2.restype = ctypes.c_int
-    result = renameat2(
-        _AT_FDCWD,
-        os.fsencode(staging),
-        _AT_FDCWD,
-        os.fsencode(output),
-        _RENAME_NOREPLACE,
-    )
-    if result != 0:
-        error_number = ctypes.get_errno()
-        if error_number == errno.EEXIST:
-            raise FileExistsError(f"output already exists: {output}")
-        if error_number in {errno.ENOSYS, errno.EINVAL}:
-            raise OverviewPublicationError(
-                "atomic no-replace directory publication is unsupported"
-            )
-        raise OSError(
-            error_number,
-            os.strerror(error_number),
-            os.fspath(output),
-        )
-    _fsync_directory(output.parent)
 
 
 def _remove_owned_staging(
@@ -329,13 +266,15 @@ def publish_bundle(
             output_root_id=OVERVIEW_OUTPUT_ROOT_ID,
         )
         _verify_exact_output(staging, tuple(normalized_payloads))
-        _fsync_directory(staging)
+        fsync_directory(staging)
         if validate_staging is not None:
             validate_staging(staging)
 
         if before_publish is not None:
             before_publish()
-        _publish_directory_no_replace(staging, output)
+        publish_directory_no_replace(
+            staging, output, error_type=OverviewPublicationError
+        )
         published = True
 
         _verify_exact_output(output, tuple(normalized_payloads))

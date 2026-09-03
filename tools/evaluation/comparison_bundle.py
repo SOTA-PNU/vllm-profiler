@@ -10,13 +10,13 @@ from typing import Any
 from perfetto_hetero_profiler.overview.bundle import (
     LoadedOverviewBundle,
     OverviewBundleIdentity,
-    _identity,
-    _stable_text,
+    overview_directory_identity,
+    stable_text,
 )
 from perfetto_hetero_profiler.overview.loader import (
     OverviewInputError,
-    _read_json_object,
-    _require_real_directory,
+    read_json_object,
+    require_real_directory,
 )
 from perfetto_hetero_profiler.overview.publication import OVERVIEW_OUTPUT_ROOT_ID
 from perfetto_hetero_profiler.overview.render import validate_offline_html
@@ -163,15 +163,15 @@ def _validate_comparison_semantic_sidecar(
 def load_comparison_bundle(root: str | Path) -> LoadedComparisonBundle:
     """Load a published comparison with fresh semantic and integrity checks."""
 
-    directory = _require_real_directory(
+    directory = require_real_directory(
         root,
         description="Overview comparison output",
     )
-    identity_before = _identity(
+    identity_before = overview_directory_identity(
         directory,
         expected_files=_COMPARISON_EXPECTED_FILES,
     )
-    comparison = _read_json_object(
+    comparison = read_json_object(
         directory / COMPARISON_JSON_NAME,
         description="Overview comparison",
     )
@@ -180,13 +180,13 @@ def load_comparison_bundle(root: str | Path) -> LoadedComparisonBundle:
         raise OverviewInputError(
             "Overview comparison is not the canonical model representation"
         )
-    validation = _read_json_object(
+    validation = read_json_object(
         directory / COMPARISON_VALIDATION_NAME,
         description="Overview comparison semantic validation",
     )
     _validate_comparison_semantic_sidecar(comparison, validation)
 
-    html_text = _stable_text(
+    html_text = stable_text(
         directory / COMPARISON_HTML_NAME,
         description="Overview comparison HTML",
     )
@@ -222,7 +222,7 @@ def load_comparison_bundle(root: str | Path) -> LoadedComparisonBundle:
         raise OverviewInputError(
             "Overview comparison detached artifact validation found mismatches"
         )
-    identity_after = _identity(
+    identity_after = overview_directory_identity(
         directory,
         expected_files=_COMPARISON_EXPECTED_FILES,
     )

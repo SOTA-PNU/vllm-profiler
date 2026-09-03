@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
-import ctypes
-import errno
 import os
 from pathlib import Path
 import shutil
@@ -13,6 +11,7 @@ import tempfile
 from typing import Any, Mapping
 
 from ..support.files import sha256_file
+from ..support.publication import publish_directory_no_replace
 
 from ..schema import SCHEMA_VERSION
 from .artifacts import (
@@ -65,8 +64,6 @@ RBLN_NATIVE_VALIDATION_NAME = "trace.rbln-native.validation.json"
 CONVERSION_RECORD_TYPE = "perfetto_conversion_manifest"
 OUTPUT_ROOT_ID = "conversion"
 
-_RENAME_NOREPLACE = 1
-_AT_FDCWD = -100
 
 
 class PerfettoConversionError(RuntimeError):
@@ -350,7 +347,9 @@ def convert_perfetto(
 
         after = load_hybrid_run(loaded.root)
         _assert_input_unchanged(loaded, after)
-        _publish_directory_no_replace(staging, output)
+        publish_directory_no_replace(
+            staging, output, error_type=PerfettoConversionError
+        )
         published = True
 
         published_roots = _artifact_roots(after, output)
@@ -1215,57 +1214,6 @@ def _write_bytes_exclusive(path: Path, payload: bytes) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-
-
-def _fsync_directory(path: Path) -> None:
-    flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    descriptor = os.open(path, flags)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _publish_directory_no_replace(staging: Path, output: Path) -> None:
-    if os.path.lexists(output):
-        raise FileExistsError(f"output already exists: {output}")
-    libc = ctypes.CDLL(None, use_errno=True)
-    renameat2 = getattr(libc, "renameat2", None)
-    if renameat2 is None:
-        raise PerfettoConversionError(
-            "atomic no-replace directory publication is unavailable"
-        )
-    renameat2.argtypes = [
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_uint,
-    ]
-    renameat2.restype = ctypes.c_int
-    result = renameat2(
-        _AT_FDCWD,
-        os.fsencode(staging),
-        _AT_FDCWD,
-        os.fsencode(output),
-        _RENAME_NOREPLACE,
-    )
-    if result != 0:
-        error_number = ctypes.get_errno()
-        if error_number == errno.EEXIST:
-            raise FileExistsError(f"output already exists: {output}")
-        if error_number in {errno.ENOSYS, errno.EINVAL}:
-            raise PerfettoConversionError(
-                "atomic no-replace directory publication is unsupported"
-            )
-        raise OSError(
-            error_number,
-            os.strerror(error_number),
-            os.fspath(output),
-        )
-    _fsync_directory(output.parent)
 
 
 def _remove_owned_staging(

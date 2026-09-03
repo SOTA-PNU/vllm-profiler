@@ -207,8 +207,15 @@ runs/<run-id>-perfetto/     trace.pftrace and detached validation
 runs/<run-id>-perfetto-request-focused/ presentation trace bundle
 runs/<run-id>-overview/     external overview.json and overview.html
 runs/<run-id>-closeout-recovery/ detached immutable-input manifest
-runs/<run-id>-publication/  overall result and determinism evidence
+runs/<run-id>-publication/  overall result, output hashes, and optional repeat-verification evidence
 ```
+
+Production runner는 Full Perfetto, request-focused Perfetto, Overview를 각각 한
+번만 생성합니다. `determinism.json`의 `byte_identical: null`은 해당 run 안에서
+반복 생성을 수행하지 않았다는 뜻이며, 함께 기록된 파일 SHA-256은 실제 산출물의
+무결성을 확인하는 데 사용됩니다. Byte-for-byte 결정성은 CPU-only regression과
+evaluation에서 같은 입력을 두 번 생성하여 검증합니다. 과거 runner가 반복 생성
+검증 후 기록한 `byte_identical: true` artifact도 계속 읽을 수 있습니다.
 
 실패 원인은 `<run-id>-coordinator/result.json`과 `raw/*.stderr.log`에서
 확인합니다. Runner는 leader의 정상 종료를 먼저 요청하고, 필요할 때만 자신이

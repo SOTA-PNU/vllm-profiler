@@ -521,6 +521,28 @@ class OverviewSchemaContractTests(unittest.TestCase):
         restored = overview_document_from_json(canonical_json_bytes(value))
         self.assertEqual(restored, value)
 
+    def test_packaged_schema_structure_corpus_has_stable_paths(self) -> None:
+        valid = overview_to_dict(report())
+        cases = []
+        unknown = copy.deepcopy(valid)
+        unknown["run"]["unexpected"] = True
+        cases.append((unknown, "overview.run.unexpected"))
+        missing = copy.deepcopy(valid)
+        del missing["workload"]["request_count"]
+        cases.append((missing, "overview.workload.request_count"))
+        wrong_type = copy.deepcopy(valid)
+        wrong_type["perfetto"]["query_count"] = True
+        cases.append((wrong_type, "overview.perfetto.query_count"))
+        invalid_enum = copy.deepcopy(valid)
+        invalid_enum["run"]["mode"] = "other"
+        cases.append((invalid_enum, "overview.run.mode"))
+        for value, expected_path in cases:
+            with self.subTest(path=expected_path):
+                with self.assertRaises(OverviewSchemaError) as caught:
+                    overview_report_from_dict(value)
+                self.assertEqual(caught.exception.field_path, expected_path)
+                self.assertNotIn("/home/", str(caught.exception))
+
     def test_canonical_json_is_stable_and_path_free(self) -> None:
         first = report()
         second = replace(

@@ -55,11 +55,7 @@ def _validator(record_type: str) -> Draft202012Validator:
     for component in ("json", "v1", filename):
         resource = resource.joinpath(component)
     schema = json.loads(resource.read_text(encoding="utf-8"))
-    external = sorted(ref for ref in _walk_references(schema) if not ref.startswith("#"))
-    if external:
-        raise RuntimeError(f"external schema reference is not allowed: {external[0]}")
-    Draft202012Validator.check_schema(schema)
-    return Draft202012Validator(schema)
+    return compile_schema(schema)
 
 
 def _path_key(path: Iterable[object]) -> tuple[tuple[int, object], ...]:
@@ -78,7 +74,7 @@ def _error_key(error: ValidationError) -> tuple[object, ...]:
     )
 
 
-def _field_path(record_type: str, error: ValidationError) -> str:
+def _field_path(root_path: str, error: ValidationError) -> str:
     parts = list(error.absolute_path)
     if error.validator == "required":
         missing = sorted(set(error.validator_value) - set(error.instance))
@@ -89,7 +85,7 @@ def _field_path(record_type: str, error: ValidationError) -> str:
         extras = sorted(str(key) for key in set(error.instance) - set(properties))
         if extras:
             parts.append(extras[0])
-    path = _SCHEMA_BY_RECORD_TYPE[record_type][1]
+    path = root_path
     for part in parts:
         path += f"[{part}]" if isinstance(part, int) else f".{part}"
     return path
@@ -121,6 +117,8 @@ def _message(error: ValidationError) -> str:
         return "must be a non-empty string"
     if validator == "minItems":
         return f"must contain at least {error.validator_value} item(s)"
+    if validator == "oneOf":
+        return "must match exactly one allowed structure"
     if validator == "pattern":
         return f"must match pattern {error.validator_value!r}"
     return f"failed {validator or 'schema'} validation"
@@ -131,7 +129,36 @@ def validate_structure(instance: Any, record_type: str) -> None:
     errors = list(_validator(record_type).iter_errors(instance))
     if errors:
         error = min(errors, key=_error_key)
-        raise JsonSchemaFailure(_field_path(record_type, error), _message(error))
+        root_path = _SCHEMA_BY_RECORD_TYPE[record_type][1]
+        raise JsonSchemaFailure(_field_path(root_path, error), _message(error))
+
+
+def compile_schema(schema: dict[str, Any]) -> Draft202012Validator:
+    """Compile a self-contained schema without external reference access."""
+
+    external = sorted(
+        ref for ref in _walk_references(schema) if not ref.startswith("#")
+    )
+    if external:
+        raise RuntimeError(
+            f"external schema reference is not allowed: {external[0]}"
+        )
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema)
+
+
+def validate_schema_document(
+    instance: Any,
+    validator: Draft202012Validator,
+    *,
+    root_path: str,
+) -> None:
+    """Validate any packaged document with deterministic, path-aware errors."""
+
+    errors = list(validator.iter_errors(instance))
+    if errors:
+        error = min(errors, key=_error_key)
+        raise JsonSchemaFailure(_field_path(root_path, error), _message(error))
 
 
 def schema_validator_cache_info():

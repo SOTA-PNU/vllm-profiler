@@ -8,27 +8,7 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
-from perfetto_hetero_profiler.overview.schema import (
-    OverviewSchemaError,
-    _ALIGNMENT_STATUSES,
-    _OBSERVATION_LAYERS,
-    _PROFILE_MODES,
-    _RUN_MODES,
-    _availability,
-    _fail,
-    _integer,
-    _json_value,
-    _nonempty,
-    _raw_primitive,
-    _reject_duplicate_pairs,
-    _require_type,
-    _sorted_models,
-    _sorted_unique_strings,
-    _strict_object,
-    _string_tuple,
-    _tuple_of,
-    _validate_available_scalar,
-)
+from perfetto_hetero_profiler.overview.schema import OverviewSchemaError
 from perfetto_hetero_profiler.schema import Availability, METRIC_CATALOG
 from perfetto_hetero_profiler.schema.catalog import KPI_SECTION_METRICS
 from perfetto_hetero_profiler.schema.constants import (
@@ -36,6 +16,7 @@ from perfetto_hetero_profiler.schema.constants import (
     SCHEMA_VERSION,
     SHA256_RE,
 )
+from perfetto_hetero_profiler.support.json_io import compact_json_bytes
 
 from .comparison_model import (
     OVERVIEW_COMPARISON_RECORD_TYPE,
@@ -48,6 +29,26 @@ from .comparison_model import (
     DeltaValue,
     KpiDirection,
     OverviewComparison,
+)
+from .schema_support import (
+    ALIGNMENT_STATUSES as _ALIGNMENT_STATUSES,
+    OBSERVATION_LAYERS as _OBSERVATION_LAYERS,
+    PROFILE_MODES as _PROFILE_MODES,
+    RUN_MODES as _RUN_MODES,
+    availability as _availability,
+    fail as _fail,
+    integer as _integer,
+    json_value as _json_value,
+    nonempty as _nonempty,
+    raw_primitive as _raw_primitive,
+    reject_duplicate_pairs as _reject_duplicate_pairs,
+    require_type as _require_type,
+    sorted_models as _sorted_models,
+    sorted_unique_strings as _sorted_unique_strings,
+    strict_object as _strict_object,
+    string_tuple as _string_tuple,
+    tuple_of as _tuple_of,
+    validate_available_scalar as _validate_available_scalar,
 )
 
 
@@ -313,13 +314,7 @@ def canonical_comparison_json_bytes(comparison: OverviewComparison) -> bytes:
 
     value = comparison_to_dict(comparison)
     try:
-        return json.dumps(
-            value,
-            allow_nan=False,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
+        return compact_json_bytes(value)
     except (TypeError, ValueError) as error:  # pragma: no cover - prevalidated
         raise OverviewSchemaError(
             "comparison",

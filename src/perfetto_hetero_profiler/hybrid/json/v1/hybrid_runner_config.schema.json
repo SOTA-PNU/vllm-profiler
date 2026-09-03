@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sota-pnu.example/schemas/hybrid-runner-config-v1.json",
+  "title": "Hybrid runner configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "model", "prefill", "decode", "proxy", "workload",
+    "runtime", "connectors", "profilers", "telemetry", "timeouts", "tools",
+    "offline"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "model": {"$ref": "#/$defs/model"},
+    "prefill": {"$ref": "#/$defs/server"},
+    "decode": {"$ref": "#/$defs/server"},
+    "proxy": {"$ref": "#/$defs/proxy"},
+    "workload": {"$ref": "#/$defs/workload"},
+    "runtime": {"$ref": "#/$defs/runtime"},
+    "connectors": {"$ref": "#/$defs/connectors"},
+    "profilers": {"$ref": "#/$defs/profilers"},
+    "telemetry": {"$ref": "#/$defs/telemetry"},
+    "timeouts": {"$ref": "#/$defs/timeouts"},
+    "tools": {"$ref": "#/$defs/tools"},
+    "offline": {"type": "boolean"}
+  },
+  "$defs": {
+    "nonempty_string": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "path_string": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executable", "working_directory", "host", "http_port", "nixl_port"],
+      "properties": {
+        "executable": {"$ref": "#/$defs/path_string"},
+        "working_directory": {"$ref": "#/$defs/path_string"},
+        "pythonpath": {"$ref": "#/$defs/path_string"},
+        "host": {"$ref": "#/$defs/nonempty_string"},
+        "http_port": {"$ref": "#/$defs/port"},
+        "nixl_port": {"$ref": "#/$defs/port"},
+        "extra_args": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "served_name", "rbln_cache_path"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path_string"},
+        "served_name": {"$ref": "#/$defs/nonempty_string"},
+        "rbln_cache_path": {"$ref": "#/$defs/path_string"}
+      }
+    },
+    "proxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["python", "entry_point", "host", "http_port"],
+      "properties": {
+        "python": {"$ref": "#/$defs/path_string"},
+        "entry_point": {"type": "string", "pattern": "^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*$"},
+        "host": {"$ref": "#/$defs/nonempty_string"},
+        "http_port": {"$ref": "#/$defs/port"}
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["warmup_requests", "measured_requests", "max_output_tokens", "temperature", "streaming"],
+      "properties": {
+        "prompt": {"type": ["string", "null"], "minLength": 1, "pattern": "\\S"},
+        "prompt_file": {"type": ["string", "null"], "minLength": 1, "pattern": "\\S"},
+        "warmup_requests": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "measured_requests": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "max_output_tokens": {"type": "integer", "minimum": 1, "maximum": 16},
+        "temperature": {"type": "number", "minimum": 0, "maximum": 2},
+        "streaming": {"type": "boolean"}
+      },
+      "oneOf": [
+        {
+          "required": ["prompt"],
+          "properties": {
+            "prompt": {"type": "string", "minLength": 1, "pattern": "\\S"},
+            "prompt_file": {"type": "null"}
+          }
+        },
+        {
+          "required": ["prompt_file"],
+          "properties": {
+            "prompt": {"type": "null"},
+            "prompt_file": {"type": "string", "minLength": 1, "pattern": "\\S"}
+          }
+        }
+      ]
+    },
+    "device_indices": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "integer", "minimum": 0, "maximum": 1024}
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_model_len", "block_size", "max_num_seqs", "gpu_memory_utilization", "gpu_indices", "npu_indices"],
+      "properties": {
+        "max_model_len": {"type": "integer", "minimum": 1, "maximum": 131072},
+        "block_size": {"type": "integer", "minimum": 1, "maximum": 65536},
+        "max_num_seqs": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "gpu_memory_utilization": {"type": "number", "minimum": 0.01, "maximum": 1.0},
+        "gpu_indices": {"$ref": "#/$defs/device_indices"},
+        "npu_indices": {"$ref": "#/$defs/device_indices"}
+      }
+    },
+    "connectors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prefill", "decode"],
+      "properties": {
+        "prefill": {"type": "object", "required": ["kv_role"]},
+        "decode": {"type": "object", "required": ["kv_role"]}
+      }
+    },
+    "profilers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gpu_torch_subdir", "gpu_nsys_basename", "npu_torch_subdir", "npu_rbln_subdir"],
+      "properties": {
+        "gpu_torch_subdir": {"$ref": "#/$defs/path_string"},
+        "gpu_nsys_basename": {"$ref": "#/$defs/path_string"},
+        "npu_torch_subdir": {"$ref": "#/$defs/path_string"},
+        "npu_rbln_subdir": {"$ref": "#/$defs/path_string"}
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sample_interval_ms"],
+      "properties": {"sample_interval_ms": {"type": "integer", "minimum": 20, "maximum": 60000}}
+    },
+    "timeouts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startup_sec", "request_sec", "shutdown_sec"],
+      "properties": {
+        "startup_sec": {"type": "number", "minimum": 1, "maximum": 3600},
+        "request_sec": {"type": "number", "minimum": 1, "maximum": 3600},
+        "shutdown_sec": {"type": "number", "minimum": 1, "maximum": 600}
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nsys"],
+      "properties": {
+        "trace_processor": {"type": ["string", "null"], "minLength": 1, "pattern": "\\S"},
+        "nsys": {"$ref": "#/$defs/path_string"}
+      }
+    }
+  }
+}

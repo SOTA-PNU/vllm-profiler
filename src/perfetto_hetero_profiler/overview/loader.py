@@ -143,7 +143,7 @@ def _absolute_without_resolving(path: Path) -> Path:
     return value.absolute()
 
 
-def _require_real_directory(path: str | Path, *, description: str) -> Path:
+def require_real_directory(path: str | Path, *, description: str) -> Path:
     candidate = _absolute_without_resolving(Path(path))
     current = Path(candidate.anchor)
     try:
@@ -236,7 +236,7 @@ def _stable_read(
     return value
 
 
-def _read_json_object(path: Path, *, description: str) -> dict[str, Any]:
+def read_json_object(path: Path, *, description: str) -> dict[str, Any]:
     def read(candidate: Path) -> Any:
         return json.loads(
             candidate.read_text(encoding="utf-8"),
@@ -372,7 +372,7 @@ def read_validated_source_json(
             raise OverviewInputError("validated source JSON path uses a symlink")
         if index < len(parts) - 1 and not stat.S_ISDIR(file_stat.st_mode):
             raise OverviewInputError("validated source JSON parent is not a directory")
-    return _read_json_object(
+    return read_json_object(
         current,
         description=f"validated source JSON {root_id}:{relative_path}",
     )
@@ -381,7 +381,7 @@ def read_validated_source_json(
 def perfetto_identity(perfetto_root: str | Path) -> PerfettoBundleIdentity:
     """Snapshot an exact published Perfetto bundle without executing TP."""
 
-    root = _require_real_directory(perfetto_root, description="Perfetto output")
+    root = require_real_directory(perfetto_root, description="Perfetto output")
     return _bundle_identity(root)
 
 
@@ -587,14 +587,14 @@ def load_matching_perfetto(
 
     if not isinstance(loaded, LoadedHybridRun):
         raise TypeError("loaded must be a LoadedHybridRun")
-    root = _require_real_directory(perfetto_root, description="Perfetto output")
+    root = require_real_directory(perfetto_root, description="Perfetto output")
     _assert_no_overlap(loaded, root)
     identity_before = _bundle_identity(root)
-    manifest = _read_json_object(
+    manifest = read_json_object(
         root / CONVERSION_MANIFEST_NAME,
         description="Perfetto conversion manifest",
     )
-    stored_validation = _read_json_object(
+    stored_validation = read_json_object(
         root / TRACE_VALIDATION_NAME,
         description="stored Perfetto trace validation",
     )
@@ -602,7 +602,7 @@ def load_matching_perfetto(
         item.name for item in root.iterdir()
     }
     if has_attribute_validation:
-        attribute_validation = _read_json_object(
+        attribute_validation = read_json_object(
             root / TRACE_ATTRIBUTE_VALIDATION_NAME,
             description="stored Perfetto trace attribute validation",
         )
@@ -881,6 +881,8 @@ __all__ = [
     "normalized_identity",
     "phase_duration_reconciliation",
     "perfetto_identity",
+    "read_json_object",
     "read_validated_source_json",
     "reconciliation_summary",
+    "require_real_directory",
 ]

@@ -12,13 +12,13 @@ from urllib.error import URLError
 from perfetto_hetero_profiler.hybrid.runner import (
     HybridRunner,
     HybridRunnerError,
-    _Layout,
     _TelemetryWorker,
     _profile_call,
     _shutdown_integrity,
     _wait_http,
     _wait_runtime_marker_completion,
 )
+from perfetto_hetero_profiler.hybrid.layout import HybridRunLayout
 from perfetto_hetero_profiler.hybrid import (
     AlignmentMethod,
     HybridBundleMerger,
@@ -321,7 +321,7 @@ class TelemetryWorkerTests(unittest.TestCase):
 class ShutdownIntegrityTests(unittest.TestCase):
     def test_known_nixl_segfault_is_diagnostic_not_success(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            layout = _Layout(Path(directory), "run")
+            layout = HybridRunLayout(Path(directory), "run")
             raw = layout.coordinator / "raw"
             raw.mkdir(parents=True)
             (raw / "decode.stderr.log").write_text(
@@ -341,6 +341,65 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
         _Process.instances.clear()
         _Process.fail_name = None
 
+    def test_derived_products_are_generated_once_without_claiming_repeat(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = HybridRunner(
+                _config(root / "assets"),
+                run_root=root / "runs",
+                run_id="derive-once",
+                profile_mode="monitor",
+                process_factory=_Process,
+            )
+            runner.layout.publication.mkdir(parents=True)
+            calls = []
+
+            def convert(config):
+                calls.append(("perfetto", config.request_focused))
+                config.output_directory.mkdir(parents=True)
+                (config.output_directory / "trace.pftrace").write_bytes(b"full")
+                if config.request_focused:
+                    (config.output_directory / "trace.request-focused.pftrace").write_bytes(
+                        b"focused"
+                    )
+                return {"status": "succeeded"}
+
+            def overview(config):
+                calls.append(("overview", False))
+                config.output_directory.mkdir(parents=True)
+                (config.output_directory / "overview.json").write_text(
+                    "{}\n", encoding="utf-8"
+                )
+                (config.output_directory / "overview.html").write_text(
+                    "<html></html>\n", encoding="utf-8"
+                )
+                return {"status": "succeeded"}
+
+            with mock.patch(
+                "perfetto_hetero_profiler.perfetto.converter.convert_perfetto",
+                side_effect=convert,
+            ), mock.patch(
+                "perfetto_hetero_profiler.overview.generator.generate_overview",
+                side_effect=overview,
+            ):
+                runner._derive_products()
+
+            self.assertEqual(
+                calls,
+                [("perfetto", False), ("perfetto", True), ("overview", False)],
+            )
+            evidence = json.loads(
+                (runner.layout.publication / "determinism.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                evidence["verification_mode"], "single_production_generation"
+            )
+            self.assertIsNone(evidence["perfetto_byte_identical"])
+            self.assertIsNone(evidence["request_focused_perfetto_byte_identical"])
+            self.assertIsNone(evidence["overview_byte_identical"])
+
     def test_partial_startup_failure_cleans_only_started_children(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -352,7 +411,7 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
             with mock.patch(
                 "perfetto_hetero_profiler.hybrid.runner._Telemetry", _Telemetry
             ), mock.patch(
-                "perfetto_hetero_profiler.hybrid.runner._port_available",
+                "perfetto_hetero_profiler.hybrid.runner.port_available",
                 return_value=True,
             ), mock.patch(
                 "perfetto_hetero_profiler.hybrid.runner._wait_http",
@@ -404,7 +463,7 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
             with mock.patch(
                 "perfetto_hetero_profiler.hybrid.runner._Telemetry", _Telemetry
             ), mock.patch(
-                "perfetto_hetero_profiler.hybrid.runner._port_available",
+                "perfetto_hetero_profiler.hybrid.runner.port_available",
                 return_value=True,
             ), mock.patch(
                 "perfetto_hetero_profiler.hybrid.runner._wait_http",
@@ -510,7 +569,7 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
             with mock.patch(
                 "perfetto_hetero_profiler.hybrid.runner._Telemetry", _Telemetry
             ), mock.patch(
-                "perfetto_hetero_profiler.hybrid.runner._port_available",
+                "perfetto_hetero_profiler.hybrid.runner.port_available",
                 return_value=True,
             ), mock.patch(
                 "perfetto_hetero_profiler.hybrid.runner._wait_http",

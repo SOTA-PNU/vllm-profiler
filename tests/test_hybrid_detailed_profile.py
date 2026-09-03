@@ -10,18 +10,20 @@ import unittest
 
 from perfetto_hetero_profiler.hybrid.detailed_profile import (
     DetailedProfileValidationError,
-    HybridDetailedProfileConfig,
     build_profiler_alignment,
     build_profiler_clock_domain,
+    validate_fresh_artifacts,
+    validate_nsys_report,
+    validate_rbln_reports,
+    validate_torch_traces,
+)
+from tests.detailed_profile_support import (
+    HybridDetailedProfileConfig,
     compare_overhead,
     persist_per_sample_streams,
     select_profile_kind,
-    validate_fresh_artifacts,
-    validate_nsys_report,
     validate_owned_wrapper_child_leader,
     validate_proxy_marker_stats,
-    validate_rbln_reports,
-    validate_torch_traces,
 )
 from perfetto_hetero_profiler.schema import (
     Availability,

@@ -25,6 +25,7 @@ import uuid
 
 from ..schema.constants import SCHEMA_VERSION
 from ..support.files import sha256_file
+from ..support.json_io import pretty_json_bytes
 
 
 ARTIFACT_MANIFEST_NAME = "artifact_manifest.json"
@@ -72,22 +73,9 @@ class ArtifactInventoryError(RuntimeError):
 ArtifactError = ArtifactInventoryError
 
 
-def _sha256_file(path: Path) -> str:
-    return sha256_file(path)
-
-
-def _json_bytes(value: Mapping[str, Any]) -> bytes:
+def _artifact_json_bytes(value: Mapping[str, Any]) -> bytes:
     try:
-        return (
-            json.dumps(
-                value,
-                allow_nan=False,
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n"
-        ).encode("utf-8")
+        return pretty_json_bytes(value)
     except (TypeError, ValueError) as error:
         raise ArtifactInventoryError(
             f"value is not deterministic finite JSON: {error}"
@@ -120,7 +108,7 @@ def write_json_exclusive(
     if not output.name or output.name in {".", ".."}:
         raise ArtifactInventoryError("JSON output name is unsafe")
 
-    payload = _json_bytes(value)
+    payload = _artifact_json_bytes(value)
     temporary = parent / (
         f".{output.name}.{os.getpid()}-{uuid.uuid4().hex}.tmp"
     )
@@ -228,7 +216,7 @@ def _stable_file_record(
         raise ArtifactInventoryError(
             f"artifact inventory rejects non-regular file: {path}"
         )
-    digest = _sha256_file(path)
+    digest = sha256_file(path)
     after = path.lstat()
     stable_fields = (
         "st_dev",
@@ -731,7 +719,7 @@ def validate_manifest(
         "valid": not mismatches,
         "checked": len(expected),
         "mismatches": mismatches,
-        "manifest_sha256": _sha256_file(path),
+        "manifest_sha256": sha256_file(path),
     }
 
 
@@ -810,7 +798,7 @@ def verify_stored_sidecar(
         description="stored artifact validation",
     )
     _validate_stored_report(stored)
-    actual_manifest_sha256 = _sha256_file(manifest)
+    actual_manifest_sha256 = sha256_file(manifest)
     if stored["manifest_sha256"] != actual_manifest_sha256:
         raise ArtifactInventoryError(
             "stored validation manifest SHA-256 does not match the manifest"

@@ -16,7 +16,6 @@ from perfetto_hetero_profiler.perfetto.validation_queries import (
 )
 from perfetto_hetero_profiler.overview import bundle, generator, model, render, schema
 from perfetto_hetero_profiler.schema.catalog import (
-    KPI_PRESENTATIONS,
     KPI_PRESENTATION_BY_IDENTITY,
     KPI_SECTION_METRICS,
     KPI_SECTION_ORDER,
@@ -311,7 +310,6 @@ class DeadCodeBoundaryTests(unittest.TestCase):
 
     def test_removed_internal_schema_and_support_symbols_stay_absent(self):
         from perfetto_hetero_profiler.schema import catalog, constants
-        from perfetto_hetero_profiler.support.config_fields import ConfigFields
 
         for name in (
             "RECORD_TYPES",
@@ -324,7 +322,9 @@ class DeadCodeBoundaryTests(unittest.TestCase):
         for name in ("STAGE_BY_TRACK", "TRACE_ATTRIBUTE_LATENCY_IDENTITIES"):
             with self.subTest(module=catalog.__name__, name=name):
                 self.assertFalse(hasattr(catalog, name))
-        self.assertFalse(hasattr(ConfigFields, "enum"))
+        self.assertIsNone(
+            find_spec("perfetto_hetero_profiler.support.config_fields")
+        )
 
 
 if __name__ == "__main__":

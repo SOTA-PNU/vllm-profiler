@@ -8,17 +8,27 @@ from pathlib import Path
 import uuid
 
 
+def compact_json_bytes(value: object, *, trailing_newline: bool = False) -> bytes:
+    """Encode finite, sorted JSON with the compact repository policy."""
+
+    text = json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return (text + ("\n" if trailing_newline else "")).encode("utf-8")
+
+
 def canonical_json_bytes(value: object) -> bytes:
-    return (
-        json.dumps(
-            value,
-            allow_nan=False,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        + "\n"
-    ).encode("utf-8")
+    """Encode compact JSON using the JSONL-compatible newline policy."""
+
+    return compact_json_bytes(value, trailing_newline=True)
+
+
+def pretty_json_bytes(value: object) -> bytes:
+    return pretty_json_text(value).encode("utf-8")
 
 
 def pretty_json_text(value: object) -> str:

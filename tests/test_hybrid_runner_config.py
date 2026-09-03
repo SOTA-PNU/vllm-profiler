@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+from importlib import resources
 import json
 from pathlib import Path
 import tempfile
@@ -10,6 +11,7 @@ import unittest
 from perfetto_hetero_profiler.cli import main
 from perfetto_hetero_profiler.hybrid.runner import build_hybrid_run_plan
 from perfetto_hetero_profiler.hybrid.runner_config import (
+    HYBRID_RUNNER_CONFIG_SCHEMA_NAME,
     HybridRunnerConfigError,
     load_hybrid_runner_config,
     validate_hybrid_invocation,
@@ -116,6 +118,116 @@ class HybridRunnerConfigTests(unittest.TestCase):
             self.assertFalse(plan["executes"])
             self.assertFalse(runs.exists())
             self.assertEqual(plan["outputs"]["hybrid"], str(runs / "example"))
+
+    def test_versioned_schema_is_packaged_and_structural_corpus_matches(self) -> None:
+        schema = (
+            resources.files("perfetto_hetero_profiler.hybrid")
+            .joinpath("json", "v1", HYBRID_RUNNER_CONFIG_SCHEMA_NAME)
+        )
+        self.assertEqual(json.loads(schema.read_text())["type"], "object")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            valid = document(root)
+            prompt_file = document(root)
+            prompt_file["workload"]["prompt"] = None
+            prompt_file["workload"]["prompt_file"] = str(root / "prompt.txt")
+            cases = [
+                ("valid", valid, True),
+                ("explicit-null-xor", prompt_file, True),
+                ("unknown", {**valid, "unknown": True}, False),
+            ]
+            missing = document(root)
+            del missing["runtime"]["max_model_len"]
+            cases.append(("missing", missing, False))
+            wrong_type = document(root)
+            wrong_type["runtime"]["max_num_seqs"] = True
+            cases.append(("bool-integer", wrong_type, False))
+            duplicate = document(root)
+            duplicate["runtime"]["gpu_indices"] = [0, 0]
+            cases.append(("duplicate-index", duplicate, False))
+            for name, value, accepted in cases:
+                with self.subTest(name=name):
+                    path = root / f"{name}.json"
+                    path.write_text(json.dumps(value), encoding="utf-8")
+                    if accepted:
+                        load_hybrid_runner_config(path)
+                    else:
+                        with self.assertRaises(HybridRunnerConfigError):
+                            load_hybrid_runner_config(path)
+
+    def test_whitespace_only_strings_restore_the_previous_contract(self) -> None:
+        fields = (
+            ("workload-prompt", ("workload", "prompt")),
+            ("workload-prompt-file", ("workload", "prompt_file")),
+            ("model-path", ("model", "path")),
+            ("model-served-name", ("model", "served_name")),
+            ("model-cache", ("model", "rbln_cache_path")),
+            ("prefill-executable", ("prefill", "executable")),
+            ("prefill-working-directory", ("prefill", "working_directory")),
+            ("prefill-pythonpath", ("prefill", "pythonpath")),
+            ("proxy-python", ("proxy", "python")),
+            ("gpu-torch-output", ("profilers", "gpu_torch_subdir")),
+            ("gpu-nsys-output", ("profilers", "gpu_nsys_basename")),
+            ("npu-torch-output", ("profilers", "npu_torch_subdir")),
+            ("npu-rbln-output", ("profilers", "npu_rbln_subdir")),
+            ("trace-processor", ("tools", "trace_processor")),
+            ("nsys", ("tools", "nsys")),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, (section, field) in fields:
+                with self.subTest(name=name):
+                    value = document(root)
+                    if field == "prompt_file":
+                        value["workload"]["prompt"] = None
+                    value[section][field] = " \t\n"
+                    with self.assertRaises(HybridRunnerConfigError):
+                        self.load(root, value)
+
+    def test_non_whitespace_content_and_empty_extra_arg_remain_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            value = document(root)
+            value["model"]["served_name"] = "  example model  "
+            value["model"]["path"] = str(root / "model with spaces")
+            value["workload"]["prompt"] = "\t Explain cache briefly. \n"
+            value["profilers"]["gpu_torch_subdir"] = "raw/gpu/torch profile "
+            value["prefill"]["extra_args"] = [""]
+
+            config = self.load(root, value)
+
+            self.assertEqual(config.served_model_name, "  example model  ")
+            self.assertEqual(config.workload.prompt, "\t Explain cache briefly. \n")
+            self.assertEqual(config.prefill.extra_args, ("",))
+
+    def test_nonfinite_json_constants_are_rejected_before_schema_validation(self) -> None:
+        replacements = (
+            ("NaN", '"temperature": 0', '"temperature": NaN'),
+            (
+                "Infinity",
+                '"gpu_memory_utilization": 0.2',
+                '"gpu_memory_utilization": Infinity',
+            ),
+            (
+                "-Infinity",
+                '"startup_sec": 300',
+                '"startup_sec": -Infinity',
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = json.dumps(document(root))
+            for constant, before, after in replacements:
+                with self.subTest(constant=constant):
+                    path = root / f"{constant}.json"
+                    path.write_text(original.replace(before, after), encoding="utf-8")
+                    with self.assertRaises(HybridRunnerConfigError) as raised:
+                        load_hybrid_runner_config(path)
+                    self.assertEqual(
+                        str(raised.exception),
+                        "cannot read config: non-finite numeric constants are not valid JSON",
+                    )
+                    self.assertNotIn(str(root), str(raised.exception))
 
     def test_unknown_field_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

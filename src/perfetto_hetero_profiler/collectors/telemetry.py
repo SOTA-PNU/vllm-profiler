@@ -6,7 +6,92 @@ from collections.abc import MutableSequence, Sequence
 from dataclasses import dataclass, replace
 import threading
 import time
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
+
+from ..schema import (
+    Availability,
+    DeviceType,
+    MetricKind,
+    MetricSample,
+    MetricScope,
+    ValueOrigin,
+)
+from .base import BaseCollector
+
+
+class ParsedMetricValue(Protocol):
+    value: int | float | None
+    availability: Availability
+    reason: str | None
+
+
+class DeviceTelemetryCollector(BaseCollector):
+    """Common timestamp and MetricSample contract for device adapters."""
+
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        host_id: str,
+        clock_domain_id: str,
+        sample_interval_ms: int,
+        device_type: DeviceType,
+        device_prefix: str,
+        provenance_namespace: str,
+        monotonic_ns: Callable[[], int],
+    ) -> None:
+        super().__init__()
+        self.run_id = run_id
+        self.host_id = host_id
+        self.clock_domain_id = clock_domain_id
+        self.sample_interval_ms = sample_interval_ms
+        self.device_type = device_type
+        self.device_prefix = device_prefix
+        self.provenance_namespace = provenance_namespace
+        self.monotonic_ns = monotonic_ns
+        self._previous_timestamp_ns: int | None = None
+
+    def _interval(self, timestamp_ns: int) -> int:
+        interval_ns = (
+            self.sample_interval_ms * 1_000_000
+            if self._previous_timestamp_ns is None
+            else timestamp_ns - self._previous_timestamp_ns
+        )
+        self._previous_timestamp_ns = timestamp_ns
+        return interval_ns
+
+    def _device_metric(
+        self,
+        *,
+        index: int,
+        name: str,
+        unit: str,
+        parsed: ParsedMetricValue,
+        timestamp_ns: int,
+        interval_ns: int,
+    ) -> MetricSample:
+        return MetricSample(
+            run_id=self.run_id,
+            metric_name=name,
+            metric_kind=MetricKind.GAUGE,
+            scope=MetricScope.DEVICE,
+            host_id=self.host_id,
+            clock_domain_id=self.clock_domain_id,
+            timestamp_ns=timestamp_ns,
+            availability=parsed.availability,
+            origin=ValueOrigin.MEASURED,
+            unit=unit,
+            value=parsed.value,
+            device_type=self.device_type,
+            device_id=f"{self.device_prefix}-{index}",
+            interval_ns=interval_ns,
+            reason=parsed.reason,
+            dimensions={},
+            attributes={
+                f"{self.provenance_namespace}.{self.device_prefix}_index": index,
+                f"{self.provenance_namespace}.query_field": name,
+            },
+        )
 
 
 class SamplingAdapter(Protocol):

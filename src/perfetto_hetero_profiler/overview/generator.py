@@ -21,11 +21,11 @@ from .bundle import (
 from .loader import (
     FileIdentity,
     LoadedPerfettoBundle,
-    _require_real_directory,
     _stable_regular_file,
     load_matching_perfetto,
     normalized_identity,
     perfetto_identity,
+    require_real_directory,
 )
 from .publication import (
     canonical_json_bytes,
@@ -99,7 +99,7 @@ def _prepare_generation(
 ) -> _PreparedGeneration:
     if not isinstance(config, OverviewGenerationConfig):
         raise TypeError("config must be OverviewGenerationConfig")
-    run_directory = _require_real_directory(
+    run_directory = require_real_directory(
         config.run_directory,
         description="normalized run",
     )

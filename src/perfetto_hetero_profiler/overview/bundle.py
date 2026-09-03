@@ -17,9 +17,9 @@ from ..perfetto.artifacts import (
 from .loader import (
     FileIdentity,
     OverviewInputError,
-    _read_json_object,
-    _require_real_directory,
     _stable_regular_file,
+    read_json_object,
+    require_real_directory,
 )
 from .publication import OVERVIEW_OUTPUT_ROOT_ID
 from .render import render_overview_html, validate_offline_html
@@ -83,7 +83,7 @@ class LoadedOverviewBundle:
             if item.relative_path == OVERVIEW_JSON_NAME
         )
 
-def _identity(
+def overview_directory_identity(
     root: Path,
     *,
     expected_files: frozenset[str],
@@ -118,14 +118,14 @@ def overview_bundle_identity(
 ) -> OverviewBundleIdentity:
     """Snapshot an exact Overview input without trusting stored JSON."""
 
-    directory = _require_real_directory(root, description="Overview output")
-    return _identity(
+    directory = require_real_directory(root, description="Overview output")
+    return overview_directory_identity(
         directory,
         expected_files=_OVERVIEW_EXPECTED_FILES,
     )
 
 
-def _stable_text(path: Path, *, description: str) -> str:
+def stable_text(path: Path, *, description: str) -> str:
     before = path.lstat()
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
         raise OverviewInputError(f"{description} must be a real regular file")
@@ -204,12 +204,12 @@ def _validate_semantic_sidecar(
 def load_overview_bundle(root: str | Path) -> LoadedOverviewBundle:
     """Load a standalone published Overview with fresh integrity checks."""
 
-    directory = _require_real_directory(root, description="Overview output")
-    identity_before = _identity(
+    directory = require_real_directory(root, description="Overview output")
+    identity_before = overview_directory_identity(
         directory,
         expected_files=_OVERVIEW_EXPECTED_FILES,
     )
-    report = _read_json_object(
+    report = read_json_object(
         directory / OVERVIEW_JSON_NAME,
         description="Overview report",
     )
@@ -218,13 +218,13 @@ def load_overview_bundle(root: str | Path) -> LoadedOverviewBundle:
         raise OverviewInputError(
             "Overview report is not the canonical model representation"
         )
-    validation = _read_json_object(
+    validation = read_json_object(
         directory / OVERVIEW_VALIDATION_NAME,
         description="Overview semantic validation",
     )
     _validate_semantic_sidecar(report, validation)
 
-    html_text = _stable_text(
+    html_text = stable_text(
         directory / OVERVIEW_HTML_NAME,
         description="Overview HTML",
     )
@@ -258,7 +258,7 @@ def load_overview_bundle(root: str | Path) -> LoadedOverviewBundle:
         raise OverviewInputError(
             "Overview detached artifact validation found mismatches"
         )
-    identity_after = _identity(
+    identity_after = overview_directory_identity(
         directory,
         expected_files=_OVERVIEW_EXPECTED_FILES,
     )
@@ -282,4 +282,6 @@ __all__ = [
     "OverviewBundleIdentity",
     "load_overview_bundle",
     "overview_bundle_identity",
+    "overview_directory_identity",
+    "stable_text",
 ]
