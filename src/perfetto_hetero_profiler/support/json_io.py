@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 import json
 from pathlib import Path
+import uuid
 
 
 def canonical_json_bytes(value: object) -> bytes:
@@ -37,6 +38,14 @@ def write_pretty_json(path: str | Path, value: object) -> None:
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(pretty_json_text(value), encoding="utf-8")
+
+
+def replace_pretty_json(path: str | Path, value: object) -> None:
+    """Atomically replace deterministic, human-readable JSON."""
+    output = Path(path)
+    temporary = output.with_name(f".{output.name}.{uuid.uuid4().hex}.tmp")
+    write_pretty_json(temporary, value)
+    temporary.replace(output)
 
 
 def write_jsonl_exclusive(

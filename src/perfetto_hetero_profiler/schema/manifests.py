@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
+import uuid
 
 from .records import RunManifest
 from .serialization import write_json
@@ -21,6 +21,6 @@ def publish_run_manifest(
     if initial:
         write_json(output, manifest)
         return
-    temporary = output.with_name(f".{output.name}.tmp")
+    temporary = output.with_name(f".{output.name}.{uuid.uuid4().hex}.tmp")
     write_json(temporary, manifest)
-    os.replace(temporary, output)
+    temporary.replace(output)

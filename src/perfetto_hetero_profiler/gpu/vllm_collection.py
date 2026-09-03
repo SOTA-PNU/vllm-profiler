@@ -4,15 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import gzip
-import hashlib
 import json
-import os
 from pathlib import Path
 import platform
 import threading
 import time
 from typing import Callable, Literal
-import uuid
 
 from ..artifact_compatibility import (
     LEGACY_GPU_COLLECTION_PRODUCER,
@@ -44,9 +41,11 @@ from ..schema import (
     RunStatus,
     SoftwareDescriptor,
     WorkloadDescriptor,
-    write_json,
     write_jsonl,
 )
+from ..schema.manifests import publish_run_manifest
+from ..support.files import sha256_file
+from ..support.json_io import replace_pretty_json
 from .openai_client import CompletionObservation, OpenAICompletionClient
 from .vllm_server import (
     ManagedVllmServer,
@@ -120,14 +119,8 @@ class GpuVllmCollectionConfig:
     @property
     def server_config(self) -> VllmServerConfig:
         root = self.paths.root
-        torch_dir = (
-            root / "raw/gpu/torch" if self.profile_mode == "torch" else None
-        )
-        nsys_output = (
-            root / LEGACY_GPU_NSYS_OUTPUT
-            if self.profile_mode == "nsys"
-            else None
-        )
+        torch_dir = root / "raw/gpu/torch" if self.profile_mode == "torch" else None
+        nsys_output = root / LEGACY_GPU_NSYS_OUTPUT if self.profile_mode == "nsys" else None
         return VllmServerConfig(
             model=self.model,
             host=self.host,
@@ -196,18 +189,14 @@ class _TelemetryThread:
         self.metrics: list[MetricSample] = []
         self.errors: list[str] = []
         self.gpu = GpuTelemetryCollector(
-            run_id=config.run_id,
-            host_id=HOST_ID,
-            clock_domain_id=CLOCK_DOMAIN_ID,
+            run_id=config.run_id, host_id=HOST_ID, clock_domain_id=CLOCK_DOMAIN_ID,
             sample_interval_ms=config.sample_interval_ms,
             client=gpu_client,
             known_gpu_indices=(0,),
         )
         self.system = SystemTelemetryCollector(
-            run_id=config.run_id,
-            host_id=HOST_ID,
-            clock_domain_id=CLOCK_DOMAIN_ID,
-            pid_provider=pid_provider,
+            run_id=config.run_id, host_id=HOST_ID,
+            clock_domain_id=CLOCK_DOMAIN_ID, pid_provider=pid_provider,
         )
         self.thread = threading.Thread(
             target=self._run,
@@ -242,6 +231,16 @@ class _TelemetryThread:
             self.stop_event.wait(interval_sec)
 
 
+def _cleanup_call(
+    errors: list[str], label: str, action: Callable[[], object]
+) -> object | None:
+    try:
+        return action()
+    except Exception as error:
+        errors.append(f"{label}: {error}")
+        return None
+
+
 class GpuVllmCollectionRunner:
     def __init__(
         self,
@@ -262,8 +261,8 @@ class GpuVllmCollectionRunner:
         config = self.config
         paths = config.paths
         paths.create()
-        (paths.root / "raw/gpu/torch").mkdir(parents=True, exist_ok=True)
-        (paths.root / "raw/gpu/nsys").mkdir(parents=True, exist_ok=True)
+        for directory in ("raw/gpu/torch", "raw/gpu/nsys"):
+            (paths.root / directory).mkdir(parents=True, exist_ok=True)
         server_stdout = paths.root / "raw/gpu/vllm-server.stdout.log"
         server_stderr = paths.root / "raw/gpu/vllm-server.stderr.log"
         request_summary_path = paths.root / "raw/client/requests.json"
@@ -271,31 +270,23 @@ class GpuVllmCollectionRunner:
 
         try:
             devices = self.gpu_client.query()
-            write_json(
-                paths.manifest, self._manifest(devices, RunStatus.RUNNING, ())
+            publish_run_manifest(
+                paths.manifest,
+                self._manifest(devices, RunStatus.RUNNING, ()),
+                initial=True,
             )
-            write_jsonl(
-                paths.clock_domains,
-                [
-                    ClockDomain(
-                        run_id=config.run_id,
-                        clock_domain_id=CLOCK_DOMAIN_ID,
-                        host_id=HOST_ID,
-                        clock_type=ClockType.MONOTONIC,
-                        unit="ns",
-                        monotonic=True,
-                        adjustable=False,
-                        attributes={"vendor.clock_source": "time.monotonic_ns"},
-                    )
-                ],
+            clock = ClockDomain(
+                run_id=config.run_id, clock_domain_id=CLOCK_DOMAIN_ID,
+                host_id=HOST_ID, clock_type=ClockType.MONOTONIC, unit="ns",
+                monotonic=True, adjustable=False,
+                attributes={"vendor.clock_source": "time.monotonic_ns"},
             )
+            write_jsonl(paths.clock_domains, [clock])
         except BaseException:
             self.gpu_client.shutdown()
             raise
 
-        server = self.server_factory(
-            config.server_config, server_stdout, server_stderr
-        )
+        server = self.server_factory(config.server_config, server_stdout, server_stderr)
         telemetry = _TelemetryThread(
             config,
             lambda: server.process.pid if server.process is not None else None,
@@ -304,66 +295,9 @@ class GpuVllmCollectionRunner:
         warmups: list[CompletionObservation] = []
         measured: list[CompletionObservation] = []
         errors: list[str] = []
-        startup_ns: int | None = None
-        server_return_code: int | None = None
-        profiler_started = False
-        try:
-            server.start()
-            telemetry.start()
-            ready_ns = server.wait_ready(config.startup_timeout_sec)
-            assert server.started_monotonic_ns is not None
-            startup_ns = ready_ns - server.started_monotonic_ns
-            client = self.client_factory(
-                server.base_url, timeout_sec=config.request_timeout_sec
-            )
-            model_name = str(config.model)
-            for index in range(config.warmup_requests):
-                warmups.append(
-                    client.complete(
-                        model=model_name,
-                        request_id=f"{config.run_id}-warmup-{index}",
-                        prompt=PROMPT,
-                        max_output_tokens=config.max_output_tokens,
-                    )
-                )
-            if config.profile_mode == "torch":
-                post_empty(
-                    server.base_url, "/start_profile", config.request_timeout_sec
-                )
-                profiler_started = True
-            for index in range(config.measured_requests):
-                measured.append(
-                    client.complete(
-                        model=model_name,
-                        request_id=f"{config.run_id}-measured-{index}",
-                        prompt=PROMPT,
-                        max_output_tokens=config.max_output_tokens,
-                    )
-                )
-            if config.profile_mode == "torch":
-                post_empty(
-                    server.base_url, "/stop_profile", config.request_timeout_sec
-                )
-                profiler_started = False
-        except Exception as error:
-            errors.append(f"{type(error).__name__}: {error}")
-        finally:
-            if profiler_started:
-                try:
-                    post_empty(
-                        server.base_url, "/stop_profile", config.request_timeout_sec
-                    )
-                except Exception as error:
-                    errors.append(f"stop_profile cleanup: {error}")
-            telemetry.stop()
-            try:
-                self.gpu_client.shutdown()
-            except Exception as error:
-                errors.append(f"NVML cleanup: {error}")
-            try:
-                server_return_code = server.stop(config.shutdown_timeout_sec)
-            except Exception as error:
-                errors.append(f"server cleanup: {error}")
+        startup_ns, server_return_code = self._execute(
+            server, telemetry, warmups, measured, errors
+        )
 
         errors.extend(telemetry.errors)
         errors.extend(
@@ -371,46 +305,38 @@ class GpuVllmCollectionRunner:
             for metric in telemetry.metrics
             if metric.availability is Availability.ERROR
         )
-        events = [
-            event for observation in measured for event in observation_events(config.run_id, observation)
-        ]
+        events = [event for item in measured for event in observation_events(config.run_id, item)]
         metrics = list(telemetry.metrics)
         for observation in measured:
             metrics.extend(observation_metrics(config.run_id, observation))
         metrics.extend(measured_window_metrics(config.run_id, measured))
         write_jsonl(paths.events, events)
         write_jsonl(paths.metrics, metrics)
-        request_summary = {
-            "run_id": config.run_id,
-            "warmup_request_ids": [item.request_id for item in warmups],
-            "measured": [
-                {
-                    "request_id": item.request_id,
-                    "http_status": item.http_status,
-                    "input_tokens": item.input_tokens,
-                    "output_tokens": item.output_tokens,
-                    "total_tokens": item.total_tokens,
-                    "token_timestamp_count": len(item.token_timestamps_ns),
-                }
-                for item in measured
-            ],
-            "stores_prompt_or_generated_text": False,
-        }
-        _write_plain_json(request_summary_path, request_summary)
+        replace_pretty_json(
+            request_summary_path,
+            {
+                "run_id": config.run_id,
+                "warmup_request_ids": [item.request_id for item in warmups],
+                "measured": [
+                    {
+                        "request_id": item.request_id, "http_status": item.http_status,
+                        "input_tokens": item.input_tokens, "output_tokens": item.output_tokens,
+                        "total_tokens": item.total_tokens,
+                        "token_timestamp_count": len(item.token_timestamps_ns),
+                    }
+                    for item in measured
+                ],
+                "stores_prompt_or_generated_text": False,
+            },
+        )
         nvml_raw_path = paths.root / "raw/gpu/nvml-last.json"
         if telemetry.gpu.last_raw_snapshot is not None:
-            nvml_raw_path.write_text(
-                telemetry.gpu.last_raw_snapshot, encoding="utf-8"
-            )
+            nvml_raw_path.write_text(telemetry.gpu.last_raw_snapshot, encoding="utf-8")
 
         profile_files = self._profile_files(paths.root)
         profile_validation = self._validate_profile_files(profile_files, errors)
-        artifacts = self._artifacts(
-            paths.root,
-            server_stdout,
-            server_stderr,
-            request_summary_path,
-            profile_files,
+        artifacts = self._artifacts(paths.root, server_stdout, server_stderr,
+            request_summary_path, profile_files,
             nvml_raw_path if nvml_raw_path.exists() else None,
         )
         write_jsonl(paths.artifacts, artifacts)
@@ -421,34 +347,91 @@ class GpuVllmCollectionRunner:
             and (config.profile_mode == "monitor" or bool(profile_files))
         )
         status = RunStatus.SUCCEEDED if succeeded else RunStatus.FAILED
-        final_manifest = self._manifest(devices, status, tuple(errors))
-        temporary_manifest = paths.manifest.with_name(
-            f".{paths.manifest.name}.{uuid.uuid4().hex}.tmp"
+        publish_run_manifest(
+            paths.manifest, self._manifest(devices, status, tuple(errors))
         )
-        write_json(temporary_manifest, final_manifest)
-        os.replace(temporary_manifest, paths.manifest)
         summary = self._summary(
-            status=status,
-            startup_ns=startup_ns,
-            warmups=warmups,
-            measured=measured,
-            telemetry=telemetry.metrics,
-            profile_files=profile_files,
-            profile_validation=profile_validation,
-            server_return_code=server_return_code,
-            errors=errors,
+            status=status, startup_ns=startup_ns, warmups=warmups,
+            measured=measured, telemetry=telemetry.metrics,
+            profile_files=profile_files, profile_validation=profile_validation,
+            server_return_code=server_return_code, errors=errors,
         )
-        _write_plain_json(summary_path, summary)
+        replace_pretty_json(summary_path, summary)
         return GpuVllmCollectionResult(
-            run_directory=paths.root,
-            status=status,
-            startup_ns=startup_ns,
-            warmup_count=len(warmups),
-            measured_count=len(measured),
-            event_count=len(events),
-            metric_count=len(metrics),
-            artifact_count=len(artifacts),
-            errors=tuple(errors),
+            paths.root, status, startup_ns, len(warmups), len(measured),
+            len(events), len(metrics), len(artifacts), tuple(errors)
+        )
+
+    def _execute(
+        self,
+        server: ManagedVllmServer,
+        telemetry: _TelemetryThread,
+        warmups: list[CompletionObservation],
+        measured: list[CompletionObservation],
+        errors: list[str],
+    ) -> tuple[int | None, int | None]:
+        config = self.config
+        startup_ns: int | None = None
+        server_return_code: int | None = None
+        profiler_started = False
+        profiler_stop_attempted = False
+        client: OpenAICompletionClient | None = None
+        try:
+            server.start()
+            telemetry.start()
+            ready_ns = server.wait_ready(config.startup_timeout_sec)
+            assert server.started_monotonic_ns is not None
+            startup_ns = ready_ns - server.started_monotonic_ns
+            client = self.client_factory(
+                server.base_url, timeout_sec=config.request_timeout_sec
+            )
+            for index in range(config.warmup_requests):
+                warmups.append(self._complete(client, "warmup", index))
+            if config.profile_mode == "torch":
+                post_empty(
+                    server.base_url, "/start_profile", config.request_timeout_sec
+                )
+                profiler_started = True
+            for index in range(config.measured_requests):
+                measured.append(self._complete(client, "measured", index))
+            if config.profile_mode == "torch":
+                profiler_stop_attempted = True
+                post_empty(
+                    server.base_url, "/stop_profile", config.request_timeout_sec
+                )
+                profiler_started = False
+        except Exception as error:
+            errors.append(f"{type(error).__name__}: {error}")
+        finally:
+            if profiler_started and not profiler_stop_attempted:
+                try:
+                    post_empty(
+                        server.base_url, "/stop_profile", config.request_timeout_sec
+                    )
+                except Exception as error:
+                    errors.append(f"stop_profile cleanup: {error}")
+            if client is not None:
+                _cleanup_call(errors, "client cleanup", lambda: client.close())
+            _cleanup_call(errors, "telemetry cleanup", telemetry.stop)
+            _cleanup_call(errors, "NVML cleanup", self.gpu_client.shutdown)
+            stopped = _cleanup_call(
+                errors,
+                "server cleanup",
+                lambda: server.stop(config.shutdown_timeout_sec),
+            )
+            if stopped is not None:
+                server_return_code = int(stopped)
+        return startup_ns, server_return_code
+
+    def _complete(
+        self, client: OpenAICompletionClient, kind: str, index: int
+    ) -> CompletionObservation:
+        config = self.config
+        return client.complete(
+            model=str(config.model),
+            request_id=f"{config.run_id}-{kind}-{index}",
+            prompt=PROMPT,
+            max_output_tokens=config.max_output_tokens,
         )
 
     def _manifest(
@@ -458,11 +441,8 @@ class GpuVllmCollectionRunner:
         rows = discovery.rows  # type: ignore[attr-defined]
         devices = [
             DeviceDescriptor(
-                host_id=HOST_ID,
-                device_type=DeviceType.GPU,
-                device_id=row.device_id,
-                vendor="NVIDIA",
-                model=row.name,
+                host_id=HOST_ID, device_type=DeviceType.GPU,
+                device_id=row.device_id, vendor="NVIDIA", model=row.name,
                 status="available",
                 memory_total_bytes=(
                     int(row.memory_total_bytes.value)
@@ -474,37 +454,25 @@ class GpuVllmCollectionRunner:
             for row in rows
         ]
         return RunManifest(
-            run_id=config.run_id,
-            mode=RunMode.GPU_ONLY,
-            profile_mode=(
-                ProfileMode.MONITOR
-                if config.profile_mode == "monitor"
-                else ProfileMode.DETAILED_PROFILE
-            ),
-            status=status,
-            created_at_unix_ns=self.unix_time_ns(),
+            run_id=config.run_id, mode=RunMode.GPU_ONLY,
+            profile_mode=(ProfileMode.MONITOR if config.profile_mode == "monitor"
+                          else ProfileMode.DETAILED_PROFILE),
+            status=status, created_at_unix_ns=self.unix_time_ns(),
             models=[
                 ModelDescriptor(
-                    role="served",
-                    model_id=str(config.model),
-                    revision=None,
-                    tokenizer_id=None,
-                    dtype=None,
+                    role="served", model_id=str(config.model), revision=None,
+                    tokenizer_id=None, dtype=None,
                 )
             ],
             workload=WorkloadDescriptor(
-                request_count=config.measured_requests,
-                concurrency=1,
-                request_rate_per_s=None,
-                input_tokens=None,
-                output_tokens=config.max_output_tokens,
-                max_model_len=config.max_model_len,
+                request_count=config.measured_requests, concurrency=1,
+                request_rate_per_s=None, input_tokens=None,
+                output_tokens=config.max_output_tokens, max_model_len=config.max_model_len,
                 warmup_requests=config.warmup_requests,
             ),
             hosts=[
                 HostDescriptor(
-                    host_id=HOST_ID,
-                    role="gpu",
+                    host_id=HOST_ID, role="gpu",
                     hostname=platform.node() or HOST_ID,
                     operating_system=platform.system() or "unknown",
                     architecture=platform.machine() or "unknown",
@@ -512,36 +480,28 @@ class GpuVllmCollectionRunner:
             ],
             software=[
                 SoftwareDescriptor(
-                    name="vllm",
-                    version="0.18.0",
-                    role="inference-server",
+                    name="vllm", version="0.18.0", role="inference-server",
                     path=str(config.vllm_bin or config.server_python),
                 ),
                 SoftwareDescriptor(
-                    name=NVML_DISTRIBUTION,
-                    version=NVML_DISTRIBUTION_VERSION,
-                    role="gpu-telemetry",
-                    path=None,
+                    name=NVML_DISTRIBUTION, version=NVML_DISTRIBUTION_VERSION,
+                    role="gpu-telemetry", path=None,
                 ),
             ],
             devices=devices,
             configuration={
-                "profile_mode": config.profile_mode,
-                "host": config.host,
+                "profile_mode": config.profile_mode, "host": config.host,
                 "port": config.port,
                 "sample_interval_ms": config.sample_interval_ms,
                 "gpu_memory_utilization": config.gpu_memory_utilization,
                 "max_model_len": config.max_model_len,
                 "warmup_requests": config.warmup_requests,
                 "measured_requests": config.measured_requests,
-                "max_output_tokens": config.max_output_tokens,
-                "offline": config.offline,
+                "max_output_tokens": config.max_output_tokens, "offline": config.offline,
                 "server_argv": list(build_server_argv(config.server_config)),
             },
-            attributes={
-                "vendor.collector": LEGACY_GPU_COLLECTION_PRODUCER,
-                "vendor.collector_errors": list(errors),
-            },
+            attributes={"vendor.collector": LEGACY_GPU_COLLECTION_PRODUCER,
+                        "vendor.collector_errors": list(errors)},
         )
 
     def _profile_files(self, run_root: Path) -> list[Path]:
@@ -600,36 +560,24 @@ class GpuVllmCollectionRunner:
         profile_files: list[Path],
         nvml_raw: Path | None,
     ) -> list[ArtifactReference]:
-        items = [
-            self._artifact(root, stdout, "vllm-stdout", ArtifactKind.RAW_LOG, "text"),
-            self._artifact(root, stderr, "vllm-stderr", ArtifactKind.RAW_LOG, "text"),
-            self._artifact(
-                root, requests, "client-requests", ArtifactKind.RAW_LOG, "json"
-            ),
+        base = [
+            (stdout, "vllm-stdout", "text"),
+            (stderr, "vllm-stderr", "text"),
+            (requests, "client-requests", "json"),
         ]
+        items = [self._artifact(root, path, name, ArtifactKind.RAW_LOG, format_name)
+                 for path, name, format_name in base]
         if nvml_raw is not None:
             items.append(
-                self._artifact(
-                    root,
-                    nvml_raw,
-                    "nvml-last",
-                    ArtifactKind.TELEMETRY,
-                    "json",
-                    producer="nvml",
-                )
+                self._artifact(root, nvml_raw, "nvml-last",
+                               ArtifactKind.TELEMETRY, "json", producer="nvml")
             )
         for index, path in enumerate(profile_files):
-            kind = (
-                ArtifactKind.TORCH_TRACE
-                if self.config.profile_mode == "torch"
-                else ArtifactKind.NSYS_REPORT
-            )
+            kind = (ArtifactKind.TORCH_TRACE if self.config.profile_mode == "torch"
+                    else ArtifactKind.NSYS_REPORT)
             items.append(
-                self._artifact(
-                    root,
-                    path,
-                    f"{self.config.profile_mode}-profile-{index}",
-                    kind,
+                self._artifact(root, path,
+                    f"{self.config.profile_mode}-profile-{index}", kind,
                     "json.gz" if path.suffix == ".gz" else path.suffix.lstrip("."),
                 )
             )
@@ -642,10 +590,7 @@ class GpuVllmCollectionRunner:
             )
             for index, path in enumerate(auxiliary_files):
                 items.append(
-                    self._artifact(
-                        root,
-                        path,
-                        f"torch-auxiliary-{index}",
+                    self._artifact(root, path, f"torch-auxiliary-{index}",
                         ArtifactKind.RAW_LOG,
                         path.suffix.lstrip(".") or "binary",
                     )
@@ -671,7 +616,7 @@ class GpuVllmCollectionRunner:
             producer=producer,
             created_at_unix_ns=self.unix_time_ns(),
             size_bytes=path.stat().st_size,
-            sha256=_sha256(path),
+            sha256=sha256_file(path),
             host_id=HOST_ID,
             attributes={"vendor.profile_mode": self.config.profile_mode},
         )
@@ -703,12 +648,8 @@ class GpuVllmCollectionRunner:
         gpu_memory = values("resource.gpu.memory_used")
         gpu_power = values("resource.gpu.power")
         return {
-            "run_id": self.config.run_id,
-            "profile_mode": self.config.profile_mode,
-            "startup": {
-                "ready": startup_ns is not None,
-                "duration_ns": startup_ns,
-            },
+            "run_id": self.config.run_id, "profile_mode": self.config.profile_mode,
+            "startup": {"ready": startup_ns is not None, "duration_ns": startup_ns},
             "requests": {
                 "warmup_expected": self.config.warmup_requests,
                 "warmup_completed": len(warmups),
@@ -716,11 +657,7 @@ class GpuVllmCollectionRunner:
                 "measured_completed": len(measured),
                 "http_statuses": [item.http_status for item in measured],
             },
-            "latency": {
-                "e2e_ns": latencies,
-                "ttft_ns": ttfts,
-                "tpot_ns": tpots,
-            },
+            "latency": {"e2e_ns": latencies, "ttft_ns": ttfts, "tpot_ns": tpots},
             "tokens": {
                 "input": sum(item.input_tokens for item in measured),
                 "output": sum(item.output_tokens for item in measured),
@@ -735,40 +672,18 @@ class GpuVllmCollectionRunner:
             "artifact": {
                 "profile_files": [
                     {
-                        "relative_path": path.relative_to(
-                            self.config.paths.root
-                        ).as_posix(),
+                        "relative_path": path.relative_to(self.config.paths.root).as_posix(),
                         "size_bytes": path.stat().st_size,
-                        "sha256": _sha256(path),
+                        "sha256": sha256_file(path),
                     }
                     for path in profile_files
                 ],
                 "validation": profile_validation,
             },
-            "final": {
-                "status": status.value,
-                "server_return_code": server_return_code,
-                "errors": errors,
-            },
+            "final": {"status": status.value,
+                      "server_return_code": server_return_code, "errors": errors},
         }
 
 
 def _average(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _write_plain_json(path: Path, value: object) -> None:
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    temporary.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)
