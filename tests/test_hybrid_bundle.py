@@ -127,6 +127,26 @@ class HybridConfigTests(unittest.TestCase):
                 npu_run=Path("/tmp/source"),
             )
 
+    def test_explicit_output_directory_preserves_logical_run_id(self):
+        config = HybridMergeConfig(
+            run_root=Path("/tmp/runs"),
+            run_id="logical-run",
+            gpu_run=Path("/tmp/gpu"),
+            npu_run=Path("/tmp/npu"),
+            output_directory=Path("/tmp/runs/logical-run/hybrid"),
+        )
+        self.assertEqual(config.paths.root, Path("/tmp/runs/logical-run/hybrid"))
+        self.assertEqual(config.run_id, "logical-run")
+
+        with self.assertRaisesRegex(ValueError, "output directory"):
+            HybridMergeConfig(
+                run_root=Path("/tmp/runs"),
+                run_id="logical-run",
+                gpu_run=Path("/tmp/gpu"),
+                npu_run=Path("/tmp/npu"),
+                output_directory=Path("relative/hybrid"),
+            )
+
     def test_negative_uncertainty_rejected(self):
         with self.assertRaisesRegex(ValueError, "non-negative"):
             HybridMergeConfig(

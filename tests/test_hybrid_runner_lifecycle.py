@@ -356,7 +356,8 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
 
             def convert(config):
                 calls.append(("perfetto", config.request_focused))
-                config.output_directory.mkdir(parents=True)
+                self.assertTrue(config.output_directory.parent.is_dir())
+                config.output_directory.mkdir()
                 (config.output_directory / "trace.pftrace").write_bytes(b"full")
                 if config.request_focused:
                     (config.output_directory / "trace.request-focused.pftrace").write_bytes(
@@ -426,6 +427,13 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
             self.assertFalse(by_name["prefill"].stopped)
             self.assertFalse(by_name["proxy"].started)
             self.assertTrue(_Telemetry.instances[0].stopped)
+            self.assertEqual(
+                sorted(path.name for path in (root / "runs").iterdir()),
+                ["partial"],
+            )
+            self.assertTrue(runner.layout.coordinator.is_dir())
+            self.assertTrue(runner.layout.gpu.is_dir())
+            self.assertTrue(runner.layout.npu.is_dir())
 
     def test_server_pythonpath_uses_configured_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -609,9 +617,10 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                 _config(root), run_root=runs, run_id="source-write",
                 profile_mode="monitor", process_factory=_Process,
             )
-            RunPaths(runs, "source-write-gpu").create()
-            RunPaths(runs, "source-write-npu").create()
-            marker_root = runs / "source-write-coordinator/raw/runtime_markers"
+            layout = runner.layout
+            RunPaths(layout.gpu.parent, layout.gpu.name).create()
+            RunPaths(layout.npu.parent, layout.npu.name).create()
+            marker_root = layout.coordinator / "raw/runtime_markers"
             marker_root.mkdir(parents=True)
             (marker_root / "proxy-markers.jsonl").write_text(
                 "", encoding="utf-8"
@@ -631,7 +640,7 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                 )
             for role in ("gpu", "npu"):
                 clock = read_jsonl(
-                    runs / f"source-write-{role}/clocks/clock_domains.jsonl"
+                    getattr(layout, role) / "clocks/clock_domains.jsonl"
                 )[0]
                 self.assertEqual(
                     clock.attributes["clock.source"], "time.monotonic_ns"
@@ -645,9 +654,10 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                 _config(root), run_root=runs, run_id="nvml-source",
                 profile_mode="monitor", process_factory=_Process,
             )
-            RunPaths(runs, "nvml-source-gpu").create()
-            RunPaths(runs, "nvml-source-npu").create()
-            marker_root = runs / "nvml-source-coordinator/raw/runtime_markers"
+            layout = runner.layout
+            RunPaths(layout.gpu.parent, layout.gpu.name).create()
+            RunPaths(layout.npu.parent, layout.npu.name).create()
+            marker_root = layout.coordinator / "raw/runtime_markers"
             marker_root.mkdir(parents=True)
             (marker_root / "proxy-markers.jsonl").write_text("", encoding="utf-8")
             telemetry = _WrittenTelemetry()
@@ -665,7 +675,7 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                     warmups=[], observations=[observation], telemetry=telemetry,
                     profile=None, errors=[],
                 )
-            gpu_root = runs / "nvml-source-gpu"
+            gpu_root = layout.gpu
             self.assertTrue((gpu_root / "raw/gpu/nvml-last.json").is_file())
             artifact = next(
                 item for item in read_jsonl(gpu_root / "artifacts/artifacts.jsonl")
@@ -682,9 +692,10 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                 _config(root), run_root=runs, run_id="marker-failure",
                 profile_mode="monitor", process_factory=_Process,
             )
-            RunPaths(runs, "marker-failure-gpu").create()
-            RunPaths(runs, "marker-failure-npu").create()
-            marker_root = runs / "marker-failure-coordinator/raw/runtime_markers"
+            layout = runner.layout
+            RunPaths(layout.gpu.parent, layout.gpu.name).create()
+            RunPaths(layout.npu.parent, layout.npu.name).create()
+            marker_root = layout.coordinator / "raw/runtime_markers"
             marker_root.mkdir(parents=True)
             (marker_root / "proxy-markers.jsonl").write_text(
                 "", encoding="utf-8"
@@ -707,13 +718,13 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                 )
 
             self.assertTrue(
-                (runs / "marker-failure-coordinator/requests.json").is_file()
+                (layout.coordinator / "requests.json").is_file()
             )
             self.assertTrue(
-                (runs / "marker-failure-coordinator/telemetry_lifecycle.json").is_file()
+                (layout.coordinator / "telemetry_lifecycle.json").is_file()
             )
             for role in ("gpu", "npu"):
-                bundle = runs / f"marker-failure-{role}"
+                bundle = getattr(layout, role)
                 self.assertTrue((bundle / "metrics/metrics.jsonl").is_file())
                 self.assertTrue(
                     (bundle / "summary/telemetry_lifecycle.json").is_file()
@@ -729,29 +740,30 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                 _config(root / "assets"), run_root=runs, run_id="torch-format",
                 profile_mode="gpu-torch", process_factory=_Process,
             )
-            RunPaths(runs, "torch-format-gpu").create()
+            gpu_root = runner.layout.gpu
+            RunPaths(gpu_root.parent, gpu_root.name).create()
             for relative in (
                 "raw/client/measured_requests.jsonl",
                 "events/events.jsonl",
                 "metrics/metrics.jsonl",
             ):
-                (runs / "torch-format-gpu" / relative).write_text(
+                (gpu_root / relative).write_text(
                     "", encoding="utf-8"
                 )
             trace = (
-                runs / "torch-format-gpu/raw/gpu/torch/"
+                gpu_root / "raw/gpu/torch/"
                 "rank0.pt.trace.json.gz"
             )
             trace.parent.mkdir(parents=True, exist_ok=True)
             trace.write_bytes(b"gzip-trace")
-            (runs / "torch-format-gpu/clocks/profiler_alignment.json").write_text(
+            (gpu_root / "clocks/profiler_alignment.json").write_text(
                 "{}\n", encoding="utf-8"
             )
-            (runs / "torch-format-gpu/summary/detailed_profile.json").write_text(
+            (gpu_root / "summary/detailed_profile.json").write_text(
                 "{}\n", encoding="utf-8"
             )
             profile = {
-                "root": runs / "torch-format-gpu",
+                "root": gpu_root,
                 "alignment": {
                     "native_clock_domain": "gpu:torch-chrome-trace",
                 },
@@ -776,9 +788,11 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runs = root / "runs"
+            layout = HybridRunLayout(runs, "closeout")
             gpu = build_source_bundle(
-                runs / "closeout-gpu", device_type=DeviceType.GPU,
+                layout.gpu, device_type=DeviceType.GPU,
                 host_id="localhost", clock_domain_id="host-monotonic",
+                record_run_id="closeout-gpu",
                 markers=GPU_MARKERS,
                 timestamps=tuple(
                     1_000_000 + index * 100_000
@@ -786,8 +800,9 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                 ),
             )
             npu = build_source_bundle(
-                runs / "closeout-npu", device_type=DeviceType.NPU,
+                layout.npu, device_type=DeviceType.NPU,
                 host_id="localhost", clock_domain_id="host-monotonic",
+                record_run_id="closeout-npu",
                 markers=NPU_MARKERS,
                 timestamps=tuple(
                     1_900_000 + index * 100_000
@@ -798,13 +813,14 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                 HybridMergeConfig(
                     run_root=runs, run_id="closeout", gpu_run=gpu,
                     npu_run=npu,
+                    output_directory=layout.hybrid,
                     alignment_method=AlignmentMethod.SAME_CLOCK_DOMAIN,
                     coordinator_host_id="localhost",
                     canonical_clock_domain_id="hybrid-canonical",
                 )
             ).merge()
             self.assertIs(merged.status, RunStatus.SUCCEEDED)
-            coordinator = runs / "closeout-coordinator"
+            coordinator = layout.coordinator
             coordinator.mkdir()
             (coordinator / "result.json").write_text(
                 '{"status":"succeeded"}\n', encoding="utf-8"
@@ -814,7 +830,7 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                 profile_mode="monitor", process_factory=_Process,
             )
             runner._create_closeout()
-            loaded = load_hybrid_run(runs / "closeout")
+            loaded = load_hybrid_run(layout.hybrid)
             self.assertEqual(loaded.manifest.run_id, "closeout")
             self.assertGreater(loaded.closeout_artifact_count, 0)
 

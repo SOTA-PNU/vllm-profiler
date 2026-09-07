@@ -32,14 +32,24 @@ class HybridMergeConfig:
     fake_jitter_ns: int = 0
     fake_asymmetry_ns: int = 0
     allow_non_fake_sources: bool = False
+    output_directory: Path | None = None
 
     def __post_init__(self) -> None:
         for name in ("run_root", "gpu_run", "npu_run"):
             object.__setattr__(self, name, Path(getattr(self, name)))
+        if self.output_directory is not None:
+            object.__setattr__(
+                self, "output_directory", Path(self.output_directory)
+            )
         if not self.run_root.is_absolute():
             raise ValueError("run_root must be absolute")
         if not self.gpu_run.is_absolute() or not self.npu_run.is_absolute():
             raise ValueError("source run paths must be absolute")
+        if (
+            self.output_directory is not None
+            and not self.output_directory.is_absolute()
+        ):
+            raise ValueError("output directory must be absolute")
         if self.gpu_run == self.npu_run:
             raise ValueError("GPU and NPU source runs must differ")
         if not isinstance(self.alignment_method, AlignmentMethod):
@@ -61,10 +71,14 @@ class HybridMergeConfig:
         if not self.canonical_clock_domain_id.strip():
             raise ValueError("canonical_clock_domain_id must be non-empty")
         RunPaths(self.run_root, self.run_id)
+        if self.output_directory is not None:
+            RunPaths(self.output_directory.parent, self.output_directory.name)
 
     @property
     def paths(self) -> RunPaths:
-        return RunPaths(self.run_root, self.run_id)
+        if self.output_directory is None:
+            return RunPaths(self.run_root, self.run_id)
+        return RunPaths(self.output_directory.parent, self.output_directory.name)
 
 
 def build_hybrid_plan(config: HybridMergeConfig) -> dict[str, object]:

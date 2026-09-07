@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+from ..hybrid.layout import related_run_root
 from ..perfetto.loader import load_hybrid_run
 from ..perfetto.tooling import (
     TRACE_PROCESSOR_FILENAME,
@@ -115,8 +116,14 @@ def _prepare_generation(
         perfetto.toolchain.binary_path,
         relative_path=perfetto.toolchain.binary_path.name,
     )
+    try:
+        default_output = related_run_root(
+            loaded.root, loaded.manifest.run_id, "overview"
+        )
+    except ValueError as error:
+        raise OverviewGenerationError(str(error)) from error
     requested_output = (
-        loaded.root.with_name(f"{loaded.manifest.run_id}-overview")
+        default_output
         if config.output_directory is None
         else Path(config.output_directory)
     )

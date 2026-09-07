@@ -15,6 +15,7 @@ from typing import Any, Literal
 from perfetto_hetero_profiler.hybrid.detailed_profile import (
     DetailedProfileValidationError,
 )
+from perfetto_hetero_profiler.hybrid.layout import HybridRunLayout
 from perfetto_hetero_profiler.schema import MetricSample, read_jsonl, write_jsonl
 from perfetto_hetero_profiler.support.json_io import write_jsonl_exclusive
 
@@ -45,18 +46,19 @@ class HybridDetailedProfileConfig:
             raise ValueError("run_id must be a safe single path component")
         if self.profile_kind not in SUPPORTED_PROFILE_KINDS:
             raise ValueError(f"unsupported profile_kind: {self.profile_kind!r}")
-        existing = [path for path in self.output_roots.values() if path.exists()]
-        if existing:
-            raise FileExistsError(f"run output already exists: {existing[0]}")
+        bundle = HybridRunLayout(self.run_root, self.run_id).bundle
+        if bundle.exists():
+            raise FileExistsError(f"run output already exists: {bundle}")
 
     @property
     def output_roots(self) -> dict[str, Path]:
+        layout = HybridRunLayout(self.run_root, self.run_id)
         return {
-            "hybrid": self.run_root / self.run_id,
-            "gpu": self.run_root / f"{self.run_id}-gpu",
-            "npu": self.run_root / f"{self.run_id}-npu",
-            "coordinator": self.run_root / f"{self.run_id}-coordinator",
-            "recovery": self.run_root / f"{self.run_id}-closeout-recovery",
+            "hybrid": layout.hybrid,
+            "gpu": layout.gpu,
+            "npu": layout.npu,
+            "coordinator": layout.coordinator,
+            "recovery": layout.recovery,
         }
 
     @property

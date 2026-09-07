@@ -196,19 +196,27 @@ Profile mode는 다음 중 하나만 선택할 수 있습니다.
 간섭시키지 않고 각 capture의 overhead와 provenance를 분리하기 위해서입니다.
 NPU Torch는 NPU 내부 실행 시간이 아니라 Decode server의 host-side 활동입니다.
 
-기존 immutable-source 정책 때문에 결과는 sibling 디렉터리로 분리됩니다.
+한 번의 실행 결과는 `<run-root>/<run-id>/` 아래에 묶입니다. GPU/NPU 원본과
+파생 산출물은 서로 다른 하위 디렉터리에 두어 immutable-source 정책은 그대로
+유지합니다.
 
 ```text
-runs/<run-id>/              normalized hybrid bundle
-runs/<run-id>-gpu/          immutable GPU source and raw capture
-runs/<run-id>-npu/          immutable NPU source and raw capture
-runs/<run-id>-coordinator/  server logs, cleanup and validation evidence
-runs/<run-id>-perfetto/     trace.pftrace and detached validation
-runs/<run-id>-perfetto-request-focused/ presentation trace bundle
-runs/<run-id>-overview/     external overview.json and overview.html
-runs/<run-id>-closeout-recovery/ detached immutable-input manifest
-runs/<run-id>-publication/  overall result, output hashes, and optional repeat-verification evidence
+runs/<run-id>/
+├── coordinator/            server logs, cleanup and validation evidence
+├── sources/
+│   ├── gpu/                immutable GPU source and raw capture
+│   └── npu/                immutable NPU source and raw capture
+├── hybrid/                 normalized hybrid bundle
+├── perfetto/
+│   ├── full/               full trace and detached validation
+│   └── request-focused/    presentation trace and detached validation
+├── overview/               external overview.json and overview.html
+├── publication/            overall result and output hashes
+└── recovery/               detached immutable-input manifest
 ```
+
+이전 버전이 만든 `<run-id>-gpu`, `<run-id>-coordinator` 형태의 flat 결과도
+분석·변환할 수 있지만, 새 실행은 위 grouped layout만 생성합니다.
 
 Production runner는 Full Perfetto, request-focused Perfetto, Overview를 각각 한
 번만 생성합니다. `determinism.json`의 `byte_identical: null`은 해당 run 안에서
@@ -217,7 +225,8 @@ Production runner는 Full Perfetto, request-focused Perfetto, Overview를 각각
 evaluation에서 같은 입력을 두 번 생성하여 검증합니다. 과거 runner가 반복 생성
 검증 후 기록한 `byte_identical: true` artifact도 계속 읽을 수 있습니다.
 
-실패 원인은 `<run-id>-coordinator/result.json`과 `raw/*.stderr.log`에서
+실패 원인은 `<run-id>/coordinator/result.json`과
+`<run-id>/coordinator/raw/*.stderr.log`에서
 확인합니다. Runner는 leader의 정상 종료를 먼저 요청하고, 필요할 때만 자신이
 만든 process group을 단계적으로 정리합니다. 기존 서버나 다른 사용자 process는
 종료하지 않습니다.
@@ -320,7 +329,9 @@ GPU/NPU request는 명시적인 request, transfer 또는 correlation ID로만
 
 ## Run 구조
 
-수집 결과는 새 `<run-root>/<run-id>`에 생성됩니다.
+아래는 개별 collector와 저수준 merge가 사용하는 normalized run 내부
+구조입니다. `collect hybrid`에서는 같은 구조가
+`<run-root>/<run-id>/hybrid/`에 위치합니다.
 
 ```text
 runs/<run-id>/
@@ -351,7 +362,7 @@ hetero-profiler schema validate ./runs/example/events/events.jsonl
 mkdir -p ./outputs
 
 hetero-profiler convert perfetto \
-  --run ./runs/example-hybrid \
+  --run ./runs/manual-hybrid-01/hybrid \
   --output ./outputs/example-perfetto \
   --trace-processor /path/to/trace_processor_shell \
   --dry-run
@@ -398,7 +409,7 @@ Overview에서 확인할 수 있습니다.
 
 ```bash
 hetero-profiler convert perfetto \
-  --run ./runs/example-hybrid \
+  --run ./runs/manual-hybrid-01/hybrid \
   --output ./outputs/example-detailed-perfetto \
   --trace-processor /path/to/trace_processor_shell \
   --include-native-details \
@@ -433,7 +444,7 @@ Overview는 Perfetto UI와 별개인 JSON/HTML 결과 리포트입니다.
 
 ```bash
 hetero-profiler overview generate \
-  --run ./runs/example-hybrid \
+  --run ./runs/manual-hybrid-01/hybrid \
   --perfetto ./outputs/example-perfetto \
   --output ./outputs/example-overview \
   --trace-processor /path/to/trace_processor_shell \

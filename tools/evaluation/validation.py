@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from perfetto_hetero_profiler.hybrid.layout import HybridRunLayout
 from perfetto_hetero_profiler.support.files import sha256_file
 
 from .accuracy import client_latency_accuracy, exact_count_accuracy, exact_marker_accuracy
@@ -130,6 +131,20 @@ def _validate_derived_product_hashes(
 
 def _paths(attempt: Path, attempt_id: str) -> dict[str, Path]:
     run_root = attempt / "runs"
+    grouped = HybridRunLayout(run_root, attempt_id)
+    if grouped.coordinator.exists() or grouped.publication.exists():
+        return {
+            "run_root": run_root,
+            "hybrid": grouped.hybrid,
+            "gpu": grouped.gpu,
+            "npu": grouped.npu,
+            "coordinator": grouped.coordinator,
+            "perfetto": grouped.perfetto,
+            "focused": grouped.request_perfetto,
+            "overview": grouped.overview,
+            "recovery": grouped.recovery,
+            "publication": grouped.publication,
+        }
     return {
         "run_root": run_root,
         "hybrid": run_root / attempt_id,

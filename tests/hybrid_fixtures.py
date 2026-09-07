@@ -130,10 +130,11 @@ def build_source_bundle(
     marker_attributes: dict[str, dict[str, object]] | None = None,
     include_resource_metric: bool = True,
     include_artifact: bool = False,
+    record_run_id: str | None = None,
 ) -> Path:
     root = Path(root)
-    run_id = root.name
-    paths = RunPaths(root.parent, run_id)
+    run_id = record_run_id or root.name
+    paths = RunPaths(root.parent, root.name)
     paths.create()
     times = timestamps or tuple(
         1_000_000 + index * 100_000 for index in range(len(markers))

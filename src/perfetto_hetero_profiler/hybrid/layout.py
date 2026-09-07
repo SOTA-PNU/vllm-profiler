@@ -1,4 +1,4 @@
-"""Single source of names for a reusable hybrid execution's output roots."""
+"""Single source of paths for one grouped hybrid execution bundle."""
 
 from __future__ import annotations
 
@@ -6,49 +6,89 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+_GROUPED_PATHS = {
+    "hybrid": Path("hybrid"),
+    "gpu": Path("sources/gpu"),
+    "npu": Path("sources/npu"),
+    "coordinator": Path("coordinator"),
+    "perfetto": Path("perfetto/full"),
+    "request_perfetto": Path("perfetto/request-focused"),
+    "overview": Path("overview"),
+    "recovery": Path("recovery"),
+    "publication": Path("publication"),
+}
+_LEGACY_SUFFIXES = {
+    "hybrid": "",
+    "gpu": "-gpu",
+    "npu": "-npu",
+    "coordinator": "-coordinator",
+    "perfetto": "-perfetto",
+    "request_perfetto": "-perfetto-request-focused",
+    "overview": "-overview",
+    "recovery": "-closeout-recovery",
+    "publication": "-publication",
+}
+
+
+def related_run_root(hybrid_root: Path, run_id: str, product: str) -> Path:
+    """Derive a trusted related root for a grouped or legacy hybrid bundle."""
+
+    root = Path(hybrid_root)
+    if product not in _GROUPED_PATHS:
+        raise ValueError(f"unknown hybrid product: {product}")
+    if root.name == "hybrid" and root.parent.name == run_id:
+        return root.parent / _GROUPED_PATHS[product]
+    if root.name == run_id:
+        return root.parent / f"{run_id}{_LEGACY_SUFFIXES[product]}"
+    raise ValueError("hybrid root does not match a supported run layout")
+
+
 @dataclass(frozen=True, slots=True)
 class HybridRunLayout:
     run_root: Path
     run_id: str
 
-    def _named(self, suffix: str = "") -> Path:
-        return self.run_root / f"{self.run_id}{suffix}"
+    @property
+    def bundle(self) -> Path:
+        """Top-level directory that owns every product of one execution."""
+
+        return self.run_root / self.run_id
 
     @property
     def hybrid(self) -> Path:
-        return self._named()
+        return self.bundle / _GROUPED_PATHS["hybrid"]
 
     @property
     def gpu(self) -> Path:
-        return self._named("-gpu")
+        return self.bundle / _GROUPED_PATHS["gpu"]
 
     @property
     def npu(self) -> Path:
-        return self._named("-npu")
+        return self.bundle / _GROUPED_PATHS["npu"]
 
     @property
     def coordinator(self) -> Path:
-        return self._named("-coordinator")
+        return self.bundle / _GROUPED_PATHS["coordinator"]
 
     @property
     def perfetto(self) -> Path:
-        return self._named("-perfetto")
+        return self.bundle / _GROUPED_PATHS["perfetto"]
 
     @property
     def request_perfetto(self) -> Path:
-        return self._named("-perfetto-request-focused")
+        return self.bundle / _GROUPED_PATHS["request_perfetto"]
 
     @property
     def overview(self) -> Path:
-        return self._named("-overview")
+        return self.bundle / _GROUPED_PATHS["overview"]
 
     @property
     def recovery(self) -> Path:
-        return self._named("-closeout-recovery")
+        return self.bundle / _GROUPED_PATHS["recovery"]
 
     @property
     def publication(self) -> Path:
-        return self._named("-publication")
+        return self.bundle / _GROUPED_PATHS["publication"]
 
     @property
     def all_roots(self) -> tuple[Path, ...]:
@@ -57,5 +97,14 @@ class HybridRunLayout:
             self.request_perfetto, self.overview, self.recovery, self.publication,
         )
 
+    @property
+    def legacy_roots(self) -> tuple[Path, ...]:
+        """Flat roots checked only to prevent reuse of an old run identity."""
 
-__all__ = ["HybridRunLayout"]
+        return tuple(
+            self.run_root / f"{self.run_id}{suffix}"
+            for suffix in _LEGACY_SUFFIXES.values()
+        )
+
+
+__all__ = ["HybridRunLayout", "related_run_root"]

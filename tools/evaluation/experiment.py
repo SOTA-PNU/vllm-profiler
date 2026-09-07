@@ -11,6 +11,7 @@ import tempfile
 from typing import Any
 
 from perfetto_hetero_profiler.hybrid.runner import HybridRunner
+from perfetto_hetero_profiler.hybrid.layout import HybridRunLayout
 from perfetto_hetero_profiler.hybrid.runner_config import validate_hybrid_invocation
 from perfetto_hetero_profiler.schema.records import RunStatus
 from .checkpoint import (
@@ -324,12 +325,9 @@ class _AttemptLifecycle:
             validation,
             exclusive=True,
         )
-        raw = (
-            self.attempt_root
-            / "runs"
-            / f"{self.attempt_id}-gpu"
-            / "raw/client/measured_requests.jsonl"
-        )
+        raw = HybridRunLayout(
+            self.attempt_root / "runs", self.attempt_id
+        ).gpu / "raw/client/measured_requests.jsonl"
         _write_json(
             self.attempt_root / "independent_client.json",
             {

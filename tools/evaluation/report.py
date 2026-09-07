@@ -8,6 +8,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+from perfetto_hetero_profiler.hybrid.layout import HybridRunLayout
+
 from .checkpoint import AttemptStatus, ExperimentCheckpoint
 from .limitations import limitation_inventory
 from .schedule import Condition, ExperimentSchedule, TrialKind, schedule_by_logical_id
@@ -39,7 +41,14 @@ def canonical_json(value: object) -> bytes:
 
 
 def _npu_resources(attempt_root: Path, attempt_id: str) -> dict[str, dict[str, object]]:
-    path = attempt_root / "runs" / f"{attempt_id}-npu" / "metrics" / "metrics.jsonl"
+    run_root = attempt_root / "runs"
+    grouped = HybridRunLayout(run_root, attempt_id)
+    npu_root = (
+        grouped.npu
+        if grouped.coordinator.exists() or grouped.publication.exists()
+        else run_root / f"{attempt_id}-npu"
+    )
+    path = npu_root / "metrics" / "metrics.jsonl"
     if not path.is_file():
         return {}
     samples: dict[str, list[float]] = {}

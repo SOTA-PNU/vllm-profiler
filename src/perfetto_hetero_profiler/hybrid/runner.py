@@ -593,8 +593,8 @@ class HybridRunner:
     def run(self) -> HybridRunResult:
         config, layout = self.config, self.layout
         self._preflight()
-        RunPaths(layout.run_root, f"{layout.run_id}-gpu").create()
-        RunPaths(layout.run_root, f"{layout.run_id}-npu").create()
+        RunPaths(layout.gpu.parent, layout.gpu.name).create()
+        RunPaths(layout.npu.parent, layout.npu.name).create()
         layout.coordinator.mkdir(parents=True)
         layout.publication.mkdir(parents=True)
         for path in (
@@ -781,6 +781,7 @@ class HybridRunner:
                         coordinator_host_id=HOST_ID,
                         canonical_clock_domain_id="hybrid-canonical",
                         allow_non_fake_sources=True,
+                        output_directory=layout.hybrid,
                     )
                 ).merge()
                 if merge.status is not RunStatus.SUCCEEDED:
@@ -1404,7 +1405,7 @@ class HybridRunner:
     def _artifacts(
         self, root: Path, role: str, profile: dict[str, Any] | None
     ) -> list[ArtifactReference]:
-        run_id = root.name
+        run_id = f"{self.layout.run_id}-{role}"
         files: list[tuple[Path, ArtifactKind, str, str | None]] = []
         coordinator = self.layout.coordinator
         server_name = "prefill" if role == "gpu" else "decode"
@@ -1588,6 +1589,9 @@ class HybridRunner:
         from ..overview.generator import OverviewGenerationConfig, generate_overview
         from ..perfetto.converter import PerfettoConversionConfig, convert_perfetto
 
+        # Grouped layouts place both trace products below a shared container.
+        # The converter deliberately requires its output parent to pre-exist.
+        self.layout.perfetto.parent.mkdir(parents=True, exist_ok=True)
         include_details = self.profile_mode != "monitor"
         conversion = convert_perfetto(
             PerfettoConversionConfig(

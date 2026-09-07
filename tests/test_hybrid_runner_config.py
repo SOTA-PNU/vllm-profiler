@@ -9,6 +9,7 @@ import tempfile
 import unittest
 
 from perfetto_hetero_profiler.cli import main
+from perfetto_hetero_profiler.hybrid.layout import HybridRunLayout, related_run_root
 from perfetto_hetero_profiler.hybrid.runner import build_hybrid_run_plan
 from perfetto_hetero_profiler.hybrid.runner_config import (
     HYBRID_RUNNER_CONFIG_SCHEMA_NAME,
@@ -107,6 +108,35 @@ class HybridRunnerConfigTests(unittest.TestCase):
         path.write_text(json.dumps(value or document(root)), encoding="utf-8")
         return load_hybrid_runner_config(path)
 
+    def test_grouped_run_layout_has_one_top_level_directory(self) -> None:
+        layout = HybridRunLayout(Path("/runs"), "example")
+        self.assertEqual(layout.bundle, Path("/runs/example"))
+        self.assertEqual(
+            layout.all_roots,
+            (
+                Path("/runs/example/hybrid"),
+                Path("/runs/example/sources/gpu"),
+                Path("/runs/example/sources/npu"),
+                Path("/runs/example/coordinator"),
+                Path("/runs/example/perfetto/full"),
+                Path("/runs/example/perfetto/request-focused"),
+                Path("/runs/example/overview"),
+                Path("/runs/example/recovery"),
+                Path("/runs/example/publication"),
+            ),
+        )
+        self.assertTrue(all(path.is_relative_to(layout.bundle) for path in layout.all_roots))
+
+    def test_related_roots_support_grouped_and_legacy_layouts(self) -> None:
+        self.assertEqual(
+            related_run_root(Path("/runs/example/hybrid"), "example", "gpu"),
+            Path("/runs/example/sources/gpu"),
+        )
+        self.assertEqual(
+            related_run_root(Path("/runs/example"), "example", "gpu"),
+            Path("/runs/example-gpu"),
+        )
+
     def test_valid_config_and_plan_are_side_effect_free(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -117,7 +147,17 @@ class HybridRunnerConfigTests(unittest.TestCase):
             )
             self.assertFalse(plan["executes"])
             self.assertFalse(runs.exists())
-            self.assertEqual(plan["outputs"]["hybrid"], str(runs / "example"))
+            self.assertEqual(
+                plan["outputs"]["hybrid"], str(runs / "example/hybrid")
+            )
+            self.assertEqual(
+                plan["outputs"]["gpu_source"],
+                str(runs / "example/sources/gpu"),
+            )
+            self.assertEqual(
+                plan["outputs"]["request_focused_perfetto"],
+                str(runs / "example/perfetto/request-focused"),
+            )
 
     def test_versioned_schema_is_packaged_and_structural_corpus_matches(self) -> None:
         schema = (
@@ -283,7 +323,7 @@ class HybridRunnerConfigTests(unittest.TestCase):
             root = Path(directory)
             config = self.load(root)
             runs = root / "runs"
-            target = runs / "same-gpu"
+            target = runs / "same"
             target.mkdir(parents=True)
             marker = target / "keep.txt"
             marker.write_text("keep", encoding="utf-8")
@@ -292,6 +332,19 @@ class HybridRunnerConfigTests(unittest.TestCase):
                     config, run_root=runs, run_id="same", profile_mode="monitor"
                 )
             self.assertEqual(marker.read_text(), "keep")
+
+    def test_legacy_sibling_output_reserves_the_run_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = self.load(root)
+            runs = root / "runs"
+            legacy = runs / "same-gpu"
+            legacy.mkdir(parents=True)
+            with self.assertRaisesRegex(FileExistsError, "already exists"):
+                validate_hybrid_invocation(
+                    config, run_root=runs, run_id="same", profile_mode="monitor"
+                )
+            self.assertTrue(legacy.is_dir())
 
     def test_symlink_run_root_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -312,7 +365,7 @@ class HybridRunnerConfigTests(unittest.TestCase):
             config = self.load(root)
             runs = root / "runs"
             runs.mkdir()
-            target = runs / "same-gpu"
+            target = runs / "same"
             target.symlink_to(root / "missing-output", target_is_directory=True)
 
             with self.assertRaisesRegex(FileExistsError, "already exists"):

@@ -243,8 +243,9 @@ class ExperimentValidationTests(unittest.TestCase):
     def test_attempt_lifecycle_wraps_core_runner_with_evaluation_checks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "runs/sample-gpu/raw/client").mkdir(parents=True)
-            (root / "runs/sample-gpu/raw/client/measured_requests.jsonl").write_text(
+            client_root = root / "runs/sample/sources/gpu/raw/client"
+            client_root.mkdir(parents=True)
+            (client_root / "measured_requests.jsonl").write_text(
                 "{}\n",
                 encoding="utf-8",
             )
@@ -309,7 +310,7 @@ class ExperimentValidationTests(unittest.TestCase):
             )
             self.assertEqual(
                 independent["source_relative_path"],
-                "runs/sample-gpu/raw/client/measured_requests.jsonl",
+                "runs/sample/sources/gpu/raw/client/measured_requests.jsonl",
             )
 
     def test_fresh_validation_is_read_only_unless_persistence_is_explicit(self):

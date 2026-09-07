@@ -12,6 +12,7 @@ import stat
 from typing import Any, TypeVar
 
 from ..hybrid.join import validate_marker_groups
+from ..hybrid.layout import related_run_root
 from ..schema import (
     ArtifactIntegrityError,
     ArtifactKind,
@@ -112,7 +113,7 @@ class RootFingerprint:
 
 @dataclass(frozen=True, slots=True)
 class SourceRunMetadata:
-    """One validated sibling source, located solely from its source run id."""
+    """One validated source located from its trusted hybrid run layout."""
 
     source_role: str
     source_run_id: str
@@ -419,6 +420,7 @@ def _validate_artifacts(
 def _validate_source_descriptor(
     *,
     hybrid_root: Path,
+    hybrid_run_id: str,
     role: str,
     expected_device_type: DeviceType,
 ) -> _SourceData:
@@ -448,17 +450,32 @@ def _validate_source_descriptor(
         descriptor["source_run_id"],
         field=f"{role} source_run_id",
     )
-    # source_path is historical provenance only.  The trusted location is the
-    # safe sibling derived from source_run_id.
+    # source_path is historical provenance only. The trusted location is
+    # derived from the normalized run root and its supported layout.
+    if hybrid_root.name == "hybrid" and hybrid_root.parent.name == hybrid_run_id:
+        _require_real_directory(
+            hybrid_root.parent,
+            description="grouped run bundle root",
+        )
+        try:
+            related_source_root = related_run_root(
+                hybrid_root, hybrid_run_id, role
+            )
+        except ValueError as error:
+            raise PerfettoInputError(str(error)) from error
+        _require_real_directory(
+            related_source_root.parent,
+            description="grouped source container",
+        )
+    else:
+        related_source_root = hybrid_root.parent / source_run_id
     source_root = _require_real_directory(
-        hybrid_root.parent / source_run_id,
-        description=f"{role} sibling source root",
+        related_source_root,
+        description=f"{role} source root",
     )
-    if source_root.parent != hybrid_root.parent:
-        raise PerfettoInputError(f"{role} source root is not a direct sibling")
 
     manifest = _read_schema_json(source_root, "manifest.json", RunManifest)
-    if manifest.run_id != source_run_id or source_root.name != source_run_id:
+    if manifest.run_id != source_run_id:
         raise PerfettoInputError(f"{role} source manifest identity mismatch")
     if manifest.status is not RunStatus.SUCCEEDED:
         raise PerfettoInputError(f"{role} source manifest did not succeed")
@@ -1071,32 +1088,37 @@ def _validate_closeout(
     str,
     int,
 ]:
+    try:
+        coordinator_root = related_run_root(hybrid_root, run_id, "coordinator")
+        recovery_root = related_run_root(hybrid_root, run_id, "recovery")
+    except ValueError as error:
+        raise PerfettoInputError(str(error)) from error
     roots = {
         "coordinator": _require_real_directory(
-            hybrid_root.parent / f"{run_id}-coordinator",
+            coordinator_root,
             description="coordinator root",
         ),
         "gpu": gpu_root,
         "hybrid": hybrid_root,
         "npu": npu_root,
         "recovery": _require_real_directory(
-            hybrid_root.parent / f"{run_id}-closeout-recovery",
+            recovery_root,
             description="closeout recovery root",
         ),
     }
-    recovery_root = roots["recovery"]
+    recovery = roots["recovery"]
     manifest_path = _checked_file(
-        recovery_root,
+        recovery,
         "artifact_manifest.json",
         field="closeout artifact manifest",
     )
     validation_path = _checked_file(
-        recovery_root,
+        recovery,
         "artifact_manifest_validation.json",
         field="closeout artifact validation",
     )
     recovery_result_path = _checked_file(
-        recovery_root,
+        recovery,
         "recovery_result.json",
         field="closeout recovery result",
     )
@@ -1160,8 +1182,17 @@ def load_hybrid_run(run_root: str | Path) -> LoadedHybridRun:
     root = _require_real_directory(Path(run_root), description="hybrid run root")
     manifest = _read_schema_json(root, "manifest.json", RunManifest)
     _safe_run_id(manifest.run_id, field="manifest.run_id")
-    if root.name != manifest.run_id:
-        raise PerfettoInputError("run directory name does not match manifest run_id")
+    if root.name == "hybrid" and root.parent.name == manifest.run_id:
+        _require_real_directory(
+            root.parent,
+            description="grouped run bundle root",
+        )
+    try:
+        expected_root = related_run_root(root, manifest.run_id, "hybrid")
+    except ValueError as error:
+        raise PerfettoInputError(str(error)) from error
+    if root != expected_root:
+        raise PerfettoInputError("run directory does not match manifest run_id")
 
     clocks = _read_schema_jsonl(
         root,
@@ -1220,11 +1251,13 @@ def load_hybrid_run(run_root: str | Path) -> LoadedHybridRun:
 
     gpu_source = _validate_source_descriptor(
         hybrid_root=root,
+        hybrid_run_id=manifest.run_id,
         role="gpu",
         expected_device_type=DeviceType.GPU,
     )
     npu_source = _validate_source_descriptor(
         hybrid_root=root,
+        hybrid_run_id=manifest.run_id,
         role="npu",
         expected_device_type=DeviceType.NPU,
     )

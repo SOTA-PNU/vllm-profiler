@@ -223,6 +223,10 @@ token timestamp만 사용하고, KPI 숫자는 Info and Stats에만 기록합니
 - 실제 GPU Prefill–NPU Decode 실행은 `collect hybrid`가 서버, proxy, telemetry,
   normalization과 결과 생성을 함께 관리합니다. 환경별 model/cache/vLLM 설정은
   사용자가 제공해야 합니다.
+- 새 hybrid 실행의 coordinator, immutable GPU/NPU source, normalized bundle,
+  Perfetto, Overview, publication과 recovery는 하나의
+  `<run-root>/<run-id>/` 아래에 역할별로 분리합니다. 기존 flat sibling layout은
+  읽기 호환성만 유지합니다.
 - 추가 transfer 구간은 versioned runtime marker capability가 있는 run에서만
   제공하며, 이전 run은 추정하지 않습니다.
 - 단계별 resource aggregate는 marker window와 sampling coverage가 충분할 때만

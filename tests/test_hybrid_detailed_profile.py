@@ -116,7 +116,7 @@ class DetailedProfileConfigTests(unittest.TestCase):
     def test_existing_output_collision_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            (root / "run-gpu").mkdir()
+            (root / "run").mkdir()
             with self.assertRaisesRegex(FileExistsError, "already exists"):
                 HybridDetailedProfileConfig(
                     run_root=root,

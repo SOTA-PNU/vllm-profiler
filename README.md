@@ -77,7 +77,7 @@ hetero-profiler collect hybrid \
 mkdir -p ./outputs
 
 hetero-profiler convert perfetto \
-  --run ./runs/example-hybrid \
+  --run ./runs/example-hybrid/hybrid \
   --output ./outputs/example-perfetto \
   --trace-processor /path/to/trace_processor_shell
 ```
@@ -86,7 +86,7 @@ hetero-profiler convert perfetto \
 
 ```bash
 hetero-profiler overview generate \
-  --run ./runs/example-hybrid \
+  --run ./runs/example-hybrid/hybrid \
   --perfetto ./outputs/example-perfetto \
   --output ./outputs/example-overview \
   --trace-processor /path/to/trace_processor_shell

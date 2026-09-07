@@ -376,13 +376,17 @@ def validate_hybrid_invocation(
             raise HybridRunnerConfigError(
                 f"--run-root must not traverse a symlink: {current}"
             )
-    existing = [
-        path
-        for path in HybridRunLayout(run_root, run_id).all_roots
-        if os.path.lexists(path)
-    ]
-    if existing:
-        raise FileExistsError(f"run output already exists: {existing[0]}")
+    layout = HybridRunLayout(run_root, run_id)
+    existing = next(
+        (
+            path
+            for path in dict.fromkeys((layout.bundle, *layout.legacy_roots))
+            if os.path.lexists(path)
+        ),
+        None,
+    )
+    if existing is not None:
+        raise FileExistsError(f"run output already exists: {existing}")
     if config.workload.max_output_tokens >= config.max_model_len:
         raise HybridRunnerConfigError(
             "max_output_tokens must leave room below max_model_len"
