@@ -418,11 +418,12 @@ Utilization 순으로 배치합니다. 전체 capture telemetry는 기본 `trace
 유지하며, 누락 경계를 보간하거나 가짜 counter를 만들지 않습니다.
 
 Versioned transfer marker가 포함된 hybrid run에서는 request group 아래의
-`KV Handoff`, `KV Transfer Setup`, `KV Transfer Wait`,
+`KV Handoff`, `KV Transfer Setup`, `KV Transfer Wait`, `KV Device Sync`,
 `Decode Scheduling Wait` track을 확인할 수 있습니다. Wait은 status polling으로
 관찰한 구간이므로 실제 device completion보다 최대 polling 간격만큼 늦게 끝날 수
-있습니다. Setup, transfer, wait은 중첩될 수 있어 합산 값이 아닙니다. 이전 run처럼
-marker capability가 없으면 가짜 slice를 만들지 않으며 해당 KPI를
+있습니다. Device Sync는 host buffer에서 NPU KV cache로 복사하고 동기화를 마칠
+때까지의 구간입니다. Setup, transfer, wait, device sync는 중첩될 수 있어 합산
+값이 아닙니다. 이전 run처럼 marker capability가 없으면 가짜 slice를 만들지 않으며 해당 KPI를
 `not_available`로 표시합니다. 첫 poll에서 완료가 확인된 경우에만 wait은 관찰된
 `0 ns`입니다.
 

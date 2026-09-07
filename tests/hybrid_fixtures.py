@@ -49,6 +49,8 @@ PHASES = {
     "kv_transfer_setup_end": Phase.KV_TRANSFER,
     "kv_transfer_wait_start": Phase.KV_TRANSFER,
     "kv_transfer_wait_end": Phase.KV_TRANSFER,
+    "kv_device_sync_start": Phase.KV_TRANSFER,
+    "kv_device_sync_end": Phase.KV_TRANSFER,
     "kv_transform_start": Phase.KV_TRANSFORM,
     "kv_transform_end": Phase.KV_TRANSFORM,
     "decode_loop_start": Phase.DECODE,

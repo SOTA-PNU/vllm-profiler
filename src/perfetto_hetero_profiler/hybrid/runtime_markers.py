@@ -37,6 +37,8 @@ CANONICAL_MARKER_PHASES = {
     "kv_transfer_wait_end": Phase.KV_TRANSFER,
     "kv_transform_start": Phase.KV_TRANSFORM,
     "kv_transform_end": Phase.KV_TRANSFORM,
+    "kv_device_sync_start": Phase.KV_TRANSFER,
+    "kv_device_sync_end": Phase.KV_TRANSFER,
     "decode_loop_start": Phase.DECODE,
     "decode_schedule_wait_start": Phase.DECODE,
     "decode_schedule_wait_end": Phase.DECODE,

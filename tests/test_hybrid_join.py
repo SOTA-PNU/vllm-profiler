@@ -85,6 +85,8 @@ def observability_contract(*, observed_zero=False):
         ("kv_handoff_end", 144, "request-1-handoff"),
         ("kv_transfer_setup_start", 144, "request-1-read-1"),
         ("kv_transfer_setup_end", 149, "request-1-read-1"),
+        ("kv_device_sync_start", 160, "request-1-read-1"),
+        ("kv_device_sync_end", 180, "request-1-read-1"),
         ("decode_schedule_wait_start", 181, "request-1-decode-ready"),
         ("decode_schedule_wait_end", 199, "request-1-decode-ready"),
     )
@@ -151,6 +153,18 @@ class MarkerValidationTests(unittest.TestCase):
         result = validate_marker_order(source)
         self.assertEqual(result.status, "invalid")
         self.assertTrue(any("clock domains" in issue for issue in result.pairing_issues))
+
+    def test_device_sync_pair_missing_end_is_invalid(self):
+        source = [
+            item
+            for item in observability_contract()
+            if item.event_name != "kv_device_sync_end"
+        ]
+        result = validate_marker_order(source)
+        self.assertEqual(result.status, "invalid")
+        self.assertTrue(
+            any("kv_device_sync" in issue for issue in result.pairing_issues)
+        )
 
     def test_two_correlated_request_contracts_are_not_duplicates(self):
         source = rows(

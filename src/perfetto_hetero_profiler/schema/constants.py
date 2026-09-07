@@ -17,6 +17,8 @@ CANONICAL_EVENT_NAMES = frozenset(
         "kv_export_end",
         "kv_transform_start",
         "kv_transform_end",
+        "kv_device_sync_start",
+        "kv_device_sync_end",
         "kv_transfer_start",
         "kv_transfer_end",
         "kv_handoff_start",

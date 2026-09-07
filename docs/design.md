@@ -154,6 +154,7 @@ Hybrid Request
 ├─ KV Transfer
 ├─ KV Transfer Wait
 ├─ KV Transform
+├─ KV Device Sync
 ├─ Decode Scheduling Wait
 └─ NPU Decode
 ```
@@ -163,7 +164,8 @@ KV export 완료부터 NPU가 transfer handle 준비를 시작할 때까지, Tra
 handle 준비 시작부터 비동기 transfer 제출 직전까지입니다. Transfer Wait은 제출
 후 첫 `PROC` 관찰부터 동일 handle의 `DONE` 관찰까지이며 polling 간격만큼 경계
 오차가 있을 수 있습니다. 첫 poll이 `DONE`이면 명시적으로 관찰된 0이고, marker가
-없는 상태와 구분합니다. Decode Scheduling Wait은 KV 동기화 완료 후 첫 decode
+없는 상태와 구분합니다. KV Device Sync는 host buffer에서 NPU KV cache로 복사하고
+device 동기화를 마칠 때까지입니다. Decode Scheduling Wait은 KV 동기화 완료 후 첫 decode
 model 실행 직전까지이며 scheduler 전체 queue 체류 시간을 뜻하지는 않습니다.
 
 Setup과 Wait은 전체 Transfer 구간에 포함될 수 있으므로 단순 합산하지 않습니다.

@@ -79,16 +79,23 @@ STAGE_DEFINITIONS: tuple[StageDefinition, ...] = (
         pipeline_order=6,
     ),
     StageDefinition(
+        "transfer.device_sync_duration", "kv_device_sync_start",
+        "kv_device_sync_end", Phase.KV_TRANSFER, "device_sync", "kv_device_sync",
+        "KV Device Sync", "KV Device Sync",
+        "Host-buffer to NPU KV-cache copy and synchronization interval.",
+        discriminator="transfer", pipeline_order=7,
+    ),
+    StageDefinition(
         "decode.schedule_wait_duration", "decode_schedule_wait_start",
         "decode_schedule_wait_end", Phase.DECODE, "decode_schedule_wait",
         "decode_schedule_wait", "Decode Scheduling Wait", "Decode Scheduling Wait",
         "Decode-ready to first model-step scheduling interval.",
-        discriminator="transfer", pipeline_order=7,
+        discriminator="transfer", pipeline_order=8,
     ),
     StageDefinition(
         "latency.decode", "decode_loop_start", "decode_loop_end", Phase.DECODE,
         "decode", "npu_decode", "NPU Decode", "NPU Decode",
-        "NPU decode loop markers on the canonical clock.", pipeline_order=8,
+        "NPU decode loop markers on the canonical clock.", pipeline_order=9,
     ),
     StageDefinition(
         None, "decode_step_start", "decode_step_end", Phase.DECODE,
@@ -167,6 +174,7 @@ KPI_PRESENTATIONS: tuple[KpiPresentation, ...] = (
     KpiPresentation("transfer", "transfer.wait_duration", "Transfer wait", "kpi.latency.kv_transfer_wait", "value_ns"),
     KpiPresentation("transfer", "transfer.handoff_duration", "KV handoff", "kpi.latency.kv_handoff", "value_ns"),
     KpiPresentation("transfer", "transfer.setup_duration", "Transfer setup", "kpi.latency.kv_transfer_setup", "value_ns"),
+    KpiPresentation("transfer", "transfer.device_sync_duration", "KV device sync", "kpi.latency.kv_device_sync", "value_ns"),
     KpiPresentation("transfer", "decode.schedule_wait_duration", "Decode scheduling wait", "kpi.latency.decode_schedule_wait", "value_ns"),
     KpiPresentation("transfer", "transfer.e2e_share", "Transfer E2E share", "transfer.e2e_share", "value_milli_percent", 100_000),
 )
@@ -250,6 +258,7 @@ _TRACE_ATTRIBUTE_ALIASES: tuple[TraceAttributePresentation, ...] = (
     TraceAttributePresentation("transfer", "transfer.transform_duration", "transfer.kv_transform_duration", "value_ns", 1),
     TraceAttributePresentation("transfer", "transfer.handoff_duration", "transfer.handoff_duration", "value_ns", 1),
     TraceAttributePresentation("transfer", "transfer.setup_duration", "transfer.setup_duration", "value_ns", 1),
+    TraceAttributePresentation("transfer", "transfer.device_sync_duration", "transfer.device_sync_duration", "value_ns", 1),
     TraceAttributePresentation("transfer", "transfer.wait_duration", "transfer.wait_duration", "value_ns", 1),
     TraceAttributePresentation("transfer", "decode.schedule_wait_duration", "transfer.decode_schedule_wait_duration", "value_ns", 1),
 )

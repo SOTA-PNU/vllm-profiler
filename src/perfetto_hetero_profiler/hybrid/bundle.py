@@ -909,6 +909,13 @@ class HybridBundleMerger:
                 MetricScope.REQUEST,
                 Phase.DECODE,
             ),
+            (
+                "transfer.device_sync_duration",
+                "kv_device_sync_start",
+                "kv_device_sync_end",
+                MetricScope.TRANSFER,
+                Phase.KV_TRANSFER,
+            ),
         ):
             starts = rows_by_id(start_name)
             ends = rows_by_id(end_name)

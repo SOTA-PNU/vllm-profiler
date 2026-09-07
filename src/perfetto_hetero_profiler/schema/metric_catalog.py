@@ -357,6 +357,15 @@ _DEFINITIONS = (
         ),
     ),
     _definition(
+        "transfer.device_sync_duration",
+        "ns",
+        MetricKind.DURATION,
+        (MetricScope.REQUEST, MetricScope.TRANSFER),
+        "Host-buffer to NPU KV-cache copy and synchronization duration.",
+        derived=True,
+        source_events=("kv_device_sync_start", "kv_device_sync_end"),
+    ),
+    _definition(
         "decode.schedule_wait_duration",
         "ns",
         MetricKind.DURATION,

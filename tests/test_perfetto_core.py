@@ -151,6 +151,8 @@ _EVENT_PHASES = {
     "kv_transfer_setup_end": Phase.KV_TRANSFER,
     "kv_transfer_wait_start": Phase.KV_TRANSFER,
     "kv_transfer_wait_end": Phase.KV_TRANSFER,
+    "kv_device_sync_start": Phase.KV_TRANSFER,
+    "kv_device_sync_end": Phase.KV_TRANSFER,
     "kv_transform_start": Phase.KV_TRANSFORM,
     "kv_transform_end": Phase.KV_TRANSFORM,
     "decode_loop_start": Phase.DECODE,
@@ -348,13 +350,19 @@ class PlannerTests(unittest.TestCase):
                 "kv_transfer_wait_end", 315, transfer_id="transfer-1"
             ),
             instant_event(
+                "kv_device_sync_start", 381, transfer_id="transfer-1"
+            ),
+            instant_event(
+                "kv_device_sync_end", 385, transfer_id="transfer-1"
+            ),
+            instant_event(
                 "decode_schedule_wait_start",
-                381,
+                386,
                 transfer_id="request-1-decode-ready",
             ),
             instant_event(
                 "decode_schedule_wait_end",
-                419,
+                399,
                 transfer_id="request-1-decode-ready",
             ),
         )
@@ -374,7 +382,8 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(slices["KV Handoff"].duration_ns, 4)
         self.assertEqual(slices["KV Transfer Setup"].duration_ns, 3)
         self.assertEqual(slices["KV Transfer Wait"].duration_ns, 45)
-        self.assertEqual(slices["Decode Scheduling Wait"].duration_ns, 38)
+        self.assertEqual(slices["KV Device Sync"].duration_ns, 4)
+        self.assertEqual(slices["Decode Scheduling Wait"].duration_ns, 13)
         self.assertEqual(first.plan, second.plan)
 
     def test_token_boundaries_are_instants_and_never_summary_durations(self):

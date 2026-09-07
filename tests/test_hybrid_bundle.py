@@ -354,6 +354,8 @@ class HybridBundleTests(unittest.TestCase):
                 "kv_transfer_end",
                 "kv_transform_start",
                 "kv_transform_end",
+                "kv_device_sync_start",
+                "kv_device_sync_end",
                 "decode_schedule_wait_start",
                 "decode_schedule_wait_end",
                 "decode_loop_start",
@@ -406,6 +408,7 @@ class HybridBundleTests(unittest.TestCase):
                     "transfer.handoff_duration",
                     "transfer.setup_duration",
                     "transfer.wait_duration",
+                    "transfer.device_sync_duration",
                     "decode.schedule_wait_duration",
                 }
             ]
@@ -414,6 +417,7 @@ class HybridBundleTests(unittest.TestCase):
                 "transfer.handoff_duration",
                 "transfer.setup_duration",
                 "transfer.wait_duration",
+                "transfer.device_sync_duration",
                 "decode.schedule_wait_duration",
             })
             self.assertTrue(
@@ -422,6 +426,10 @@ class HybridBundleTests(unittest.TestCase):
             self.assertEqual(by_name["transfer.handoff_duration"].value, 400_000)
             self.assertEqual(by_name["transfer.setup_duration"].value, 100_000)
             self.assertEqual(by_name["transfer.wait_duration"].value, 100_000)
+            self.assertEqual(
+                by_name["transfer.device_sync_duration"].value,
+                100_000,
+            )
             self.assertEqual(
                 by_name["decode.schedule_wait_duration"].value,
                 100_000,

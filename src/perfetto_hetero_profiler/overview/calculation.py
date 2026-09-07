@@ -1825,6 +1825,11 @@ def _transfer_kpis(
             "not exact device completion time."
         ),
     )
+    device_sync_kpi = observability_kpi(
+        "transfer.device_sync_duration",
+        "kv_device_sync_end - kv_device_sync_start",
+        warning="Device sync covers host-buffer to NPU KV-cache synchronization.",
+    )
     decode_wait_kpi = observability_kpi(
         "decode.schedule_wait_duration",
         "decode_schedule_wait_end - decode_schedule_wait_start",
@@ -1838,6 +1843,7 @@ def _transfer_kpis(
         handoff_kpi,
         setup_kpi,
         wait_kpi,
+        device_sync_kpi,
         decode_wait_kpi,
         share_kpi,
     ]

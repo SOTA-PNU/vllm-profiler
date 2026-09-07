@@ -44,6 +44,8 @@ OBSERVABILITY_MARKERS = frozenset(
         "kv_transfer_setup_end",
         "kv_transfer_wait_start",
         "kv_transfer_wait_end",
+        "kv_device_sync_start",
+        "kv_device_sync_end",
         "decode_schedule_wait_start",
         "decode_schedule_wait_end",
     }
@@ -353,6 +355,10 @@ def validate_marker_order(events: Iterable[EventRecord]) -> MarkerValidation:
         wait_ends = observability_by_name["kv_transfer_wait_end"]
         if wait_starts or wait_ends:
             paired_by_transfer("kv_transfer_wait_start", "kv_transfer_wait_end")
+        sync_starts = observability_by_name["kv_device_sync_start"]
+        sync_ends = observability_by_name["kv_device_sync_end"]
+        if sync_starts or sync_ends:
+            paired_by_transfer("kv_device_sync_start", "kv_device_sync_end")
 
         transfer_ends = {
             _transfer_id(event): event

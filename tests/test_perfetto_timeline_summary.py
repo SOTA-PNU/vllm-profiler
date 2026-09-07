@@ -82,7 +82,7 @@ class PerfettoTimelineSummaryTests(unittest.TestCase):
                     "npu_decode",
                 )
             ],
-            [0, 1, 4, 6, 8],
+            [0, 1, 4, 6, 9],
         )
         rebuilt = build_trace_plan(
             self.loaded.manifest,
