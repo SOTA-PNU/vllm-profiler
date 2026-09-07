@@ -543,6 +543,38 @@ class OverviewSchemaContractTests(unittest.TestCase):
                 self.assertEqual(caught.exception.field_path, expected_path)
                 self.assertNotIn("/home/", str(caught.exception))
 
+    def test_metric_stream_details_accept_compact_and_legacy_provenance(self) -> None:
+        compact = overview_to_dict(report())
+        details = compact["kpis"]["request_facing_latency"][0]["sources"][0][
+            "details"
+        ]
+        details.clear()
+        details.update(
+            {
+                "artifact_size_bytes": 123,
+                "artifact_sha256": "a" * 64,
+                "timestamp_evidence": (
+                    "reconstruct_from_normalized_metric_stream_timestamp_ns"
+                ),
+                "stream_sample_count": 2,
+            }
+        )
+        overview_report_from_dict(compact)
+
+        legacy = copy.deepcopy(compact)
+        legacy_details = legacy["kpis"]["request_facing_latency"][0]["sources"][
+            0
+        ]["details"]
+        legacy_details["sample_timestamps_ns"] = [10, 20]
+        overview_report_from_dict(legacy)
+
+        malformed = copy.deepcopy(compact)
+        malformed["kpis"]["request_facing_latency"][0]["sources"][0][
+            "details"
+        ]["artifact_sha256"] = "not-a-sha256"
+        with self.assertRaises(OverviewSchemaError):
+            overview_report_from_dict(malformed)
+
     def test_canonical_json_is_stable_and_path_free(self) -> None:
         first = report()
         second = replace(

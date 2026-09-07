@@ -9,7 +9,11 @@ import tempfile
 import unittest
 
 from perfetto_hetero_profiler.cli import main
-from perfetto_hetero_profiler.hybrid.layout import HybridRunLayout, related_run_root
+from perfetto_hetero_profiler.hybrid.layout import (
+    HybridRunLayout,
+    existing_related_run_root,
+    related_run_root,
+)
 from perfetto_hetero_profiler.hybrid.runner import build_hybrid_run_plan
 from perfetto_hetero_profiler.hybrid.runner_config import (
     HYBRID_RUNNER_CONFIG_SCHEMA_NAME,
@@ -118,8 +122,7 @@ class HybridRunnerConfigTests(unittest.TestCase):
                 Path("/runs/example/sources/gpu"),
                 Path("/runs/example/sources/npu"),
                 Path("/runs/example/coordinator"),
-                Path("/runs/example/perfetto/full"),
-                Path("/runs/example/perfetto/request-focused"),
+                Path("/runs/example/perfetto"),
                 Path("/runs/example/overview"),
                 Path("/runs/example/recovery"),
                 Path("/runs/example/publication"),
@@ -136,6 +139,52 @@ class HybridRunnerConfigTests(unittest.TestCase):
             related_run_root(Path("/runs/example"), "example", "gpu"),
             Path("/runs/example-gpu"),
         )
+
+    def test_existing_perfetto_root_resolves_both_grouped_layout_versions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runs = Path(directory)
+            historical = HybridRunLayout(runs, "old")
+            historical.hybrid.mkdir(parents=True)
+            old_full = historical.bundle / "perfetto/full"
+            old_focused = historical.bundle / "perfetto/request-focused"
+            old_full.mkdir(parents=True)
+            old_focused.mkdir()
+            (old_full / "trace.pftrace").write_bytes(b"full")
+            (old_focused / "trace.request-focused.pftrace").write_bytes(
+                b"focused"
+            )
+            self.assertEqual(
+                existing_related_run_root(
+                    historical.hybrid, "old", "perfetto"
+                ),
+                old_full,
+            )
+            self.assertEqual(
+                existing_related_run_root(
+                    historical.hybrid, "old", "request_perfetto"
+                ),
+                old_focused,
+            )
+
+            current = HybridRunLayout(runs, "new")
+            current.hybrid.mkdir(parents=True)
+            current.perfetto.mkdir()
+            (current.perfetto / "trace.pftrace").write_bytes(b"full")
+            (current.perfetto / "trace.request-focused.pftrace").write_bytes(
+                b"focused"
+            )
+            self.assertEqual(
+                existing_related_run_root(
+                    current.hybrid, "new", "perfetto"
+                ),
+                current.perfetto,
+            )
+            self.assertEqual(
+                existing_related_run_root(
+                    current.hybrid, "new", "request_perfetto"
+                ),
+                current.perfetto,
+            )
 
     def test_valid_config_and_plan_are_side_effect_free(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -156,7 +205,7 @@ class HybridRunnerConfigTests(unittest.TestCase):
             )
             self.assertEqual(
                 plan["outputs"]["request_focused_perfetto"],
-                str(runs / "example/perfetto/request-focused"),
+                str(runs / "example/perfetto"),
             )
 
     def test_versioned_schema_is_packaged_and_structural_corpus_matches(self) -> None:

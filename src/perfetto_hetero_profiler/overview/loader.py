@@ -27,6 +27,8 @@ from ..perfetto.artifacts import (
 from ..perfetto.converter import (
     CONVERSION_MANIFEST_NAME,
     OUTPUT_ROOT_ID as PERFETTO_ROOT_ID,
+    REQUEST_FOCUSED_TRACE_NAME,
+    REQUEST_FOCUSED_VALIDATION_NAME,
     RBLN_NATIVE_TRACE_NAME,
     RBLN_NATIVE_VALIDATION_NAME,
     TRACE_NAME,
@@ -47,7 +49,7 @@ from ..perfetto.timeline_summary import (
     build_timeline_summary_context,
 )
 from ..perfetto.trace_attributes import TRACE_ATTRIBUTE_NAMESPACE
-from ..perfetto.validation import validate_trace
+from ..perfetto.validation import summarize_trace_validation, validate_trace
 from ..schema.catalog import PHASE_RECONCILIATION_METRICS, STAGE_BY_METRIC
 from ..support.files import sha256_file
 
@@ -60,19 +62,6 @@ _EXPECTED_PERFETTO_FILES = frozenset(
         TRACE_NAME,
         TRACE_VALIDATION_NAME,
     }
-)
-_EXPECTED_RBLN_PERFETTO_FILES = frozenset(
-    {
-        *_EXPECTED_PERFETTO_FILES,
-        RBLN_NATIVE_TRACE_NAME,
-        RBLN_NATIVE_VALIDATION_NAME,
-    }
-)
-_EXPECTED_ATTRIBUTE_PERFETTO_FILES = frozenset(
-    {*_EXPECTED_PERFETTO_FILES, TRACE_ATTRIBUTE_VALIDATION_NAME}
-)
-_EXPECTED_ATTRIBUTE_RBLN_PERFETTO_FILES = frozenset(
-    {*_EXPECTED_RBLN_PERFETTO_FILES, TRACE_ATTRIBUTE_VALIDATION_NAME}
 )
 _JSON_VALUE = TypeVar("_JSON_VALUE")
 
@@ -258,28 +247,32 @@ def _exact_perfetto_files(root: Path) -> tuple[FileIdentity, ...]:
     except OSError as error:
         raise OverviewInputError("Perfetto directory cannot be enumerated") from error
     actual_names = {entry.name for entry in entries}
-    if actual_names not in {
-        _EXPECTED_PERFETTO_FILES,
-        _EXPECTED_RBLN_PERFETTO_FILES,
-        _EXPECTED_ATTRIBUTE_PERFETTO_FILES,
-        _EXPECTED_ATTRIBUTE_RBLN_PERFETTO_FILES,
-    }:
-        has_rbln = (
-            RBLN_NATIVE_TRACE_NAME in actual_names
-            or RBLN_NATIVE_VALIDATION_NAME in actual_names
-        )
-        has_attributes = TRACE_ATTRIBUTE_VALIDATION_NAME in actual_names
-        expected = {
-            (False, False): _EXPECTED_PERFETTO_FILES,
-            (True, False): _EXPECTED_RBLN_PERFETTO_FILES,
-            (False, True): _EXPECTED_ATTRIBUTE_PERFETTO_FILES,
-            (True, True): _EXPECTED_ATTRIBUTE_RBLN_PERFETTO_FILES,
-        }[(has_rbln, has_attributes)]
+    expected = set(_EXPECTED_PERFETTO_FILES)
+    optional_groups = (
+        (
+            {RBLN_NATIVE_TRACE_NAME, RBLN_NATIVE_VALIDATION_NAME},
+            "RBLN native trace",
+        ),
+        ({TRACE_ATTRIBUTE_VALIDATION_NAME}, "trace attributes"),
+        (
+            {REQUEST_FOCUSED_TRACE_NAME, REQUEST_FOCUSED_VALIDATION_NAME},
+            "request-focused trace",
+        ),
+    )
+    partial_groups: list[str] = []
+    for names, description in optional_groups:
+        present = names & actual_names
+        if present and present != names:
+            partial_groups.append(description)
+        if present:
+            expected.update(names)
+    if partial_groups or actual_names != expected:
         missing = sorted(expected - actual_names)
         unexpected = sorted(actual_names - expected)
         raise OverviewInputError(
             "Perfetto directory must match exactly one supported file set; "
-            f"missing={missing}, unexpected={unexpected}"
+            f"missing={missing}, unexpected={unexpected}, "
+            f"partial_groups={sorted(partial_groups)}"
         )
     return tuple(
         _stable_regular_file(entry, relative_path=entry.name)
@@ -559,11 +552,24 @@ def _require_stored_trace_validation(
         raise OverviewInputError("stored Perfetto clock domain mismatch")
     queries = value.get("queries")
     mapping_version = _mapping_version(manifest)
+    required_query_fields = {
+        "name",
+        "sql",
+        "columns",
+        "row_count",
+        "rows_sha256",
+        "expected_row_count",
+        "expected_rows_sha256",
+        "matched",
+    }
     if (
         not isinstance(queries, list)
         or len(queries) != _expected_query_count(mapping_version, manifest)
         or any(
-            not isinstance(query, dict) or query.get("matched") is not True
+            not isinstance(query, dict)
+            or query.get("matched") is not True
+            or not required_query_fields.issubset(query)
+            or set(query) - required_query_fields - {"rows"}
             for query in queries
         )
     ):
@@ -575,6 +581,41 @@ def _require_stored_trace_validation(
         or trace.get("sha256") != manifest["trace"].get("sha256")
     ):
         raise OverviewInputError("stored Perfetto validation trace identity mismatch")
+
+
+def _fresh_validation_matches_stored(
+    fresh: dict[str, Any],
+    stored: dict[str, Any],
+) -> bool:
+    """Compare fresh full-row evidence with compact or historical reports."""
+
+    fresh_queries = fresh.get("queries")
+    stored_queries = stored.get("queries")
+    if not isinstance(fresh_queries, list) or not isinstance(stored_queries, list):
+        return False
+    if len(fresh_queries) != len(stored_queries):
+        return False
+    if all(
+        isinstance(query, dict) and "rows" not in query
+        for query in stored_queries
+    ):
+        return summarize_trace_validation(fresh) == stored
+    try:
+        comparable_fresh = dict(fresh)
+        comparable_fresh["queries"] = [
+            {key: fresh_query[key] for key in stored_query}
+            for fresh_query, stored_query in zip(
+                fresh_queries, stored_queries
+            )
+            if isinstance(fresh_query, dict)
+            and isinstance(stored_query, dict)
+        ]
+    except KeyError:
+        return False
+    return (
+        len(comparable_fresh["queries"]) == len(stored_queries)
+        and comparable_fresh == stored
+    )
 
 
 def load_matching_perfetto(
@@ -679,7 +720,10 @@ def load_matching_perfetto(
             planning.plan,
             native,
         )
-    if fresh_validation != stored_validation:
+    if not _fresh_validation_matches_stored(
+        fresh_validation,
+        stored_validation,
+    ):
         raise OverviewInputError(
             "fresh official Trace Processor result differs from stored conversion "
             "validation"

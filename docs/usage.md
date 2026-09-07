@@ -207,9 +207,7 @@ runs/<run-id>/
 │   ├── gpu/                immutable GPU source and raw capture
 │   └── npu/                immutable NPU source and raw capture
 ├── hybrid/                 normalized hybrid bundle
-├── perfetto/
-│   ├── full/               full trace and detached validation
-│   └── request-focused/    presentation trace and detached validation
+├── perfetto/               full and request-focused traces, shared validation
 ├── overview/               external overview.json and overview.html
 ├── publication/            overall result and output hashes
 └── recovery/               detached immutable-input manifest
@@ -218,8 +216,11 @@ runs/<run-id>/
 이전 버전이 만든 `<run-id>-gpu`, `<run-id>-coordinator` 형태의 flat 결과도
 분석·변환할 수 있지만, 새 실행은 위 grouped layout만 생성합니다.
 
-Production runner는 Full Perfetto, request-focused Perfetto, Overview를 각각 한
-번만 생성합니다. `determinism.json`의 `byte_identical: null`은 해당 run 안에서
+Production runner는 한 번의 Perfetto 변환으로 Full trace와 request-focused
+trace를 같은 `perfetto/` bundle에 생성하고, 그 bundle에서 Overview를 한 번
+생성합니다. CLI 결과의 `perfetto`와 `request_focused_perfetto` key는 호환성을
+위해 모두 이 canonical bundle을 가리킵니다. `determinism.json`의
+`byte_identical: null`은 해당 run 안에서
 반복 생성을 수행하지 않았다는 뜻이며, 함께 기록된 파일 SHA-256은 실제 산출물의
 무결성을 확인하는 데 사용됩니다. Byte-for-byte 결정성은 CPU-only regression과
 evaluation에서 같은 입력을 두 번 생성하여 검증합니다. 과거 runner가 반복 생성
@@ -404,6 +405,17 @@ Capture 전체 resource aggregate는 `vllm_profiler.resource.capture.*`로 분�
 됩니다.
 상세 availability, sample count, aggregation과 provenance는 외부 HTML/JSON
 Overview에서 확인할 수 있습니다.
+
+Overview의 resource provenance는 normalized `metrics/metrics.jsonl`의 root ID,
+크기와 SHA-256을 기록합니다. 전체 sample timestamp 배열은 aggregate마다
+복제하지 않으며, 원본 stream의 `timestamp_ns`에서 재구성합니다. Marker 기반
+stage aggregate에 실제로 기여한 timestamp와 coverage 근거는 계속 보존합니다.
+
+저장되는 Trace Processor validation은 SQL text, columns, row count와 canonical
+row SHA-256, 기대 count/hash 및 match 결과를 보존하되 대량의 result row는
+복제하지 않습니다. Overview 생성은 공식 Trace Processor query를 다시 실행해
+메모리의 전체 row와 저장된 요약을 대조합니다. 과거 rows 포함 validation도 계속
+읽을 수 있습니다.
 
 상세 profiler event와 요청 중심 trace가 필요하면 옵션을 추가합니다.
 

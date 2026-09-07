@@ -1,1 +1,3 @@
 include examples/*.json
+prune tests
+prune tools

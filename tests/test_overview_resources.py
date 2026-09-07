@@ -374,6 +374,11 @@ class OverviewResourceTests(unittest.TestCase):
         self.assertEqual(_aggregate(summary, ".max")["value"], 20)
         self.assertEqual(mean["sample_count"], 2)
         details = mean["sources"][0]["details"]
+        self.assertNotIn("sample_timestamps_ns", details)
+        self.assertEqual(
+            details["timestamp_evidence"],
+            "reconstruct_from_normalized_metric_stream_timestamp_ns",
+        )
         self.assertEqual(details["covered_duration_ns"], 20)
         self.assertEqual(details["coverage_ratio"], 1.0)
         self.assertEqual(details["source_marker_event_ids"],

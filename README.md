@@ -134,6 +134,11 @@ PYTHONPATH=src:. python3 -m tools.evaluation overview compare \
 | `overview.json` | machine-readable KPI와 provenance |
 | `overview.html` | 브라우저에서 여는 self-contained 결과 리포트 |
 
+`collect hybrid`가 생성하는 두 `.pftrace`와 공통 validation/manifest는 모두
+`<run-root>/<run-id>/perfetto/` 한 곳에 있습니다. CLI의 `perfetto`와
+`request_focused_perfetto` 결과 key는 호환성을 위해 같은 bundle 경로를
+반환합니다.
+
 `trace.pftrace`의 Perfetto **Overview → Info and Stats (advanced)**에는
 `vllm_profiler.*` Trace Attribute로 필수 latency, throughput, GPU–NPU
 transfer와 resource 요약이 표시됩니다. 측정할 수 없는 단계별 값은 숫자 대신

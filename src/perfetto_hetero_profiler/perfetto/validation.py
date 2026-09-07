@@ -51,7 +51,6 @@ from .validation_queries import (
     _RESOURCE_TELEMETRY_ROOT_KEY,
     _REQUEST_RESOURCE_ROOT_KEY,
     _REQUEST_RESOURCE_ROOT_NAME,
-    _REPORT_ROW_QUERIES,
 )
 
 
@@ -134,19 +133,9 @@ def validate_trace(
                 f"{len(expected_rows)}/{_rows_sha256(expected_rows)}, got "
                 f"{actual['row_count']}/{actual['rows_sha256']}"
             )
-        compact_native_rows = _has_native_event_specs(plan)
-        query_report = {
-            key: value
-            for key, value in actual.items()
-            if (
-                key != "rows"
-                or not compact_native_rows
-                or name in _REPORT_ROW_QUERIES
-            )
-        }
         query_reports.append(
             {
-                **query_report,
+                **actual,
                 "expected_row_count": len(expected_rows),
                 "expected_rows_sha256": _rows_sha256(expected_rows),
                 "matched": matched,
@@ -196,6 +185,29 @@ def validate_trace(
             report=report,
         )
     return report
+
+
+def summarize_trace_validation(report: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the complete persisted validation evidence without SQL rows.
+
+    ``validate_trace`` always executes and retains complete query rows for
+    in-process consumers.  Persisted reports retain query identity, schema,
+    counts and hashes, which is sufficient for strict comparison with a fresh
+    official Trace Processor run without duplicating trace-scale row payloads.
+    """
+
+    queries = report.get("queries")
+    if not isinstance(queries, list) or any(
+        not isinstance(query, Mapping) for query in queries
+    ):
+        raise TraceValidationError("validation report queries are malformed")
+    summarized = dict(report)
+    summarized["queries"] = [
+        {key: value for key, value in query.items() if key != "rows"}
+        for query in queries
+    ]
+    _canonical_json_bytes(summarized)
+    return summarized
 
 
 def validate_native_perfetto_trace(

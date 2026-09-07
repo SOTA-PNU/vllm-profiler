@@ -47,7 +47,11 @@ from .tooling import (
     ToolchainRuntime,
     resolve_toolchain,
 )
-from .validation import validate_native_perfetto_trace, validate_trace
+from .validation import (
+    summarize_trace_validation,
+    validate_native_perfetto_trace,
+    validate_trace,
+)
 from .writer import write_trace
 from .timeline_summary import build_timeline_summary_context
 from .trace_attributes import trace_attribute_validation_report
@@ -178,7 +182,7 @@ def convert_perfetto(
             trace_validation["native_details"] = native_validation
         write_json_exclusive(
             staging / TRACE_VALIDATION_NAME,
-            trace_validation,
+            summarize_trace_validation(trace_validation),
         )
         attribute_validation = trace_attribute_validation_report(
             planning.plan.trace_attributes,
@@ -222,7 +226,7 @@ def convert_perfetto(
                 )
             write_json_exclusive(
                 staging / REQUEST_FOCUSED_VALIDATION_NAME,
-                request_validation,
+                summarize_trace_validation(request_validation),
             )
             request_trace = {
                 "root_id": OUTPUT_ROOT_ID,

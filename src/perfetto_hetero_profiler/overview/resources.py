@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 import math
+import stat
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from ..schema import Availability
 from ..schema.catalog import METRIC_CATALOG
 from ..schema.catalog import INTERVAL_RESOURCE_METRICS, display_rule
 from ..schema.records import MetricSample
+from ..support.files import sha256_file
 
 
 class ResourceCalculationError(ValueError):
@@ -229,18 +232,78 @@ def _scope(
     }
 
 
+def _metric_stream_reference(loaded: object) -> dict[str, object]:
+    """Return path-free identity for the validated canonical metric stream."""
+
+    root = getattr(loaded, "root", None)
+    if root is None:
+        return {
+            "root_id": None,
+            "artifact_size_bytes": None,
+            "artifact_sha256": None,
+        }
+    path = Path(root) / "metrics/metrics.jsonl"
+    try:
+        before = path.lstat()
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+            raise ResourceCalculationError(
+                "canonical metric stream must be a real regular file"
+            )
+        digest = sha256_file(path)
+        after = path.lstat()
+    except OSError as error:
+        raise ResourceCalculationError(
+            "canonical metric stream cannot be read for provenance"
+        ) from error
+    if (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+        before.st_size,
+        before.st_mtime_ns,
+    ) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_mode,
+        after.st_size,
+        after.st_mtime_ns,
+    ):
+        raise ResourceCalculationError(
+            "canonical metric stream changed during provenance hashing"
+        )
+    root_id = None
+    for fingerprint in getattr(loaded, "root_fingerprints", ()):
+        if Path(fingerprint.root) == Path(root):
+            root_id = fingerprint.root_id
+            break
+    return {
+        "root_id": root_id,
+        "artifact_size_bytes": after.st_size,
+        "artifact_sha256": digest,
+    }
+
+
 def _source(
-    metric_name: str, samples: Sequence[MetricSample], *, dimensions: str
+    metric_name: str,
+    samples: Sequence[MetricSample],
+    *,
+    dimensions: str,
+    stream_reference: dict[str, object],
 ) -> dict[str, object]:
     return {
         "source_kind": "normalized_metric_stream",
         "record_ids": [],
         "metric_names": [metric_name],
-        "root_id": None,
+        "root_id": stream_reference["root_id"],
         "relative_path": "metrics/metrics.jsonl",
         "details": {
             "dimensions": dimensions,
-            "sample_timestamps_ns": [sample.timestamp_ns for sample in samples],
+            "artifact_size_bytes": stream_reference["artifact_size_bytes"],
+            "artifact_sha256": stream_reference["artifact_sha256"],
+            "timestamp_evidence": (
+                "reconstruct_from_normalized_metric_stream_timestamp_ns"
+            ),
+            "stream_sample_count": len(samples),
         },
     }
 
@@ -347,8 +410,14 @@ def _stage_source(
     coverage_ratio: float | None,
     max_interval_ns: int | None,
     method: str,
+    stream_reference: dict[str, object],
 ) -> dict[str, object]:
-    source = _source(metric_name, samples, dimensions=dimensions)
+    source = _source(
+        metric_name,
+        samples,
+        dimensions=dimensions,
+        stream_reference=stream_reference,
+    )
     details = source["details"]
     assert isinstance(details, dict)
     details.update(
@@ -534,6 +603,7 @@ def _stage_summary(
     samples: Sequence[MetricSample],
     dimensions: str,
     window: StageWindow,
+    stream_reference: dict[str, object],
 ) -> dict[str, object]:
     unit = METRIC_CATALOG[metric_name].unit
     scope = _stage_scope(samples[0], dimensions=dimensions, window=window)
@@ -690,6 +760,7 @@ def _stage_summary(
             if interval_metric
             else "point_timestamp_inside_stage_v1"
         ),
+        stream_reference=stream_reference,
     )
     if interval_metric:
         aggregates = _stage_aggregates(
@@ -750,6 +821,7 @@ def summarize_resources(
     """Aggregate capture-wide streams and marker-proven stage windows."""
 
     metrics = tuple(getattr(loaded, "metrics", ()))
+    stream_reference = _metric_stream_reference(loaded)
     groups: dict[
         tuple[str, str, str, str | None, str | None, str],
         list[MetricSample],
@@ -792,7 +864,12 @@ def summarize_resources(
         unit = METRIC_CATALOG[metric_name].unit
         scope = _scope(samples[0], dimensions=dimensions)
         clock = _clock_evidence(loaded, samples)
-        source = _source(metric_name, samples, dimensions=dimensions)
+        source = _source(
+            metric_name,
+            samples,
+            dimensions=dimensions,
+            stream_reference=stream_reference,
+        )
         common = {
             "canonical_unit": unit,
             "sample_count": len(values),
@@ -934,6 +1011,7 @@ def summarize_resources(
                         samples=raw_stream,
                         dimensions=dimensions,
                         window=window,
+                        stream_reference=stream_reference,
                     )
                 )
     return summaries

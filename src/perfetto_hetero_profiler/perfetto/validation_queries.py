@@ -258,15 +258,6 @@ _RESOURCE_TELEMETRY_ROOT_KEY: Final = "telemetry.resources"
 _RESOURCE_TELEMETRY_ROOT_NAME: Final = "Resource telemetry (full capture window)"
 _REQUEST_RESOURCE_ROOT_KEY: Final = "summary.request_resources"
 _REQUEST_RESOURCE_ROOT_NAME: Final = "Request-window Resource Telemetry"
-_REPORT_ROW_QUERIES: Final = frozenset(
-    {
-        # Overview reconciliation consumes these two evidence tables. Other
-        # potentially very large tables retain exact row count and SHA-256 but
-        # do not duplicate every row into the JSON sidecar.
-        "slices",
-        "timeline_summary_slices",
-    }
-)
 
 _TRACE_ATTRIBUTE_SQL: Final = f"""
 SELECT name, key_type, int_value, str_value
@@ -483,7 +474,6 @@ __all__ = [
     "_RESOURCE_TELEMETRY_ROOT_NAME",
     "_REQUEST_RESOURCE_ROOT_KEY",
     "_REQUEST_RESOURCE_ROOT_NAME",
-    "_REPORT_ROW_QUERIES",
     "_TRACE_ATTRIBUTE_SQL",
     "_TIMELINE_SUMMARY_HIERARCHY_SQL",
     "_TIMELINE_SUMMARY_SLICE_SQL",

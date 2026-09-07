@@ -353,6 +353,37 @@ class OverviewGenerationIntegrationTests(unittest.TestCase):
         self.assertTrue(loaded.validation["valid"])
         self.assertTrue(loaded.artifact_validation["valid"])
         self.assertEqual(loaded.artifact_validation["mismatches"], [])
+        document = json.loads(
+            (first_output / OVERVIEW_JSON_NAME).read_text(encoding="utf-8")
+        )
+        metric_stream = self.family_a["hybrid"] / "metrics/metrics.jsonl"
+        expected_stream_sha256 = hashlib.sha256(
+            metric_stream.read_bytes()
+        ).hexdigest()
+        resource_sources = [
+            source
+            for summary in document["resources"]
+            for aggregate in summary["aggregates"]
+            for source in aggregate["sources"]
+        ]
+        self.assertTrue(resource_sources)
+        self.assertTrue(
+            all(
+                "sample_timestamps_ns" not in source["details"]
+                for source in resource_sources
+            )
+        )
+        self.assertTrue(
+            all(
+                source["root_id"] == "hybrid"
+                and source["relative_path"] == "metrics/metrics.jsonl"
+                and source["details"]["artifact_sha256"]
+                == expected_stream_sha256
+                and source["details"]["artifact_size_bytes"]
+                == metric_stream.stat().st_size
+                for source in resource_sources
+            )
+        )
         self.assertEqual(_tree_state(roots), before)
 
     def test_overwrite_overlap_symlink_and_failed_staging_are_safe(self) -> None:

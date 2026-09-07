@@ -363,7 +363,15 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                     (config.output_directory / "trace.request-focused.pftrace").write_bytes(
                         b"focused"
                     )
-                return {"status": "succeeded"}
+                return {
+                    "status": "succeeded",
+                    "request_focused_trace": {
+                        "path": str(
+                            config.output_directory
+                            / "trace.request-focused.pftrace"
+                        )
+                    },
+                }
 
             def overview(config):
                 calls.append(("overview", False))
@@ -387,7 +395,19 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
 
             self.assertEqual(
                 calls,
-                [("perfetto", False), ("perfetto", True), ("overview", False)],
+                [("perfetto", True), ("overview", False)],
+            )
+            self.assertFalse(
+                (runner.layout.publication / "perfetto_result.json").exists()
+            )
+            self.assertFalse(
+                (
+                    runner.layout.publication
+                    / "request_focused_perfetto_result.json"
+                ).exists()
+            )
+            self.assertFalse(
+                (runner.layout.publication / "overview_result.json").exists()
             )
             evidence = json.loads(
                 (runner.layout.publication / "determinism.json").read_text(
@@ -400,6 +420,13 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
             self.assertIsNone(evidence["perfetto_byte_identical"])
             self.assertIsNone(evidence["request_focused_perfetto_byte_identical"])
             self.assertIsNone(evidence["overview_byte_identical"])
+            self.assertEqual(
+                set(evidence["perfetto_sha256"]), {"trace.pftrace"}
+            )
+            self.assertEqual(
+                set(evidence["request_focused_perfetto_sha256"]),
+                {"trace.request-focused.pftrace"},
+            )
 
     def test_partial_startup_failure_cleans_only_started_children(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

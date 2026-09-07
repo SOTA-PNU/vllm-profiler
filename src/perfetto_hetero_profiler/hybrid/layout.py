@@ -11,11 +11,15 @@ _GROUPED_PATHS = {
     "gpu": Path("sources/gpu"),
     "npu": Path("sources/npu"),
     "coordinator": Path("coordinator"),
-    "perfetto": Path("perfetto/full"),
-    "request_perfetto": Path("perfetto/request-focused"),
+    "perfetto": Path("perfetto"),
+    "request_perfetto": Path("perfetto"),
     "overview": Path("overview"),
     "recovery": Path("recovery"),
     "publication": Path("publication"),
+}
+_LEGACY_GROUPED_PATHS = {
+    "perfetto": Path("perfetto/full"),
+    "request_perfetto": Path("perfetto/request-focused"),
 }
 _LEGACY_SUFFIXES = {
     "hybrid": "",
@@ -41,6 +45,36 @@ def related_run_root(hybrid_root: Path, run_id: str, product: str) -> Path:
     if root.name == run_id:
         return root.parent / f"{run_id}{_LEGACY_SUFFIXES[product]}"
     raise ValueError("hybrid root does not match a supported run layout")
+
+
+def existing_related_run_root(
+    hybrid_root: Path,
+    run_id: str,
+    product: str,
+) -> Path:
+    """Resolve a produced root across canonical and historical layouts.
+
+    New grouped runs publish both Perfetto views in one ``perfetto/`` bundle.
+    Historical grouped runs used ``perfetto/full`` and
+    ``perfetto/request-focused``.  File sentinels avoid mistaking the shared
+    historical parent directory for a canonical bundle.
+    """
+
+    canonical = related_run_root(hybrid_root, run_id, product)
+    if product not in _LEGACY_GROUPED_PATHS:
+        return canonical
+    sentinel = {
+        "perfetto": "trace.pftrace",
+        "request_perfetto": "trace.request-focused.pftrace",
+    }[product]
+    if (canonical / sentinel).is_file():
+        return canonical
+    root = Path(hybrid_root)
+    if root.name == "hybrid" and root.parent.name == run_id:
+        historical = root.parent / _LEGACY_GROUPED_PATHS[product]
+        if (historical / sentinel).is_file():
+            return historical
+    return canonical
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,9 +126,20 @@ class HybridRunLayout:
 
     @property
     def all_roots(self) -> tuple[Path, ...]:
-        return (
-            self.hybrid, self.gpu, self.npu, self.coordinator, self.perfetto,
-            self.request_perfetto, self.overview, self.recovery, self.publication,
+        return tuple(
+            dict.fromkeys(
+                (
+                    self.hybrid,
+                    self.gpu,
+                    self.npu,
+                    self.coordinator,
+                    self.perfetto,
+                    self.request_perfetto,
+                    self.overview,
+                    self.recovery,
+                    self.publication,
+                )
+            )
         )
 
     @property
@@ -107,4 +152,8 @@ class HybridRunLayout:
         )
 
 
-__all__ = ["HybridRunLayout", "related_run_root"]
+__all__ = [
+    "HybridRunLayout",
+    "existing_related_run_root",
+    "related_run_root",
+]

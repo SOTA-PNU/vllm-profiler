@@ -182,7 +182,9 @@ telemetry를 복제하거나 timestamp와 값을 다시 기준화하지 않습�
 
 Trace Processor validation은 trace의 track, slice, counter, annotation과
 flow를 변환 계획과 대조합니다. 동일한 입력과 설정은 동일한 protobuf output을
-생성해야 합니다.
+생성해야 합니다. 검증 query는 전체 row를 실행 중에 비교하지만 persisted
+validation에는 query identity, columns, row count와 row SHA-256만 저장합니다.
+따라서 검증 강도는 유지하면서 trace 내용을 JSON에 다시 복제하지 않습니다.
 
 ## Artifact integrity
 
@@ -205,6 +207,9 @@ JSON/HTML 리포트입니다. Perfetto UI의 내장 Overview 또는 plugin이 �
 
 리포트는 KPI의 availability, 계산식, sample count와 provenance를 보존합니다.
 비교 조건이 맞지 않으면 성능 순위나 승자를 생성하지 않습니다.
+Resource aggregate는 canonical metric stream의 상대경로·SHA-256과 stage에
+기여한 timestamp를 보존합니다. 전체 stream timestamp는 각 aggregate에 반복하지
+않고 원본 normalized metric stream의 `timestamp_ns`로 재검증합니다.
 
 Perfetto Info and Stats의 Trace Attribute schema `1.1.0`은 중복된 KPI별
 `availability` 행을 출력하지 않습니다. 숫자 value는 available을 의미하고,

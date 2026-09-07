@@ -1589,7 +1589,6 @@ class HybridRunner:
         from ..overview.generator import OverviewGenerationConfig, generate_overview
         from ..perfetto.converter import PerfettoConversionConfig, convert_perfetto
 
-        # Grouped layouts place both trace products below a shared container.
         # The converter deliberately requires its output parent to pre-exist.
         self.layout.perfetto.parent.mkdir(parents=True, exist_ok=True)
         include_details = self.profile_mode != "monitor"
@@ -1599,25 +1598,13 @@ class HybridRunner:
                 output_directory=self.layout.perfetto,
                 trace_processor_path=self.config.trace_processor_path,
                 include_native_details=include_details,
-                request_focused=False,
-            )
-        )
-        write_pretty_json(
-            self.layout.publication / "perfetto_result.json", conversion
-        )
-        request_conversion = convert_perfetto(
-            PerfettoConversionConfig(
-                run_directory=self.layout.hybrid,
-                output_directory=self.layout.request_perfetto,
-                trace_processor_path=self.config.trace_processor_path,
-                include_native_details=include_details,
                 request_focused=True,
             )
         )
-        write_pretty_json(
-            self.layout.publication / "request_focused_perfetto_result.json",
-            request_conversion,
-        )
+        if conversion.get("request_focused_trace") is None:
+            raise HybridRunnerError(
+                "combined Perfetto conversion omitted the request-focused trace"
+            )
         overview = generate_overview(
             OverviewGenerationConfig(
                 run_directory=self.layout.hybrid,
@@ -1626,14 +1613,17 @@ class HybridRunner:
                 trace_processor_path=self.config.trace_processor_path,
             )
         )
-        write_pretty_json(self.layout.publication / "overview_result.json", overview)
+        if overview.get("status") != "succeeded":
+            raise HybridRunnerError("Overview generation did not succeed")
         first_traces = {
-            path.name: sha256_file(path)
-            for path in sorted(self.layout.perfetto.glob("*.pftrace"))
+            "trace.pftrace": sha256_file(
+                self.layout.perfetto / "trace.pftrace"
+            )
         }
         first_request_traces = {
-            path.name: sha256_file(path)
-            for path in sorted(self.layout.request_perfetto.glob("*.pftrace"))
+            "trace.request-focused.pftrace": sha256_file(
+                self.layout.perfetto / "trace.request-focused.pftrace"
+            )
         }
         overview_hashes = {
             name: sha256_file(self.layout.overview / name)

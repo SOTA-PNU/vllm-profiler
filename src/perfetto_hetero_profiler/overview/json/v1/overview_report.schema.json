@@ -173,7 +173,27 @@
         },
         "root_id": {"type": ["string", "null"], "minLength": 1},
         "relative_path": {"type": ["string", "null"], "minLength": 1},
-        "details": {"type": "object"}
+        "details": {
+          "type": "object",
+          "description": "Source-specific provenance. New normalized metric-stream sources identify the canonical stream by size and SHA-256 and reconstruct timestamps from its timestamp_ns field; legacy reports may also contain inline sample_timestamps_ns arrays.",
+          "properties": {
+            "artifact_size_bytes": {"type": ["integer", "null"], "minimum": 0},
+            "artifact_sha256": {
+              "type": ["string", "null"],
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "timestamp_evidence": {"type": "string", "minLength": 1},
+            "stream_sample_count": {"type": "integer", "minimum": 0},
+            "sample_timestamps_ns": {
+              "type": "array",
+              "items": {"type": "integer", "minimum": 0}
+            },
+            "contributing_sample_timestamps_ns": {
+              "type": "array",
+              "items": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
       }
     },
     "scope": {

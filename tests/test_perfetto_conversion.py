@@ -34,6 +34,8 @@ from perfetto_hetero_profiler.perfetto.converter import (
     TRACE_NAME,
     TRACE_ATTRIBUTE_VALIDATION_NAME,
     TRACE_VALIDATION_NAME,
+    REQUEST_FOCUSED_TRACE_NAME,
+    REQUEST_FOCUSED_VALIDATION_NAME,
     PerfettoConversionConfig,
     convert_perfetto,
     plan_perfetto_conversion,
@@ -777,6 +779,13 @@ class PerfettoConversionIntegrationTests(unittest.TestCase):
             self.assertTrue(
                 all(query["matched"] for query in validation["queries"])
             )
+            self.assertTrue(
+                all("rows" not in query for query in validation["queries"])
+            )
+            self.assertLess(
+                (first_output / TRACE_VALIDATION_NAME).stat().st_size,
+                100_000,
+            )
             self.assertGreater(validation["counts"]["slices"], 0)
             self.assertGreater(validation["counts"]["step_annotations"], 0)
             self.assertGreater(validation["counts"]["counters"], 0)
@@ -851,6 +860,48 @@ class PerfettoConversionIntegrationTests(unittest.TestCase):
             self.assertEqual(
                 manifest["trace"]["sha256"],
                 _sha256(first_output / TRACE_NAME),
+            )
+
+    def test_one_conversion_publishes_full_and_request_focused_bundle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            family = _build_monitor_family(
+                Path(directory),
+                overview_metrics=True,
+                measured_token_timestamps=(2_100_000, 2_200_000),
+            )
+            output = family["runs"] / "combined-perfetto"
+            result = convert_perfetto(
+                PerfettoConversionConfig(
+                    run_directory=family["hybrid"],
+                    output_directory=output,
+                    trace_processor_path=_trace_processor_path(),
+                    request_focused=True,
+                )
+            )
+            self.assertEqual(result["status"], "succeeded")
+            self.assertEqual(
+                {path.name for path in output.iterdir()},
+                {
+                    *_OUTPUT_NAMES,
+                    REQUEST_FOCUSED_TRACE_NAME,
+                    REQUEST_FOCUSED_VALIDATION_NAME,
+                },
+            )
+            focused_validation = json.loads(
+                (output / REQUEST_FOCUSED_VALIDATION_NAME).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertTrue(focused_validation["valid"])
+            self.assertTrue(
+                all(
+                    "rows" not in query
+                    for query in focused_validation["queries"]
+                )
+            )
+            self.assertLess(
+                (output / REQUEST_FOCUSED_VALIDATION_NAME).stat().st_size,
+                100_000,
             )
 
     def test_overwrite_and_input_symlink_are_rejected(self):

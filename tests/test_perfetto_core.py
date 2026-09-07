@@ -31,6 +31,9 @@ from perfetto_hetero_profiler.perfetto.planner import (
     build_trace_plan,
 )
 from perfetto_hetero_profiler.perfetto import tooling
+from perfetto_hetero_profiler.perfetto.validation import (
+    summarize_trace_validation,
+)
 from perfetto_hetero_profiler.schema import (
     Availability,
     DeviceDescriptor,
@@ -755,6 +758,34 @@ class WriterTests(unittest.TestCase):
                 )
                 with self.assertRaises(error_type):
                     serialize_trace(invalid)
+
+
+class ValidationSummaryTests(unittest.TestCase):
+    def test_persisted_summary_removes_only_query_rows(self) -> None:
+        report = {
+            "valid": True,
+            "trace": {"sha256": "0" * 64},
+            "queries": [
+                {
+                    "name": "slices",
+                    "sql": "SELECT * FROM slice",
+                    "columns": ["name"],
+                    "row_count": 1,
+                    "rows_sha256": "1" * 64,
+                    "rows": [{"name": "work"}],
+                    "expected_row_count": 1,
+                    "expected_rows_sha256": "1" * 64,
+                    "matched": True,
+                }
+            ],
+            "native_details": {"rows": ["metadata is not a SQL query row"]},
+        }
+        summarized = summarize_trace_validation(report)
+        self.assertNotIn("rows", summarized["queries"][0])
+        self.assertEqual(
+            summarized["native_details"], report["native_details"]
+        )
+        self.assertIn("rows", report["queries"][0])
 
 
 def make_artifact_roots(base: Path) -> tuple[Path, Path]:

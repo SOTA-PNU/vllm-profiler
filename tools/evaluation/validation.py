@@ -8,7 +8,10 @@ from pathlib import Path
 import re
 from typing import Any
 
-from perfetto_hetero_profiler.hybrid.layout import HybridRunLayout
+from perfetto_hetero_profiler.hybrid.layout import (
+    HybridRunLayout,
+    existing_related_run_root,
+)
 from perfetto_hetero_profiler.support.files import sha256_file
 
 from .accuracy import client_latency_accuracy, exact_count_accuracy, exact_marker_accuracy
@@ -92,17 +95,26 @@ def _validate_derived_product_hashes(
             "request_focused_perfetto_byte_identical",
             "overview_byte_identical",
         )
+        combined_bundle = roots["perfetto"] == roots["focused"]
         hash_roots = {
-            "perfetto_sha256": (roots["perfetto"], {
-                path.name
-                for path in roots["perfetto"].glob("*.pftrace")
-                if path.is_file()
-            }),
-            "request_focused_perfetto_sha256": (roots["focused"], {
-                path.name
-                for path in roots["focused"].glob("*.pftrace")
-                if path.is_file()
-            }),
+            "perfetto_sha256": (roots["perfetto"], (
+                {"trace.pftrace"}
+                if combined_bundle
+                else {
+                    path.name
+                    for path in roots["perfetto"].glob("*.pftrace")
+                    if path.is_file()
+                }
+            )),
+            "request_focused_perfetto_sha256": (roots["focused"], (
+                {"trace.request-focused.pftrace"}
+                if combined_bundle
+                else {
+                    path.name
+                    for path in roots["focused"].glob("*.pftrace")
+                    if path.is_file()
+                }
+            )),
             "overview_sha256": (
                 roots["overview"],
                 {"overview.json", "overview.html"},
@@ -139,8 +151,12 @@ def _paths(attempt: Path, attempt_id: str) -> dict[str, Path]:
             "gpu": grouped.gpu,
             "npu": grouped.npu,
             "coordinator": grouped.coordinator,
-            "perfetto": grouped.perfetto,
-            "focused": grouped.request_perfetto,
+            "perfetto": existing_related_run_root(
+                grouped.hybrid, attempt_id, "perfetto"
+            ),
+            "focused": existing_related_run_root(
+                grouped.hybrid, attempt_id, "request_perfetto"
+            ),
             "overview": grouped.overview,
             "recovery": grouped.recovery,
             "publication": grouped.publication,

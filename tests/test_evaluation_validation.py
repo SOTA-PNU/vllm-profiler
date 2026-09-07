@@ -82,6 +82,19 @@ class DerivedProductHashEvidenceTests(unittest.TestCase):
     def test_single_generation_hashes_match_actual_products(self) -> None:
         _validate_derived_product_hashes(self.evidence(), self.roots)
 
+    def test_combined_bundle_uses_only_canonical_full_and_focused_hashes(self) -> None:
+        root = self.roots["perfetto"]
+        (root / "trace.request-focused.pftrace").write_bytes(b"focused trace")
+        roots = {**self.roots, "focused": root}
+        evidence = self.evidence()
+        evidence["perfetto_sha256"] = self.hashes(
+            "perfetto", "trace.pftrace"
+        )
+        evidence["request_focused_perfetto_sha256"] = self.hashes(
+            "perfetto", "trace.request-focused.pftrace"
+        )
+        _validate_derived_product_hashes(evidence, roots)
+
     def test_legacy_repeat_hashes_are_verified_and_absent_hashes_are_allowed(
         self,
     ) -> None:

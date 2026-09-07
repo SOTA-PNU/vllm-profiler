@@ -16,6 +16,7 @@ from perfetto_hetero_profiler.overview.loader import (
     OverviewInputError,
     _exact_perfetto_files,
     _expected_query_count,
+    _fresh_validation_matches_stored,
     assert_perfetto_unchanged,
     load_matching_perfetto,
     normalized_identity,
@@ -32,10 +33,15 @@ from perfetto_hetero_profiler.perfetto.converter import (
     TRACE_NAME,
     TRACE_ATTRIBUTE_VALIDATION_NAME,
     TRACE_VALIDATION_NAME,
+    REQUEST_FOCUSED_TRACE_NAME,
+    REQUEST_FOCUSED_VALIDATION_NAME,
     PerfettoConversionConfig,
     convert_perfetto,
 )
 from perfetto_hetero_profiler.perfetto.loader import load_hybrid_run
+from perfetto_hetero_profiler.perfetto.validation import (
+    summarize_trace_validation,
+)
 from perfetto_hetero_profiler.perfetto.timeline_summary import (
     TIMELINE_SUMMARY_MAPPING_VERSION,
 )
@@ -95,6 +101,17 @@ class QueryInventoryTests(unittest.TestCase):
             ):
                 (root / name).write_bytes(b"test")
             self.assertEqual(len(_exact_perfetto_files(root)), 7)
+
+    def test_combined_full_and_focused_pair_is_an_allowed_bundle_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in (
+                *_PERFETTO_FILES,
+                REQUEST_FOCUSED_TRACE_NAME,
+                REQUEST_FOCUSED_VALIDATION_NAME,
+            ):
+                (root / name).write_bytes(b"test")
+            self.assertEqual(len(_exact_perfetto_files(root)), 8)
 
     def test_partial_rbln_native_pair_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -256,7 +273,16 @@ class OverviewLoaderIntegrationTests(unittest.TestCase):
         self.assertEqual(bundle.root, self.output)
         self.assertEqual(
             bundle.stored_trace_validation,
-            bundle.fresh_trace_validation,
+            summarize_trace_validation(bundle.fresh_trace_validation),
+        )
+        self.assertTrue(
+            all(
+                "rows" not in query
+                for query in bundle.stored_trace_validation["queries"]
+            )
+        )
+        self.assertTrue(
+            all("rows" in query for query in bundle.fresh_trace_validation["queries"])
         )
         self.assertEqual(bundle.identity, self.perfetto_identity_before)
         self.assertEqual(len(bundle.identity.files), len(_PERFETTO_FILES))
@@ -271,6 +297,30 @@ class OverviewLoaderIntegrationTests(unittest.TestCase):
         self.assertEqual(summary["mismatches"], [])
         self.assertTrue(all(query["matched"] for query in summary["queries"]))
         self.assertTrue(summary["artifact_validation"]["valid"])
+
+    def test_historical_full_and_mixed_row_reports_remain_comparable(self) -> None:
+        fresh = self.bundle.fresh_trace_validation
+        self.assertTrue(_fresh_validation_matches_stored(fresh, fresh))
+        compact = summarize_trace_validation(fresh)
+        self.assertTrue(_fresh_validation_matches_stored(fresh, compact))
+        for field, replacement in (
+            ("row_count", compact["queries"][0]["row_count"] + 1),
+            ("rows_sha256", "0" * 64),
+        ):
+            with self.subTest(field=field):
+                tampered = copy.deepcopy(compact)
+                tampered["queries"][0][field] = replacement
+                self.assertFalse(
+                    _fresh_validation_matches_stored(fresh, tampered)
+                )
+        missing = copy.deepcopy(compact)
+        missing["queries"].pop()
+        self.assertFalse(_fresh_validation_matches_stored(fresh, missing))
+        mixed = copy.deepcopy(fresh)
+        mixed["queries"][1].pop("rows")
+        self.assertTrue(_fresh_validation_matches_stored(fresh, mixed))
+        mixed["queries"][0]["rows"][0]["name"] = "tampered"
+        self.assertFalse(_fresh_validation_matches_stored(fresh, mixed))
 
     def test_source_and_perfetto_identity_are_unchanged(self) -> None:
         self.assertEqual(
