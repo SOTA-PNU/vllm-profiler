@@ -226,7 +226,6 @@ _NSYS_REQUIRED_TABLES: Final = {
     "CUPTI_ACTIVITY_KIND_RUNTIME",
     "CUPTI_ACTIVITY_KIND_KERNEL",
     "CUPTI_ACTIVITY_KIND_MEMCPY",
-    "CUPTI_ACTIVITY_KIND_MEMSET",
     "ENUM_CUDA_MEMCPY_OPER",
     "ENUM_CUDA_MEM_KIND",
     "NVTX_EVENTS",
@@ -1369,13 +1368,14 @@ def _chrome_category_order(profiler_type: str) -> dict[str, int]:
 
 
 def _chrome_leaf_identity(event: _ChromeEvent, endpoint_kind: str) -> str:
+    artifact = f"artifact:{event.artifact_index}:"
     if endpoint_kind == "device":
         return (
-            f"device:{event.args.get('device', 'unknown')}:"
+            f"{artifact}device:{event.args.get('device', 'unknown')}:"
             f"context:{event.args.get('context', 'unknown')}:"
             f"stream:{event.args.get('stream', event.tid)}"
         )
-    return f"pid:{event.pid}:tid:{event.tid}"
+    return f"{artifact}pid:{event.pid}:tid:{event.tid}"
 
 
 def _chrome_leaf_name(
@@ -1385,9 +1385,10 @@ def _chrome_leaf_name(
     process_names: Mapping[str, str],
     thread_names: Mapping[tuple[str, str], str],
 ) -> str:
+    capture = f"Capture {event.artifact_index}"
     if endpoint_kind == "device":
         return (
-            f"GPU {event.args.get('device', 'unknown')} / "
+            f"{capture} — GPU {event.args.get('device', 'unknown')} / "
             f"context {event.args.get('context', 'unknown')} / "
             f"stream {event.args.get('stream', event.tid)}"
         )
@@ -1395,7 +1396,8 @@ def _chrome_leaf_name(
     thread = thread_names.get((event.pid, event.tid))
     suffix = " / ".join(item for item in (process, thread) if item)
     label = f"PID {event.pid} / TID {event.tid}"
-    return f"{label} — {suffix}" if suffix else label
+    identity = f"{label} — {suffix}" if suffix else label
+    return f"{capture} — {identity}"
 
 
 def _chrome_annotations(

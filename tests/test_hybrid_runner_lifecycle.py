@@ -673,6 +673,41 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                     clock.attributes["clock.source"], "time.monotonic_ns"
                 )
 
+    def test_detailed_clock_uses_logical_source_run_id_in_grouped_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = HybridRunner(
+                _config(root), run_root=root / "runs", run_id="detailed-clock",
+                profile_mode="gpu-torch", process_factory=_Process,
+            )
+            layout = runner.layout
+            RunPaths(layout.gpu.parent, layout.gpu.name).create()
+            RunPaths(layout.npu.parent, layout.npu.name).create()
+            marker_root = layout.coordinator / "raw/runtime_markers"
+            marker_root.mkdir(parents=True)
+            (marker_root / "proxy-markers.jsonl").write_text(
+                "", encoding="utf-8"
+            )
+            profile = {
+                "root": layout.gpu,
+                "detail": {"files": []},
+                "alignment": {
+                    "native_clock_domain": "gpu:torch-chrome-trace",
+                    "native_timestamp_unit": "ns",
+                    "profiler_type": "gpu_torch",
+                },
+            }
+            with mock.patch.object(
+                runner, "_marker_events", return_value=([], [])
+            ):
+                runner._write_sources(
+                    warmups=[], observations=[], telemetry=_WrittenTelemetry(),
+                    profile=profile, errors=[],
+                )
+
+            clocks = read_jsonl(layout.gpu / "clocks/clock_domains.jsonl")
+            self.assertEqual(clocks[-1].run_id, "detailed-clock-gpu")
+
     def test_source_write_publishes_nvml_json_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

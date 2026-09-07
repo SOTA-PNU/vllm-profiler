@@ -25,7 +25,7 @@ from perfetto_hetero_profiler.perfetto.timeline_summary import (
     TimelineSummaryInputError,
 )
 from perfetto_hetero_profiler.perfetto.writer import build_trace, serialize_trace
-from perfetto_hetero_profiler.schema import Availability, MetricScope
+from perfetto_hetero_profiler.schema import Availability, ClockType, MetricScope
 from tests.test_perfetto_conversion import _build_monitor_family
 
 
@@ -366,6 +366,44 @@ class PerfettoTimelineSummaryTests(unittest.TestCase):
 
 
 class MeasuredTokenInstantTests(unittest.TestCase):
+    def test_native_profiler_clock_does_not_ambiguous_request_clock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            family = _build_monitor_family(
+                Path(directory),
+                overview_metrics=True,
+                measured_token_timestamps=(2_250_000, 2_350_000),
+            )
+            loaded = load_hybrid_run(family["hybrid"])
+            gpu = loaded.source_by_role["gpu"]
+            external = replace(
+                gpu.clock_domains[0],
+                clock_domain_id="gpu:nsight-systems-native",
+                clock_type=ClockType.EXTERNAL,
+                attributes={
+                    "hybrid.profile_kind": "gpu_nsys",
+                    "hybrid.alignment_status": "partial",
+                },
+            )
+            loaded = replace(
+                loaded,
+                sources=tuple(
+                    replace(
+                        source,
+                        clock_domains=(*source.clock_domains, external),
+                    )
+                    if source.source_role == "gpu"
+                    else source
+                    for source in loaded.sources
+                ),
+            )
+            context = build_timeline_summary_context(loaded)
+
+        self.assertIsNotNone(context.request_window)
+        self.assertEqual(
+            context.request_window.source_clock_domain_id,
+            "gpu:host-monotonic",
+        )
+
     def test_valid_measured_token_timestamps_create_indexed_instants(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             family = _build_monitor_family(

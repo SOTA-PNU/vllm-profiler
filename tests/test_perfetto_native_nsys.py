@@ -284,5 +284,35 @@ class NsightPreambleAndEventTests(unittest.TestCase):
             flows[0].correlation_id,
             "gpu_nsys:nsight-process:328326543572992:7",
         )
+
+    def test_missing_empty_memset_table_is_accepted(self) -> None:
+        bridge = _ClockBridge(
+            source_role="gpu",
+            native_clock_domain="nsys-native",
+            native_timestamp_unit="nsight-report-native",
+            offset_ns=0,
+            observed_half_range_ns=0,
+            uncertainty_ns=1,
+            canonical_offset_ns=0,
+            sample_offsets_ns=(0,),
+        )
+        with _event_connection() as connection:
+            connection.execute("DROP TABLE CUPTI_ACTIVITY_KIND_MEMSET")
+            self.assertEqual(
+                _validate_nsys_sqlite_preamble(connection),
+                SCHEMA_VERSION,
+            )
+            slices, _, counts, _ = _read_nsys_rows(
+                SimpleNamespace(manifest=SimpleNamespace(run_id="run")),
+                connection,
+                strings={1: "cudaLaunchKernel", 2: "syntheticKernel"},
+                process_names={
+                    328_326_543_572_992: (1, "synthetic-process")
+                },
+                session_unix_ns=100,
+                bridge=bridge,
+            )
+        self.assertEqual(len(slices), 2)
+        self.assertNotIn("CUDA memset", counts)
 if __name__ == "__main__":
     unittest.main()

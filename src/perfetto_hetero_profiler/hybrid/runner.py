@@ -1361,12 +1361,20 @@ class HybridRunner:
             )
         if profile is not None:
             root = profile["root"]
+            if root == self.layout.gpu:
+                profile_role = "gpu"
+            elif root == self.layout.npu:
+                profile_role = "npu"
+            else:
+                raise HybridRunnerError(
+                    "detailed profiler root is not a configured source root"
+                )
             write_pretty_json(root / "summary/detailed_profile.json", profile["detail"])
             write_pretty_json(root / "clocks/profiler_alignment.json", profile["alignment"])
             clocks = list(read_jsonl(root / "clocks/clock_domains.jsonl"))
             clocks.append(
                 build_profiler_clock_domain(
-                    run_id=root.name,
+                    run_id=f"{self.layout.run_id}-{profile_role}",
                     clock_domain_id=profile["alignment"]["native_clock_domain"],
                     host_id=HOST_ID,
                     clock_type=ClockType.EXTERNAL,

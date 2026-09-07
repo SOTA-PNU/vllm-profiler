@@ -26,6 +26,7 @@ from perfetto_hetero_profiler.perfetto.model import (
     TracePlan,
 )
 from perfetto_hetero_profiler.perfetto.native_details import (
+    _ChromeEvent,
     NativeDetailError,
     NativeDetailResult,
     NativeDetailSummary,
@@ -33,6 +34,8 @@ from perfetto_hetero_profiler.perfetto.native_details import (
     _NativeSlice,
     _attach_explicit_flows,
     _chrome_category,
+    _chrome_leaf_identity,
+    _chrome_leaf_name,
     _microseconds_to_ns,
     _nsys_api_category,
     _rbln_native_only_result,
@@ -244,6 +247,34 @@ class NativeTimestampTests(unittest.TestCase):
 
 
 class NativeFlowTests(unittest.TestCase):
+    def test_chrome_lanes_are_scoped_to_their_source_artifact(self):
+        event = _ChromeEvent(
+            artifact_index=0,
+            phase="X",
+            category="Trace",
+            name="PyTorch Profiler (0)",
+            pid="Spans",
+            tid="PyTorch Profiler",
+            timestamp=Decimal("1"),
+            duration=Decimal("2"),
+            event_id=None,
+            args={},
+        )
+        other = replace(event, artifact_index=1)
+
+        self.assertNotEqual(
+            _chrome_leaf_identity(event, "host"),
+            _chrome_leaf_identity(other, "host"),
+        )
+        self.assertNotEqual(
+            _chrome_leaf_name(
+                event, "host", process_names={}, thread_names={}
+            ),
+            _chrome_leaf_name(
+                other, "host", process_names={}, thread_names={}
+            ),
+        )
+
     def test_native_category_classification_fails_closed(self):
         self.assertEqual(_nsys_api_category(0), "CUDA Runtime API")
         self.assertEqual(_nsys_api_category(1), "CUDA Driver API")

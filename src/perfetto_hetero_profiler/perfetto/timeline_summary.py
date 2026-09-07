@@ -16,7 +16,7 @@ from typing import Any, Mapping
 
 from ..hybrid.join import validate_marker_groups
 from ..overview.calculation import calculate_overview_kpis
-from ..schema import Availability
+from ..schema import Availability, ClockType
 from ..schema.catalog import (
     KPI_PRESENTATION_BY_IDENTITY,
     KPI_SECTION_ORDER,
@@ -536,6 +536,7 @@ def _measured_request_evidence(
         for clock in getattr(sources[0], "clock_domains", ())
         if getattr(clock, "unit", None) == "ns"
         and getattr(clock, "monotonic", None) is True
+        and getattr(clock, "clock_type", None) is ClockType.MONOTONIC
     ]
     if len(source_clocks) != 1:
         raise TimelineSummaryInputError(

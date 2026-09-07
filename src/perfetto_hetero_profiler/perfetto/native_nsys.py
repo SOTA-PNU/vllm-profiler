@@ -640,13 +640,24 @@ def _read_nsys_rows(
         )
         counts[category] += 1
 
-    memset_rows = connection.execute(
-        """
-        SELECT start, end, deviceId, contextId, streamId, correlationId,
-               globalPid, value, bytes, memKind
-        FROM CUPTI_ACTIVITY_KIND_MEMSET
-        ORDER BY start, end, deviceId, contextId, streamId, correlationId
-        """
+    # Nsight omits activity tables that have no rows in some exports.  Memset
+    # is an optional activity for conversion, so a missing table means there
+    # were no memset events rather than that the export is malformed.
+    has_memset = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        ("CUPTI_ACTIVITY_KIND_MEMSET",),
+    ).fetchone()
+    memset_rows = (
+        connection.execute(
+            """
+            SELECT start, end, deviceId, contextId, streamId, correlationId,
+                   globalPid, value, bytes, memKind
+            FROM CUPTI_ACTIVITY_KIND_MEMSET
+            ORDER BY start, end, deviceId, contextId, streamId, correlationId
+            """
+        )
+        if has_memset is not None
+        else ()
     )
     for start, end, device, context, stream, correlation, global_pid, value, byte_count, mem_kind in memset_rows:
         category = "CUDA memset"
