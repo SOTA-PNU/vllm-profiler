@@ -200,8 +200,8 @@ RBLN NPU에서 vLLM 기반 Hybrid workload를 수집하려면 별도
 ## 개발
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src \
-  python3 -m unittest discover -s tests -v
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:. \
+  python -m unittest discover -t . -s tests -v
 
 git diff --check
 ```

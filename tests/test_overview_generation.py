@@ -10,7 +10,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -61,10 +60,6 @@ from perfetto_hetero_profiler.perfetto.converter import (
     PerfettoConversionConfig,
     convert_perfetto,
 )
-from perfetto_hetero_profiler.perfetto.tooling import (
-    TRACE_PROCESSOR_FILENAME,
-    TRACE_PROCESSOR_RELEASE,
-)
 from perfetto_hetero_profiler.schema import (
     DETACHED_MANIFEST_NAME,
     DETACHED_VALIDATION_NAME,
@@ -75,6 +70,10 @@ from tests.test_perfetto_conversion import (
     _tree_state,
 )
 from tests.test_overview_model_schema import report as schema_valid_report
+from tests.support.toolchain import (
+    trace_processor_path as _trace_processor_path,
+    trace_processor_test_class,
+)
 
 
 _OVERVIEW_NAMES = {
@@ -91,14 +90,6 @@ _COMPARISON_NAMES = {
     DETACHED_MANIFEST_NAME,
     DETACHED_VALIDATION_NAME,
 }
-
-
-def _trace_processor_path() -> Path:
-    return (
-        Path(sys.prefix)
-        / "bin"
-        / f"{TRACE_PROCESSOR_FILENAME}-{TRACE_PROCESSOR_RELEASE}"
-    )
 
 
 def _contents(root: Path, names: tuple[str, ...]) -> dict[str, bytes]:
@@ -202,10 +193,7 @@ class OverviewRunModeGoldenTests(unittest.TestCase):
                 )
 
 
-@unittest.skipUnless(
-    _trace_processor_path().is_file(),
-    "dedicated pinned Trace Processor binary is unavailable",
-)
+@trace_processor_test_class()
 class OverviewGenerationIntegrationTests(unittest.TestCase):
     """Exercise generation against genuine synthetic conversion outputs."""
 

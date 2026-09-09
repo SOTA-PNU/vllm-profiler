@@ -8,7 +8,6 @@ import math
 import os
 from pathlib import Path
 import re
-import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -57,6 +56,10 @@ from perfetto_hetero_profiler.schema import (
     SoftwareDescriptor,
     ValueOrigin,
     WorkloadDescriptor,
+)
+from tests.support.toolchain import (
+    require_trace_processor,
+    trace_processor_test_class,
 )
 
 
@@ -712,9 +715,10 @@ class ModelTests(unittest.TestCase):
         self.assertIs(plan.track_by_key["counter"], tracks[1])
 
 
-@unittest.skipIf(
-    serialize_trace is None,
-    f"official Perfetto writer dependency unavailable: {_WRITER_IMPORT_ERROR}",
+@trace_processor_test_class(
+    require_binary=False,
+    require_socket=False,
+    dependency_error=_WRITER_IMPORT_ERROR or None,
 )
 class WriterTests(unittest.TestCase):
     def test_writer_bytes_are_deterministic_for_reordered_input(self):
@@ -953,13 +957,7 @@ class ToolingTests(unittest.TestCase):
                     tooling.resolve_toolchain(binary)
 
     def test_dedicated_environment_resolves_pinned_toolchain(self):
-        binary = (
-            Path(sys.prefix)
-            / "bin"
-            / f"{tooling.TRACE_PROCESSOR_FILENAME}-{tooling.TRACE_PROCESSOR_RELEASE}"
-        )
-        if not binary.is_file():
-            self.skipTest("dedicated pinned Trace Processor binary is unavailable")
+        binary = require_trace_processor(self, require_socket=False)
         runtime = tooling.resolve_toolchain(binary)
         self.assertEqual(
             runtime.trace_processor_version,

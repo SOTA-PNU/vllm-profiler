@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import socket
 import tempfile
 import unittest
 from unittest import mock
@@ -48,8 +47,11 @@ from perfetto_hetero_profiler.perfetto.timeline_summary import (
 
 from tests.test_perfetto_conversion import (
     _build_monitor_family,
-    _trace_processor_path,
     _tree_state,
+)
+from tests.support.toolchain import (
+    trace_processor_path as _trace_processor_path,
+    trace_processor_test_class,
 )
 
 
@@ -129,17 +131,6 @@ class QueryInventoryTests(unittest.TestCase):
                 _exact_perfetto_files(root)
 
 
-def _socket_creation_available() -> bool:
-    """Detect managed sandboxes that prohibit Trace Processor's TCP socket."""
-
-    try:
-        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    except OSError:
-        return False
-    probe.close()
-    return True
-
-
 def _write_json(path: Path, value: dict[str, object]) -> None:
     path.write_text(
         json.dumps(
@@ -202,10 +193,7 @@ class PerfettoIdentityFilesystemTests(unittest.TestCase):
                 perfetto_identity(linked_file)
 
 
-@unittest.skipUnless(
-    _trace_processor_path().is_file() and _socket_creation_available(),
-    "pinned Trace Processor or local TCP socket creation is unavailable",
-)
+@trace_processor_test_class()
 class OverviewLoaderIntegrationTests(unittest.TestCase):
     """Official Trace Processor reconciliation against a generated bundle."""
 

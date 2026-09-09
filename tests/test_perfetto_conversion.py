@@ -10,7 +10,6 @@ import json
 import os
 from pathlib import Path
 import sqlite3
-import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -48,10 +47,6 @@ from perfetto_hetero_profiler.perfetto.native_details import NativeDetailError
 from perfetto_hetero_profiler.perfetto.native_nsys import (
     _validate_nsys_sqlite_preamble,
 )
-from perfetto_hetero_profiler.perfetto.tooling import (
-    TRACE_PROCESSOR_FILENAME,
-    TRACE_PROCESSOR_RELEASE,
-)
 from perfetto_hetero_profiler.schema import (
     ArtifactKind,
     ArtifactReference,
@@ -78,6 +73,10 @@ from tests.hybrid_fixtures import (
     GPU_MARKERS,
     NPU_MARKERS,
     build_source_bundle,
+)
+from tests.support.toolchain import (
+    trace_processor_path as _trace_processor_path,
+    trace_processor_test_class,
 )
 
 
@@ -110,14 +109,6 @@ _OUTPUT_NAMES = {
     DETACHED_MANIFEST_NAME,
     DETACHED_VALIDATION_NAME,
 }
-
-
-def _trace_processor_path() -> Path:
-    return (
-        Path(sys.prefix)
-        / "bin"
-        / f"{TRACE_PROCESSOR_FILENAME}-{TRACE_PROCESSOR_RELEASE}"
-    )
 
 
 def _sha256(path: Path) -> str:
@@ -644,10 +635,7 @@ def _build_monitor_family(
     }
 
 
-@unittest.skipUnless(
-    _trace_processor_path().is_file(),
-    "dedicated pinned Trace Processor binary is unavailable",
-)
+@trace_processor_test_class()
 class PerfettoConversionIntegrationTests(unittest.TestCase):
     def test_nsys_schema_error_never_publishes_output(self):
         with tempfile.TemporaryDirectory() as directory:
