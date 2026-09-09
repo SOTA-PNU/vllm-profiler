@@ -108,6 +108,11 @@ PYTHONPATH=src:. python3 -m tools.evaluation run \
 참고하세요. 이 검증은 단일 모델·고정 partition에 대한 제한된 표본이며 일반
 하드웨어 benchmark가 아닙니다.
 
+1초 간격 resource telemetry를 수집하는 `monitor` 모드는 검증된 고정 구성의
+3회 반복에서 E2E 부하 평균 1.67%, output-token 처리량 저하 평균 2.01%로 5%
+기준을 충족했습니다. 연산 event를 수집하는 상세 profiler는 이 기준의 적용
+대상이 아닌 선택형 진단 모드입니다.
+
 여러 Overview의 진단용 비교도 설치 CLI가 아닌 저장소 평가 도구에서 실행합니다.
 
 ```bash

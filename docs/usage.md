@@ -186,15 +186,22 @@ Profile mode는 다음 중 하나만 선택할 수 있습니다.
 
 | Mode | 상세 수집 대상과 권장 용도 |
 | --- | --- |
-| `monitor` | canonical marker와 CPU/GPU/NPU/memory telemetry를 함께 보는 기본 실행 |
-| `gpu-torch` | GPU Prefill의 PyTorch/Kineto operator와 framework 활동 분석 |
-| `gpu-nsys` | GPU Prefill의 CUDA API, kernel, memcpy와 공식 correlation 분석 |
-| `npu-torch` | NPU Decode server의 host-side PyTorch/ATen 활동 분석 |
-| `npu-rbln` | RBLN device Neural Engine/DMA를 native Perfetto timeline에서 분석 |
+| `monitor` | canonical marker와 CPU/GPU/NPU/System Memory resource telemetry를 주기적으로 수집하는 기본 모드 |
+| `gpu-torch` | GPU Prefill의 PyTorch/Kineto operator와 framework event를 필요할 때 수집하는 상세 진단 |
+| `gpu-nsys` | GPU Prefill의 CUDA API, kernel, memcpy와 공식 correlation을 필요할 때 수집하는 상세 진단 |
+| `npu-torch` | NPU Decode server의 host-side PyTorch/ATen event를 필요할 때 수집하는 상세 진단 |
+| `npu-rbln` | RBLN device Neural Engine/DMA event를 필요할 때 수집하는 상세 진단 |
 
 한 실행에서 profiler 하나만 켜는 이유는 profiler끼리 lifecycle과 장치 상태를
 간섭시키지 않고 각 capture의 overhead와 provenance를 분리하기 위해서입니다.
 NPU Torch는 NPU 내부 실행 시간이 아니라 Decode server의 host-side 활동입니다.
+
+“초당 1회 샘플링에서 5% 이하” 성능 기준은 `sample_interval_ms=1000`으로
+resource telemetry를 수집하는 `monitor` 모드에 적용합니다. `gpu-torch`,
+`gpu-nsys`, `npu-torch`, `npu-rbln`은 1Hz polling sampler가 아니며, 병목 원인을
+조사할 때 사용자가 명시적으로 선택하는 on-demand 상세 진단 모드입니다. 상세
+profiler는 기본 Monitor와 항상 동시에 활성화하지 않으며 5% 이하 부하를 보장하지
+않습니다.
 
 한 번의 실행 결과는 `<run-root>/<run-id>/` 아래에 묶입니다. GPU/NPU 원본과
 파생 산출물은 서로 다른 하위 디렉터리에 두어 immutable-source 정책은 그대로
@@ -257,7 +264,7 @@ PYTHONPATH=src:. python3 -m tools.evaluation run \
   --dry-run
 ```
 
-`--dry-run`은 파일, 서버, 포트를 사용하지 않고 36개 logical trial과 최대 42개
+`--dry-run`은 파일, 서버, 포트를 사용하지 않고 설정에서 확정된 logical trial과
 hardware attempt 계획만 출력합니다. 실제 실행은 `--dry-run`을 제거합니다.
 중단된 실험은 같은 설정과 출력 경로로 재개합니다.
 
@@ -292,23 +299,17 @@ PYTHONPATH=src:. python3 -m tools.evaluation report \
 
 실험 조건은 `reference`, `monitor`, `gpu_torch`, `gpu_nsys`, `npu_torch`,
 `npu_rbln`입니다. Reference는 resource collector와 상세 profiler를 끄지만 현재
-runtime marker emission은 남으므로 완전한 무계측 기준이 아닙니다. 각 조건은
-pilot 1회와 formal 5회로 실행되고, pilot은 formal 통계에서 제외됩니다.
+runtime marker emission은 남으므로 완전한 무계측 기준이 아닙니다. Pilot과 formal
+round 수는 실행 전에 고정한 config와 schedule을 따르며, pilot은 formal 통계에서
+제외됩니다.
 
 독립 streaming client의 `CLOCK_MONOTONIC_NS` 원본 경계로 E2E, TTFT, TPOT를
 재계산하며 요청·토큰·marker는 정확히 대조합니다. Formal 결과에는 표본
 표준편차(`n-1`), CV, MAD, p50, p95와 같은 round의 paired overhead가
 포함됩니다. `report.html`은 Perfetto 내장 Overview가 아닌 독립 결과
-dashboard입니다. 5회 formal 반복과 단일 모델·고정 partition 결과를 일반적인
-benchmark 또는 하드웨어 우열로 해석하면 안 됩니다.
-
-검증된 고정 실행의 최초 report는 postprocess 집계에서 NPU source telemetry가
-누락되어 superseded 처리했습니다. 원본 experiment와 raw artifact는 변경하지
-않았고, 같은 36개 성공 trial에 수정된 집계만 다시 적용한 corrected report를
-canonical publication으로 사용합니다. 이는 hardware 재실행 결과가 아닙니다.
-Monitor와 reference의 E2E 차이 약 `-0.37%`는 formal 5회 안의 측정 변동으로
-해석하며 성능 향상으로 표현하지 않습니다. Reference 역시 runtime marker
-emission이 남아 있으므로 완전한 무계측 또는 순수 원본 성능 기준이 아닙니다.
+dashboard입니다. 현재 공식 1Hz 검증은 3회 formal 반복과 단일 모델·고정
+partition 결과이므로 일반적인 benchmark 또는 하드웨어 우열로 해석하면 안
+됩니다.
 
 ## Hybrid source 병합
 

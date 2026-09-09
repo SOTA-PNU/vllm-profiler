@@ -141,6 +141,27 @@ RBLN aggregate는 표준 Perfetto trace로 검증합니다. Canonical anchor가 
 원본 payload를 `trace.rbln-native.pftrace`로 별도 게시하고 hybrid timeline에
 합치지 않습니다.
 
+## 계측 부하 요구사항의 경계
+
+“초당 1회 샘플링에서 5% 이하” 요구사항은 CPU, GPU, NPU와 System Memory
+resource telemetry를 `sample_interval_ms=1000`으로 수집하는 `monitor` 모드에
+적용합니다. 연산 event를 수집하는 `gpu-torch`, `gpu-nsys`, `npu-torch`,
+`npu-rbln`은 polling sampler가 아니라 사용자가 병목 조사 시 선택하는 on-demand
+상세 진단 기능이며, 동일한 5% 부하를 보장하지 않습니다.
+
+고정 구성 실측에서 1Hz Monitor의 E2E 부하는 평균 1.67%로 기준을 충족했습니다.
+상세 모드의 주요 부하는 resource telemetry가 아니라 각 profiler의 runtime
+instrumentation에서 발생했습니다.
+
+- GPU Torch: Kineto hook이 Prefill을 지연시키고 그 영향이 KV wait에 전파됨
+- GPU Nsight: CUDA API/activity interception과 buffering이 GPU producer를 지연함
+- NPU RBLN: vendor profiler 계측이 NPU token Decode 경로를 지연함
+
+Profiler stop/finalize와 Perfetto 변환·HTML 생성은 measured request 이후에
+수행되므로 request E2E 증가 원인에 포함하지 않습니다. 같은 상세 event 범위를
+유지한 채 5% 이하로 낮추기는 현재 환경에서 어렵고, capture 범위를 줄이면 관측
+정보도 함께 감소합니다.
+
 ## Perfetto output
 
 Canonical trace는 다음 request 중심 hierarchy를 사용합니다.
