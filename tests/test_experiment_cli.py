@@ -18,6 +18,11 @@ class ExperimentCliTests(unittest.TestCase):
             ["status", "--help"],
             ["validate", "--help"],
             ["report", "--help"],
+            ["all-mode-overhead", "--help"],
+            ["all-mode-overhead", "run", "--help"],
+            ["all-mode-overhead", "recover-postprocess", "--help"],
+            ["all-mode-overhead", "status", "--help"],
+            ["all-mode-overhead", "report", "--help"],
             ["overview", "compare", "--help"],
         ):
             with self.subTest(arguments=arguments), self.assertRaises(SystemExit) as caught:

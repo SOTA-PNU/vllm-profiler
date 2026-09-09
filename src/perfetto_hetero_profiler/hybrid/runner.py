@@ -1600,16 +1600,17 @@ class HybridRunner:
         # The converter deliberately requires its output parent to pre-exist.
         self.layout.perfetto.parent.mkdir(parents=True, exist_ok=True)
         include_details = self.profile_mode != "monitor"
+        request_focused = self.config.workload.measured_requests == 1
         conversion = convert_perfetto(
             PerfettoConversionConfig(
                 run_directory=self.layout.hybrid,
                 output_directory=self.layout.perfetto,
                 trace_processor_path=self.config.trace_processor_path,
                 include_native_details=include_details,
-                request_focused=True,
+                request_focused=request_focused,
             )
         )
-        if conversion.get("request_focused_trace") is None:
+        if request_focused and conversion.get("request_focused_trace") is None:
             raise HybridRunnerError(
                 "combined Perfetto conversion omitted the request-focused trace"
             )
@@ -1628,11 +1629,15 @@ class HybridRunner:
                 self.layout.perfetto / "trace.pftrace"
             )
         }
-        first_request_traces = {
-            "trace.request-focused.pftrace": sha256_file(
-                self.layout.perfetto / "trace.request-focused.pftrace"
-            )
-        }
+        first_request_traces = (
+            {
+                "trace.request-focused.pftrace": sha256_file(
+                    self.layout.perfetto / "trace.request-focused.pftrace"
+                )
+            }
+            if request_focused
+            else {}
+        )
         overview_hashes = {
             name: sha256_file(self.layout.overview / name)
             for name in ("overview.json", "overview.html")
@@ -1645,6 +1650,11 @@ class HybridRunner:
                 "perfetto_sha256": first_traces,
                 "request_focused_perfetto_byte_identical": None,
                 "request_focused_perfetto_sha256": first_request_traces,
+                "request_focused_unavailable_reason": (
+                    None
+                    if request_focused
+                    else "request-focused trace requires exactly one measured request"
+                ),
                 "overview_byte_identical": None,
                 "overview_sha256": overview_hashes,
                 "temporary_repeat_preserved": False,

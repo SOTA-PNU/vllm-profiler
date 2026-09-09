@@ -367,6 +367,23 @@ class OverviewLoaderIntegrationTests(unittest.TestCase):
             )
             self.assertGreater(item["event_duration_ns"], 0)
 
+    def test_compact_slice_validation_uses_exact_plan_reconciliation(self) -> None:
+        bundle = copy.deepcopy(self.bundle)
+        slices = next(
+            query
+            for query in bundle.fresh_trace_validation["queries"]
+            if query["name"] == "slices"
+        )
+        slices.pop("rows")
+        values = phase_duration_reconciliation(bundle)
+        self.assertTrue(all(item["matched"] for item in values))
+        self.assertTrue(
+            all(
+                item["event_duration_ns"] == item["perfetto_duration_ns"]
+                for item in values
+            )
+        )
+
     def test_exact_five_files_are_required_for_matching_load(self) -> None:
         extra = self._copy_output("extra")
         (extra / "unexpected.txt").write_text("unexpected\n", encoding="utf-8")

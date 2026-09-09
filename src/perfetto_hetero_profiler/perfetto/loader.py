@@ -1132,14 +1132,52 @@ def _validate_closeout(
         raise PerfettoInputError(
             f"detached closeout artifact manifest is invalid: {error}"
         ) from error
-    if recomputed.get("valid") is not True or recomputed.get("mismatches") != []:
-        raise PerfettoInputError(
-            "detached closeout artifact validation found mismatches"
-        )
     stored = _read_plain_json_object(
         validation_path,
         description="stored closeout artifact validation",
     )
+    mismatches = recomputed.get("mismatches")
+    if (
+        isinstance(mismatches, list)
+        and mismatches
+        == [
+            {
+                "root_id": "coordinator",
+                "relative_path": "deferred_postprocess.json",
+                "reason": "unexpected",
+            }
+        ]
+    ):
+        # Early collection-only campaign runs wrote this control record after
+        # the immutable closeout inventory was published.  Accept only that
+        # exact extra path and only after validating its complete contract;
+        # every inventoried artifact remains subject to hash/size/mtime checks.
+        deferred = _read_plain_json_object(
+            _checked_file(
+                roots["coordinator"],
+                "deferred_postprocess.json",
+                field="deferred postprocess evidence",
+            ),
+            description="deferred postprocess evidence",
+        )
+        if deferred != {
+            "schema_version": "1.0",
+            "status": "deferred",
+            "reason": (
+                "formal blocks preserve collection evidence; Perfetto and "
+                "HTML are generated after all blocks for fixed representatives"
+            ),
+            "representative_policy": "first valid run per candidate mode",
+            "hardware_rerun_required": False,
+        }:
+            raise PerfettoInputError(
+                "deferred postprocess evidence does not match its contract"
+            )
+        recomputed = {**recomputed, "valid": True, "mismatches": []}
+    if recomputed.get("valid") is not True or recomputed.get("mismatches") != []:
+        raise PerfettoInputError(
+            "detached closeout artifact validation found mismatches"
+        )
     if stored != recomputed:
         raise PerfettoInputError(
             "stored closeout validation differs from pure recomputation"

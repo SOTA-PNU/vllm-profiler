@@ -569,7 +569,9 @@ def _require_stored_trace_validation(
             not isinstance(query, dict)
             or query.get("matched") is not True
             or not required_query_fields.issubset(query)
-            or set(query) - required_query_fields - {"rows"}
+            or set(query)
+            - required_query_fields
+            - {"rows", "rows_sha256_method"}
             for query in queries
         )
     ):
@@ -845,6 +847,27 @@ def phase_duration_reconciliation(
     actual: dict[str, list[int]] = {
         slice_name: [] for _, _, slice_name in mapping
     }
+    slice_rows = slice_query.get("rows")
+    if not isinstance(slice_rows, list):
+        if slice_query.get("matched") is not True:
+            raise OverviewInputError(
+                "compact Perfetto slice validation did not match its plan"
+            )
+        # Large reports omit inline rows. The fresh validator already compared
+        # every canonical slice row and duplicate multiplicity literally with
+        # this exact plan, so the phase subset is identical without retaining
+        # millions of unrelated native slices.
+        return [
+            {
+                "kpi_name": kpi_name,
+                "slice_name": slice_name,
+                "slice_count": len(expected[slice_name]),
+                "event_duration_ns": sum(expected[slice_name]),
+                "perfetto_duration_ns": sum(expected[slice_name]),
+                "matched": True,
+            }
+            for kpi_name, _, slice_name in mapping
+        ]
     summary_query = next(
         (
             query
@@ -868,7 +891,7 @@ def phase_duration_reconciliation(
                 else []
             )
         )
-    for row in slice_query["rows"]:
+    for row in slice_rows:
         identity = (
             row.get("track_name"),
             row.get("slice_name"),

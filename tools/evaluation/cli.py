@@ -44,6 +44,37 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Publish a corrected report to a new, non-overlapping directory.",
     )
+    overhead = commands.add_parser(
+        "all-mode-overhead",
+        help="Run the fixed 1 Hz reference-versus-profiler hardware campaign.",
+    )
+    overhead_commands = overhead.add_subparsers(dest="overhead_command")
+    overhead_run = overhead_commands.add_parser(
+        "run",
+        help=(
+            "Create or resume an immutable configured-round campaign without "
+            "hardware retries."
+        ),
+    )
+    overhead_run.add_argument("--config", type=Path, required=True)
+    overhead_run.add_argument("--campaign-root", type=Path, required=True)
+    overhead_run.add_argument("--resume", action="store_true")
+    overhead_run.add_argument("--dry-run", action="store_true")
+    overhead_run.add_argument("--preflight-only", action="store_true")
+    overhead_status = overhead_commands.add_parser(
+        "status", help="Inspect a campaign checkpoint without running hardware."
+    )
+    overhead_status.add_argument("--campaign-root", type=Path, required=True)
+    overhead_recover = overhead_commands.add_parser(
+        "recover-postprocess",
+        help="Recover a postprocess-only failure without rerunning hardware.",
+    )
+    overhead_recover.add_argument("--config", type=Path, required=True)
+    overhead_recover.add_argument("--campaign-root", type=Path, required=True)
+    overhead_report = overhead_commands.add_parser(
+        "report", help="Regenerate the deterministic campaign reports."
+    )
+    overhead_report.add_argument("--campaign-root", type=Path, required=True)
     overview = commands.add_parser(
         "overview", help="Evaluate independently validated Overview outputs."
     )
@@ -87,6 +118,34 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.experiment_root,
                 output_root=args.output_root,
             )
+        elif args.command == "all-mode-overhead":
+            from .all_mode_overhead import (
+                campaign_status,
+                generate_campaign_report,
+                recover_failed_postprocess,
+                run_all_mode_campaign,
+            )
+
+            if args.overhead_command == "run":
+                result = run_all_mode_campaign(
+                    config_path=args.config,
+                    campaign_root=args.campaign_root,
+                    resume=args.resume,
+                    dry_run=args.dry_run,
+                    preflight_only=args.preflight_only,
+                )
+            elif args.overhead_command == "status":
+                result = campaign_status(args.campaign_root)
+            elif args.overhead_command == "recover-postprocess":
+                result = recover_failed_postprocess(
+                    config_path=args.config,
+                    campaign_root=args.campaign_root,
+                )
+            elif args.overhead_command == "report":
+                result = generate_campaign_report(args.campaign_root)
+            else:
+                parser.print_help()
+                return 0
         elif args.overview_command == "compare":
             from .overview import (
                 OverviewComparisonConfig,

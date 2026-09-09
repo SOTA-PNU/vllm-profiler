@@ -24,6 +24,19 @@ class TrialValidationError(RuntimeError):
 _SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,191}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _HASH_EVIDENCE_ERROR = "derived product hash evidence is invalid"
+_CROSS_SOURCE_JOIN_METHODS = frozenset({"correlation_id", "transfer_id"})
+
+
+def _valid_cross_source_join(value: object) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and value.get("status") == "joined"
+        and value.get("join_method") in _CROSS_SOURCE_JOIN_METHODS
+        and not value.get("missing_markers")
+        and not value.get("duplicate_markers")
+        and not value.get("ordering_violations")
+        and not value.get("pairing_issues")
+    )
 
 
 def _json(path: Path) -> Any:
@@ -67,7 +80,7 @@ def _validate_hash_mapping(
     root: Path,
     expected_names: set[str],
 ) -> None:
-    if not isinstance(value, dict) or not value:
+    if not isinstance(value, dict) or (not value and expected_names):
         raise ValueError(_HASH_EVIDENCE_ERROR)
     for name, digest in value.items():
         if (
@@ -86,6 +99,8 @@ def _validate_hash_mapping(
 def _validate_derived_product_hashes(
     evidence: object,
     roots: dict[str, Path],
+    *,
+    require_request_focused: bool = True,
 ) -> None:
     try:
         if not isinstance(evidence, dict):
@@ -108,11 +123,11 @@ def _validate_derived_product_hashes(
             )),
             "request_focused_perfetto_sha256": (roots["focused"], (
                 {"trace.request-focused.pftrace"}
-                if combined_bundle
+                if combined_bundle and require_request_focused
                 else {
                     path.name
                     for path in roots["focused"].glob("*.pftrace")
-                    if path.is_file()
+                    if path.is_file() and require_request_focused
                 }
             )),
             "overview_sha256": (
@@ -183,6 +198,8 @@ def validate_trial(
     expected_requests: int = 10,
     expected_input_tokens: int = 5,
     expected_output_tokens: int = 8,
+    require_request_focused: bool = True,
+    require_derived_products: bool = True,
 ) -> dict[str, object]:
     roots = _paths(attempt, attempt_id)
     if any(path.is_symlink() for path in attempt.rglob("*")):
@@ -195,12 +212,20 @@ def validate_trial(
         roots["coordinator"] / "requests.json",
         roots["coordinator"] / "cleanup.json",
         roots["coordinator"] / "source_fingerprint.json",
-        roots["perfetto"] / "trace_validation.json",
-        roots["focused"] / "trace.request-focused.validation.json",
-        roots["overview"] / "overview_validation.json",
         roots["recovery"] / "artifact_manifest_validation.json",
-        roots["publication"] / "determinism.json",
     ]
+    if require_derived_products:
+        required.extend(
+            [
+                roots["perfetto"] / "trace_validation.json",
+                roots["overview"] / "overview_validation.json",
+                roots["publication"] / "determinism.json",
+            ]
+        )
+        if require_request_focused:
+            required.append(
+                roots["focused"] / "trace.request-focused.validation.json"
+            )
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         raise TrialValidationError(f"required artifact missing: {missing[0]}")
@@ -300,14 +325,7 @@ def validate_trial(
     if not isinstance(joins, list) or len(joins) != expected_requests:
         raise TrialValidationError("marker pairing count mismatch")
     for join in joins:
-        if (
-            join.get("status") != "joined"
-            or join.get("join_method") != "correlation_id"
-            or join.get("missing_markers")
-            or join.get("duplicate_markers")
-            or join.get("ordering_violations")
-            or join.get("pairing_issues")
-        ):
+        if not _valid_cross_source_join(join):
             raise TrialValidationError("marker or correlation reconciliation failed")
     joined_ids = sorted(join.get("request_id") for join in joins)
     if joined_ids != sorted(request_ids):
@@ -340,12 +358,19 @@ def validate_trial(
             ).to_dict())
         exact_marker_checks += 1
 
-    for path in (
-        roots["perfetto"] / "trace_validation.json",
-        roots["focused"] / "trace.request-focused.validation.json",
-        roots["overview"] / "overview_validation.json",
-        roots["recovery"] / "artifact_manifest_validation.json",
-    ):
+    validation_paths = [roots["recovery"] / "artifact_manifest_validation.json"]
+    if require_derived_products:
+        validation_paths.extend(
+            [
+                roots["perfetto"] / "trace_validation.json",
+                roots["overview"] / "overview_validation.json",
+            ]
+        )
+        if require_request_focused:
+            validation_paths.append(
+                roots["focused"] / "trace.request-focused.validation.json"
+            )
+    for path in validation_paths:
         value = _json(path)
         if value.get("valid") is not True or value.get("mismatches"):
             raise TrialValidationError(f"fresh validation failed: {path}")
@@ -355,8 +380,13 @@ def validate_trial(
     cleanup = _json(roots["coordinator"] / "cleanup.json")
     if any(item.get("killed") is True or item.get("terminated") is not True for item in cleanup.values()):
         raise TrialValidationError("process cleanup is incomplete")
-    determinism = _json(roots["publication"] / "determinism.json")
-    _validate_derived_product_hashes(determinism, roots)
+    if require_derived_products:
+        determinism = _json(roots["publication"] / "determinism.json")
+        _validate_derived_product_hashes(
+            determinism,
+            roots,
+            require_request_focused=require_request_focused,
+        )
 
     throughput = {
         name: _finite(run_metrics[name].get("value"), name)
@@ -408,6 +438,7 @@ def validate_trial(
         "resources": resource_summary,
         "limitations": {
             "reference_runtime_markers_remain_enabled": condition == "reference",
+            "derived_products_deferred": not require_derived_products,
         },
         "paths": {name: str(path) for name, path in roots.items()},
     }

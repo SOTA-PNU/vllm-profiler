@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 import hashlib
 import io
 import json
@@ -11,7 +11,9 @@ import math
 import numbers
 import os
 from pathlib import Path
+import shutil
 import stat
+import tempfile
 from typing import Any, Final
 
 from perfetto.trace_processor import (
@@ -55,6 +57,9 @@ from .validation_queries import (
 
 
 VALIDATION_RECORD_TYPE: Final = "perfetto_trace_validation"
+_QUERY_PAGE_SIZE: Final = 100_000
+_QUERY_ROWS_INLINE_LIMIT: Final = 250_000
+_EXACT_ROW_BUCKET_COUNT: Final = 64
 
 
 class TraceValidationError(RuntimeError):
@@ -97,17 +102,42 @@ def validate_trace(
     try:
         with TraceProcessor(trace=io.BytesIO(trace_bytes), config=config) as processor:
             actual_queries = {
-                query.name: _run_query(processor, query.name, query.sql)
+                query.name: _run_query(
+                    processor,
+                    query.name,
+                    query.sql,
+                    expected_rows=_iter_expected_query_rows(plan, query.name),
+                )
                 for query in BASE_VALIDATION_QUERIES
             }
             if _has_native_event_specs(plan):
                 actual_queries.update(
-                    (query.name, _run_query(processor, query.name, query.sql))
+                    (
+                        query.name,
+                        _run_query(
+                            processor,
+                            query.name,
+                            query.sql,
+                            expected_rows=_iter_expected_query_rows(
+                                plan, query.name
+                            ),
+                        ),
+                    )
                     for query in NATIVE_VALIDATION_QUERIES
                 )
             if plan.mapping_version != _LEGACY_MAPPING_VERSION:
                 actual_queries.update(
-                    (query.name, _run_query(processor, query.name, query.sql))
+                    (
+                        query.name,
+                        _run_query(
+                            processor,
+                            query.name,
+                            query.sql,
+                            expected_rows=_iter_expected_query_rows(
+                                plan, query.name
+                            ),
+                        ),
+                    )
                     for query in TIMELINE_VALIDATION_QUERIES
                 )
     except (TraceProcessorException, OSError) as error:
@@ -115,32 +145,23 @@ def validate_trace(
             "official Trace Processor failed to parse or query the trace"
         ) from error
 
-    expected = _expected_rows(plan)
     query_names = tuple(query.name for query in BASE_VALIDATION_QUERIES)
     if _has_native_event_specs(plan):
         query_names += tuple(query.name for query in NATIVE_VALIDATION_QUERIES)
     if plan.mapping_version != _LEGACY_MAPPING_VERSION:
-        expected.update(_expected_timeline_summary_rows(plan))
         query_names += tuple(query.name for query in TIMELINE_VALIDATION_QUERIES)
     query_reports: list[dict[str, Any]] = []
     for name in query_names:
         actual = actual_queries[name]
-        expected_rows = expected[name]
-        matched = actual["rows"] == expected_rows
+        matched = actual["matched"]
         if not matched:
             mismatches.append(
                 f"{name} SQL rows differ: expected "
-                f"{len(expected_rows)}/{_rows_sha256(expected_rows)}, got "
+                f"{actual['expected_row_count']}/"
+                f"{actual['expected_rows_sha256']}, got "
                 f"{actual['row_count']}/{actual['rows_sha256']}"
             )
-        query_reports.append(
-            {
-                **actual,
-                "expected_row_count": len(expected_rows),
-                "expected_rows_sha256": _rows_sha256(expected_rows),
-                "matched": matched,
-            }
-        )
+        query_reports.append(actual)
 
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -188,12 +209,12 @@ def validate_trace(
 
 
 def summarize_trace_validation(report: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the complete persisted validation evidence without SQL rows.
+    """Return complete compact validation evidence without inline SQL rows.
 
-    ``validate_trace`` always executes and retains complete query rows for
-    in-process consumers.  Persisted reports retain query identity, schema,
-    counts and hashes, which is sufficient for strict comparison with a fresh
-    official Trace Processor run without duplicating trace-scale row payloads.
+    Small query rows may be included in-process for diagnostics. Large query
+    equality is established through exact canonical-row multiplicity plus the
+    sorted row-set SHA-256. Persisted reports retain query identity, schema,
+    counts and hashes without duplicating trace-scale payloads.
     """
 
     queries = report.get("queries")
@@ -422,25 +443,182 @@ def _run_query(
     processor: TraceProcessor,
     name: str,
     sql: str,
+    *,
+    expected_rows: Iterable[Mapping[str, object]] | None = None,
 ) -> dict[str, Any]:
-    result = processor.query(sql)
-    columns = list(result.column_names)
-    rows = [
-        {
-            column: _json_value(getattr(row, column))
-            for column in columns
-        }
-        for row in result
-    ]
-    canonical_rows = _sorted_rows(rows)
-    return {
+    # A native profiler capture can contain millions of slices.  Asking the
+    # HTTP RPC endpoint for all of them in one QueryResult protobuf can exceed
+    # protobuf's message limit even though the trace itself parsed correctly.
+    # Pagination changes only transport size. Canonical row bytes are split
+    # into deterministic disk buckets; each small bucket is sorted and
+    # compared literally, including duplicate multiplicity. This avoids
+    # retaining millions of verbose row dictionaries in memory or reports.
+    page_size = _QUERY_PAGE_SIZE
+    offset = 0
+    columns: list[str] | None = None
+    row_count = 0
+    table_name = "_hetero_validation_" + hashlib.sha256(
+        name.encode("utf-8")
+    ).hexdigest()[:16]
+    spool = _ExactRowBuckets(name) if expected_rows is not None else None
+    expected_count: int | None = None
+    expected_sha256: str | None = None
+    expected_accumulator: int | None = None
+    actual_accumulator = 0
+    inline_payloads: list[bytes] | None = []
+    table_created = False
+    try:
+        if expected_rows is not None:
+            assert spool is not None
+            expected_count = 0
+            expected_accumulator = 0
+            for row in expected_rows:
+                payload = _canonical_json_bytes(dict(row))
+                row_digest = spool.add("expected", payload)
+                expected_accumulator = _add_row_digest(
+                    expected_accumulator, row_digest
+                )
+                expected_count += 1
+            expected_sha256 = _finish_row_multiset_sha256(
+                expected_count, expected_accumulator
+            )
+        processor.query(f"CREATE TEMP TABLE {table_name} AS\n{sql}")
+        table_created = True
+        while True:
+            result = processor.query(
+                f"SELECT * FROM {table_name} LIMIT {page_size} OFFSET {offset}"
+            )
+            page_columns = list(result.column_names)
+            if columns is None:
+                columns = page_columns
+            elif columns != page_columns:
+                raise TraceValidationError(
+                    f"Trace Processor columns changed while paging query {name!r}"
+                )
+            page_rows = [
+                _canonical_json_bytes({
+                    column: _json_value(getattr(row, column))
+                    for column in page_columns
+                })
+                for row in result
+            ]
+            for payload, multiplicity in Counter(page_rows).items():
+                row_digest = hashlib.sha256(payload).digest()
+                actual_accumulator = _add_row_digest(
+                    actual_accumulator, row_digest, multiplicity
+                )
+                if spool is not None:
+                    for _ in range(multiplicity):
+                        spool.add("actual", payload, digest=row_digest)
+            if inline_payloads is not None:
+                inline_payloads.extend(page_rows)
+                if len(inline_payloads) > _QUERY_ROWS_INLINE_LIMIT:
+                    inline_payloads = None
+            row_count += len(page_rows)
+            if len(page_rows) < page_size:
+                break
+            offset += page_size
+        rows_sha256 = _finish_row_multiset_sha256(
+            row_count, actual_accumulator
+        )
+        if expected_rows is None:
+            matched: bool | None = None
+        else:
+            assert spool is not None
+            matched = (
+                row_count == expected_count
+                and spool.matches_exactly()
+            )
+        inline_rows = (
+            [json.loads(payload.decode("utf-8")) for payload in sorted(inline_payloads)]
+            if inline_payloads is not None
+            else None
+        )
+    finally:
+        if table_created:
+            processor.query(f"DROP TABLE {table_name}")
+        if spool is not None:
+            spool.cleanup()
+    assert columns is not None
+    report = {
         "name": name,
         "sql": sql,
         "columns": columns,
-        "row_count": len(canonical_rows),
-        "rows_sha256": _rows_sha256(canonical_rows),
-        "rows": canonical_rows,
+        "row_count": row_count,
+        "rows_sha256": rows_sha256,
+        "rows_sha256_method": "canonical-row-multiset-sha256-v1",
     }
+    if inline_rows is not None:
+        report["rows"] = inline_rows
+    if expected_rows is not None:
+        report.update(
+            {
+                "expected_row_count": expected_count,
+                "expected_rows_sha256": expected_sha256,
+                "matched": matched,
+            }
+        )
+    return report
+
+
+class _ExactRowBuckets:
+    """Disk-bounded literal multiset comparison for canonical JSON rows."""
+
+    def __init__(self, name: str) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix=f"hetero-validation-{name}-"))
+        self._streams: dict[tuple[str, int], Any] = {}
+
+    def add(
+        self,
+        side: str,
+        payload: bytes,
+        *,
+        digest: bytes | None = None,
+    ) -> bytes:
+        row_digest = hashlib.sha256(payload).digest() if digest is None else digest
+        bucket = row_digest[0] % _EXACT_ROW_BUCKET_COUNT
+        key = (side, bucket)
+        stream = self._streams.get(key)
+        if stream is None:
+            stream = (self.root / f"{side}-{bucket:02d}.jsonl").open("ab")
+            self._streams[key] = stream
+        stream.write(payload)
+        stream.write(b"\n")
+        return row_digest
+
+    def _close(self) -> None:
+        for stream in self._streams.values():
+            stream.close()
+        self._streams.clear()
+
+    def matches_exactly(self) -> bool:
+        self._close()
+        for bucket in range(_EXACT_ROW_BUCKET_COUNT):
+            expected = self.root / f"expected-{bucket:02d}.jsonl"
+            actual = self.root / f"actual-{bucket:02d}.jsonl"
+            expected_rows = (
+                expected.read_bytes().splitlines() if expected.is_file() else []
+            )
+            actual_rows = actual.read_bytes().splitlines() if actual.is_file() else []
+            if sorted(expected_rows) != sorted(actual_rows):
+                return False
+        return True
+
+    def cleanup(self) -> None:
+        self._close()
+        shutil.rmtree(self.root, ignore_errors=True)
+
+
+def _add_row_digest(accumulator: int, digest: bytes, count: int = 1) -> int:
+    return (accumulator + int.from_bytes(digest, "big") * count) % (1 << 256)
+
+
+def _finish_row_multiset_sha256(row_count: int, accumulator: int) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"canonical-row-multiset-sha256-v1\0")
+    digest.update(row_count.to_bytes(16, "big"))
+    digest.update(accumulator.to_bytes(32, "big"))
+    return digest.hexdigest()
 
 
 def _json_value(value: object) -> object:
@@ -481,18 +659,27 @@ def _sorted_rows(rows: Sequence[Mapping[str, object]]) -> list[dict[str, object]
 
 
 def _rows_sha256(rows: Sequence[Mapping[str, object]]) -> str:
-    return hashlib.sha256(_canonical_json_bytes(list(rows))).hexdigest()
+    accumulator = 0
+    for row in rows:
+        accumulator = _add_row_digest(
+            accumulator, hashlib.sha256(_canonical_json_bytes(dict(row))).digest()
+        )
+    return _finish_row_multiset_sha256(len(rows), accumulator)
 
 
-def _expected_rows(plan: TracePlan) -> dict[str, list[dict[str, object]]]:
-    process = [
-        {
+def _iter_expected_query_rows(
+    plan: TracePlan,
+    name: str,
+) -> Iterable[dict[str, object]]:
+    track_by_key = plan.track_by_key
+    if name == "process":
+        yield {
             "pid": plan.process_id,
             "name": f"perfetto-hetero-profiler:{plan.run_id}",
         }
-    ]
-    tracks: list[dict[str, object]] = [
-        {
+        return
+    if name == "tracks":
+        yield {
             "trace_uuid": plan.process_uuid,
             "name": plan.run_id,
             "type": "process_track_event",
@@ -503,11 +690,9 @@ def _expected_rows(plan: TracePlan) -> dict[str, list[dict[str, object]]]:
             "unit": None,
             "pid": plan.process_id,
         }
-    ]
-    for track in plan.tracks:
-        counter = track.kind.strip().casefold() == "counter"
-        tracks.append(
-            {
+        for track in plan.tracks:
+            counter = track.kind.strip().casefold() == "counter"
+            yield {
                 "trace_uuid": track.uuid,
                 "name": track.name,
                 "type": (
@@ -519,96 +704,83 @@ def _expected_rows(plan: TracePlan) -> dict[str, list[dict[str, object]]]:
                 "unit": _counter_unit(track.unit) if counter else None,
                 "pid": plan.process_id,
             }
-        )
+        return
+    if name in {"slices", "annotations", "step_annotations", "native_policy"}:
+        for specs, instant in ((plan.slices, False), (plan.instants, True)):
+            for spec in specs:
+                slice_row = {
+                    "track_name": track_by_key[spec.track_key].name,
+                    "slice_name": spec.name,
+                    "ts": spec.timestamp_ns,
+                    "dur": 0 if instant else spec.duration_ns,
+                }
+                if name == "slices":
+                    yield slice_row
+                    continue
+                for row in _annotation_rows(slice_row, spec.annotations):
+                    if name == "annotations":
+                        yield row
+                    elif (
+                        name == "step_annotations"
+                        and row["key"] == "debug.hetero_step_index"
+                    ):
+                        yield row
+                    elif name == "native_policy" and row["key"] in _TP_NATIVE_POLICY_KEYS:
+                        yield row
+        return
+    if name == "counters":
+        for spec in plan.counters:
+            yield {
+                "track_name": track_by_key[spec.track_key].name,
+                "unit": _counter_unit(track_by_key[spec.track_key].unit),
+                "ts": spec.timestamp_ns,
+                "value": float(spec.value),
+            }
+        return
+    if name == "flows":
+        for flow in plan.flows:
+            yield {
+                "flow_id": flow.flow_id,
+                "source_slice_name": flow.source_slice_name,
+                "destination_slice_name": flow.destination_slice_name,
+                "source_correlation_id": flow.correlation_id,
+                "destination_correlation_id": flow.correlation_id,
+            }
+        return
+    if name in {"dangling_flows", "import_errors"}:
+        return
+    if name == "native_event_semantics":
+        event_count = 0
+        fallback_count = 0
+        fabricated_count = 0
+        for spec in (*plan.slices, *plan.instants):
+            annotations = dict(spec.annotations)
+            if "hetero.native_profiler" not in annotations:
+                continue
+            event_count += 1
+            fallback_count += annotations.get("hetero.timestamp_fallback") is not False
+            fabricated_count += annotations.get("hetero.fabricated_event") is not False
+        yield {
+            "event_count": event_count,
+            "timestamp_fallback_violation_count": fallback_count,
+            "fabricated_event_violation_count": fabricated_count,
+        }
+        return
+    timeline = _expected_timeline_summary_rows(plan)
+    if name in timeline:
+        yield from timeline[name]
+        return
+    raise TraceValidationError(f"unknown validation query: {name}")
 
-    slices: list[dict[str, object]] = []
-    annotations: list[dict[str, object]] = []
-    track_by_key = plan.track_by_key
-    for spec in plan.slices:
-        track_name = track_by_key[spec.track_key].name
-        slice_row = {
-            "track_name": track_name,
-            "slice_name": spec.name,
-            "ts": spec.timestamp_ns,
-            "dur": spec.duration_ns,
-        }
-        slices.append(slice_row)
-        annotations.extend(_annotation_rows(slice_row, spec.annotations))
-    for spec in plan.instants:
-        track_name = track_by_key[spec.track_key].name
-        slice_row = {
-            "track_name": track_name,
-            "slice_name": spec.name,
-            "ts": spec.timestamp_ns,
-            "dur": 0,
-        }
-        slices.append(slice_row)
-        annotations.extend(_annotation_rows(slice_row, spec.annotations))
 
-    counters = [
-        {
-            "track_name": track_by_key[spec.track_key].name,
-            "unit": _counter_unit(track_by_key[spec.track_key].unit),
-            "ts": spec.timestamp_ns,
-            "value": float(spec.value),
-        }
-        for spec in plan.counters
-    ]
-    flows = [
-        {
-            "flow_id": flow.flow_id,
-            "source_slice_name": flow.source_slice_name,
-            "destination_slice_name": flow.destination_slice_name,
-            "source_correlation_id": flow.correlation_id,
-            "destination_correlation_id": flow.correlation_id,
-        }
-        for flow in plan.flows
-    ]
-    step_annotations = [
-        row
-        for row in annotations
-        if row["key"] == "debug.hetero_step_index"
-    ]
-    native_policy = [
-        row
-        for row in annotations
-        if row["key"] in _TP_NATIVE_POLICY_KEYS
-    ]
-    native_specs = [
-        spec
-        for spec in (*plan.slices, *plan.instants)
-        if "hetero.native_profiler" in dict(spec.annotations)
-    ]
-    native_event_semantics = [
-        {
-            "event_count": len(native_specs),
-            "timestamp_fallback_violation_count": sum(
-                dict(spec.annotations).get("hetero.timestamp_fallback")
-                is not False
-                for spec in native_specs
-            ),
-            "fabricated_event_violation_count": sum(
-                dict(spec.annotations).get("hetero.fabricated_event")
-                is not False
-                for spec in native_specs
-            ),
-        }
-    ]
-    result = {
-        "process": _sorted_rows(process),
-        "tracks": _sorted_rows(tracks),
-        "slices": _sorted_rows(slices),
-        "annotations": _sorted_rows(annotations),
-        "step_annotations": _sorted_rows(step_annotations),
-        "counters": _sorted_rows(counters),
-        "flows": _sorted_rows(flows),
-        "dangling_flows": [],
-        "import_errors": [],
-        "native_policy": _sorted_rows(native_policy),
+def _expected_rows(plan: TracePlan) -> dict[str, list[dict[str, object]]]:
+    names = [query.name for query in BASE_VALIDATION_QUERIES]
+    if _has_native_event_specs(plan):
+        names.extend(query.name for query in NATIVE_VALIDATION_QUERIES)
+    return {
+        name: _sorted_rows(list(_iter_expected_query_rows(plan, name)))
+        for name in names
     }
-    if native_specs:
-        result["native_event_semantics"] = native_event_semantics
-    return result
 
 
 def _has_native_event_specs(plan: TracePlan) -> bool:

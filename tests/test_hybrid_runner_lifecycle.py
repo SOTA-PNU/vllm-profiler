@@ -1,7 +1,7 @@
 """CPU-only failure and interruption tests for hybrid process ownership."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import threading
 import tempfile
@@ -344,8 +344,13 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
     def test_derived_products_are_generated_once_without_claiming_repeat(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            config = _config(root / "assets")
+            config = replace(
+                config,
+                workload=replace(config.workload, measured_requests=1),
+            )
             runner = HybridRunner(
-                _config(root / "assets"),
+                config,
                 run_root=root / "runs",
                 run_id="derive-once",
                 profile_mode="monitor",
@@ -427,6 +432,58 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                 set(evidence["request_focused_perfetto_sha256"]),
                 {"trace.request-focused.pftrace"},
             )
+
+    def test_multi_request_run_omits_single_request_focused_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = _config(root / "assets")
+            config = replace(
+                config,
+                workload=replace(config.workload, measured_requests=2),
+            )
+            runner = HybridRunner(
+                config,
+                run_root=root / "runs",
+                run_id="multi-request",
+                profile_mode="monitor",
+                process_factory=_Process,
+            )
+            runner.layout.publication.mkdir(parents=True)
+
+            def convert(conversion_config):
+                self.assertFalse(conversion_config.request_focused)
+                conversion_config.output_directory.mkdir()
+                (conversion_config.output_directory / "trace.pftrace").write_bytes(
+                    b"full"
+                )
+                return {"status": "succeeded", "request_focused_trace": None}
+
+            def overview(overview_config):
+                overview_config.output_directory.mkdir(parents=True)
+                (overview_config.output_directory / "overview.json").write_text(
+                    "{}\n", encoding="utf-8"
+                )
+                (overview_config.output_directory / "overview.html").write_text(
+                    "<html></html>\n", encoding="utf-8"
+                )
+                return {"status": "succeeded"}
+
+            with mock.patch(
+                "perfetto_hetero_profiler.perfetto.converter.convert_perfetto",
+                side_effect=convert,
+            ), mock.patch(
+                "perfetto_hetero_profiler.overview.generator.generate_overview",
+                side_effect=overview,
+            ):
+                runner._derive_products()
+
+            evidence = json.loads(
+                (runner.layout.publication / "determinism.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(evidence["request_focused_perfetto_sha256"], {})
+            self.assertIn("exactly one", evidence["request_focused_unavailable_reason"])
 
     def test_partial_startup_failure_cleans_only_started_children(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -7,8 +7,10 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -32,6 +34,8 @@ from perfetto_hetero_profiler.perfetto.planner import (
 )
 from perfetto_hetero_profiler.perfetto import tooling
 from perfetto_hetero_profiler.perfetto.validation import (
+    _rows_sha256,
+    _run_query,
     summarize_trace_validation,
 )
 from perfetto_hetero_profiler.schema import (
@@ -965,6 +969,76 @@ class ToolingTests(unittest.TestCase):
             runtime.binary_path,
             binary.absolute(),
         )
+
+
+class TraceProcessorQueryPagingTests(unittest.TestCase):
+    def test_large_query_is_paged_without_changing_complete_row_evidence(self):
+        rows = [
+            {"identity": index, "name": f"row-{index:05d}"}
+            for index in range(200_003)
+        ]
+
+        class FakeResult:
+            column_names = ("identity", "name")
+
+            def __init__(self, values):
+                self._values = values
+
+            def __iter__(self):
+                return iter(SimpleNamespace(**value) for value in self._values)
+
+        class FakeProcessor:
+            def __init__(self):
+                self.queries = []
+
+            def query(self, sql):
+                self.queries.append(sql)
+                if sql.startswith("CREATE TEMP TABLE") or sql.startswith(
+                    "DROP TABLE"
+                ):
+                    return FakeResult([])
+                match = re.search(r"LIMIT (\d+) OFFSET (\d+)$", sql)
+                if match is None:
+                    raise AssertionError("query was not paged")
+                limit, offset = map(int, match.groups())
+                return FakeResult(rows[offset : offset + limit])
+
+        processor = FakeProcessor()
+        report = _run_query(
+            processor,
+            "large_native_slices",
+            "SELECT identity, name FROM synthetic ORDER BY identity",
+            expected_rows=rows,
+        )
+
+        expected_rows = sorted(
+            rows,
+            key=lambda row: json.dumps(
+                row,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8"),
+        )
+        self.assertEqual(report["row_count"], len(rows))
+        self.assertEqual(report["rows"], expected_rows)
+        self.assertEqual(report["rows_sha256"], _rows_sha256(expected_rows))
+        self.assertEqual(report["expected_row_count"], len(rows))
+        self.assertEqual(report["expected_rows_sha256"], _rows_sha256(expected_rows))
+        self.assertTrue(report["matched"])
+        self.assertEqual(len(processor.queries), 5)
+        self.assertTrue(processor.queries[0].startswith("CREATE TEMP TABLE"))
+        self.assertTrue(processor.queries[-1].startswith("DROP TABLE"))
+
+        mismatch = _run_query(
+            processor,
+            "large_native_slices_mismatch",
+            "SELECT identity, name FROM synthetic ORDER BY identity",
+            expected_rows=rows[:-1],
+        )
+        self.assertFalse(mismatch["matched"])
+        self.assertEqual(mismatch["expected_row_count"], len(rows) - 1)
 
 
 if __name__ == "__main__":

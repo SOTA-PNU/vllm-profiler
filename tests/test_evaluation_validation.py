@@ -10,6 +10,7 @@ import unittest
 from perfetto_hetero_profiler.support.files import sha256_file
 from tools.evaluation.validation import (
     TrialValidationError,
+    _valid_cross_source_join,
     _validate_derived_product_hashes,
 )
 
@@ -95,6 +96,20 @@ class DerivedProductHashEvidenceTests(unittest.TestCase):
         )
         _validate_derived_product_hashes(evidence, roots)
 
+    def test_multi_request_bundle_does_not_require_focused_trace(self) -> None:
+        root = self.roots["perfetto"]
+        roots = {**self.roots, "focused": root}
+        evidence = self.evidence()
+        evidence["perfetto_sha256"] = self.hashes(
+            "perfetto", "trace.pftrace"
+        )
+        evidence["request_focused_perfetto_sha256"] = {}
+        _validate_derived_product_hashes(
+            evidence,
+            roots,
+            require_request_focused=False,
+        )
+
     def test_legacy_repeat_hashes_are_verified_and_absent_hashes_are_allowed(
         self,
     ) -> None:
@@ -156,6 +171,29 @@ class DerivedProductHashEvidenceTests(unittest.TestCase):
         evidence = self.evidence()
         evidence.pop("overview_byte_identical")
         self.assert_invalid(evidence)
+
+
+class CrossSourceJoinValidationTests(unittest.TestCase):
+    @staticmethod
+    def join(method: str) -> dict[str, object]:
+        return {
+            "status": "joined",
+            "join_method": method,
+            "missing_markers": [],
+            "duplicate_markers": [],
+            "ordering_violations": [],
+            "pairing_issues": [],
+        }
+
+    def test_explicit_transfer_and_correlation_ids_are_valid(self) -> None:
+        self.assertTrue(_valid_cross_source_join(self.join("transfer_id")))
+        self.assertTrue(_valid_cross_source_join(self.join("correlation_id")))
+
+    def test_fallback_or_inconsistent_join_is_rejected(self) -> None:
+        self.assertFalse(_valid_cross_source_join(self.join("request_id")))
+        value = self.join("transfer_id")
+        value["ordering_violations"] = ["decode before transfer"]
+        self.assertFalse(_valid_cross_source_join(value))
 
 
 if __name__ == "__main__":
