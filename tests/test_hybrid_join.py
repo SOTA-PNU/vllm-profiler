@@ -11,7 +11,7 @@ from perfetto_hetero_profiler.hybrid.join import (
 )
 from perfetto_hetero_profiler.schema import DeviceType
 
-from tests.hybrid_fixtures import event
+from tests.support.records import EXPECTED_MARKER_ORDER, event
 
 
 def rows(
@@ -118,6 +118,7 @@ def observability_contract(*, observed_zero=False):
 
 class MarkerValidationTests(unittest.TestCase):
     def test_full_contract_is_valid(self):
+        self.assertEqual(MARKER_ORDER, EXPECTED_MARKER_ORDER)
         result = validate_marker_order(rows(MARKER_ORDER))
         self.assertEqual(result.status, "valid")
 

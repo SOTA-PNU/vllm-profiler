@@ -28,7 +28,7 @@ from perfetto_hetero_profiler.perfetto.trace_attributes import (
 from perfetto_hetero_profiler.perfetto.writer import build_trace, serialize_trace
 from perfetto_hetero_profiler.schema import DeviceType
 
-from tests.test_perfetto_conversion import _build_monitor_family
+from tests.support.perfetto_family import _build_monitor_family
 
 
 def _attribute_map(attributes):

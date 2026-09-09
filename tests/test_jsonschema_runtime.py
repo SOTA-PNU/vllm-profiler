@@ -7,7 +7,7 @@ import unittest
 from perfetto_hetero_profiler.schema import SchemaValidationError, record_from_dict
 from perfetto_hetero_profiler.schema import jsonschema_runtime
 
-from tests.test_schema_parity_corpus import parity_cases, valid_records
+from tests.support.schema_corpus import parity_cases, valid_records
 
 
 class JsonSchemaRuntimeTests(unittest.TestCase):

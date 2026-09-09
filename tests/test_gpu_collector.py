@@ -26,12 +26,11 @@ from perfetto_hetero_profiler.schema import (
     read_json,
     read_jsonl,
 )
-
-
-def fake_gpu_client():
-    from tests.test_gpu_telemetry import FakeBinding
-
-    return NvmlClient(binding=FakeBinding())
+from tests.support.gpu_fakes import (
+    FakeBinding,
+    FakeDriverNotLoaded,
+    client as fake_gpu_client,
+)
 
 
 class PlanningTests(unittest.TestCase):
@@ -94,8 +93,6 @@ class PlanningTests(unittest.TestCase):
 
 class GpuRunIntegrationTests(unittest.TestCase):
     def test_nvml_capability_failure_writes_error_metrics_and_json(self):
-        from tests.test_gpu_telemetry import FakeBinding, FakeDriverNotLoaded
-
         with tempfile.TemporaryDirectory() as directory:
             binding = FakeBinding(init_error=FakeDriverNotLoaded())
             config = GpuRunConfig(

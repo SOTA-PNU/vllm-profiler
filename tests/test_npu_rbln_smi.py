@@ -12,9 +12,10 @@ from perfetto_hetero_profiler.collectors.npu import (
     parse_rbln_smi_json,
 )
 from perfetto_hetero_profiler.schema import Availability
+from tests.support.paths import RBLN_SMI_FIXTURES
 
 
-FIXTURES = Path(__file__).parent / "fixtures" / "rbln_smi"
+FIXTURES = RBLN_SMI_FIXTURES
 
 
 def fixture(name):

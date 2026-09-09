@@ -65,11 +65,11 @@ from perfetto_hetero_profiler.schema import (
     DETACHED_VALIDATION_NAME,
 )
 
-from tests.test_perfetto_conversion import (
+from tests.support.perfetto_family import (
     _build_monitor_family,
     _tree_state,
 )
-from tests.test_overview_model_schema import report as schema_valid_report
+from tests.support.overview_model import report as schema_valid_report
 from tests.support.toolchain import (
     trace_processor_path as _trace_processor_path,
     trace_processor_test_class,

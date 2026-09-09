@@ -11,7 +11,7 @@ from perfetto_hetero_profiler.overview.render import (
     render_overview_html,
     validate_offline_html,
 )
-from tests.test_overview_comparison import kpi, report
+from tests.support.comparison import kpi, report
 
 
 _TEST_CSP = (

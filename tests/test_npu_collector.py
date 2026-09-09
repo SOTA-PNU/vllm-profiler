@@ -30,9 +30,10 @@ from perfetto_hetero_profiler.schema import (
     read_json,
     read_jsonl,
 )
+from tests.support.paths import RBLN_SMI_FIXTURES
 
 
-FIXTURES = Path(__file__).parent / "fixtures" / "rbln_smi"
+FIXTURES = RBLN_SMI_FIXTURES
 ONE_DEVICE = (FIXTURES / "one_device.json").read_text(encoding="utf-8")
 UNSUPPORTED = (FIXTURES / "unsupported_fields.json").read_text(encoding="utf-8")
 

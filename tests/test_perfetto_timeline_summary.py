@@ -26,7 +26,7 @@ from perfetto_hetero_profiler.perfetto.timeline_summary import (
 )
 from perfetto_hetero_profiler.perfetto.writer import build_trace, serialize_trace
 from perfetto_hetero_profiler.schema import Availability, ClockType, MetricScope
-from tests.test_perfetto_conversion import _build_monitor_family
+from tests.support.perfetto_family import _build_monitor_family
 
 
 class PerfettoTimelineSummaryTests(unittest.TestCase):

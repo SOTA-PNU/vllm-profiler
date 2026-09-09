@@ -44,11 +44,11 @@ from perfetto_hetero_profiler.schema.records import (
     SyncPoint,
     WorkloadDescriptor,
 )
+from tests.support.paths import REPO_ROOT, SRC_ROOT
 
 
 SCHEMA_ROOT = (
-    Path(__file__).parents[1]
-    / "src"
+    SRC_ROOT
     / "perfetto_hetero_profiler"
     / "schema"
     / "json"
@@ -237,7 +237,7 @@ class EvaluationBoundaryTests(unittest.TestCase):
     )
 
     def test_comparison_module_and_schema_are_repository_only(self):
-        root = Path(__file__).parents[1]
+        root = REPO_ROOT
         self.assertFalse(
             (root / "src/perfetto_hetero_profiler/overview/comparison.py").exists()
         )
@@ -263,7 +263,7 @@ class EvaluationBoundaryTests(unittest.TestCase):
                 )
 
     def test_core_contains_no_evaluation_dependency_or_comparison_contract(self):
-        core = Path(__file__).parents[1] / "src/perfetto_hetero_profiler"
+        core = SRC_ROOT / "perfetto_hetero_profiler"
         source = {
             path.relative_to(core).as_posix(): path.read_text(encoding="utf-8")
             for path in sorted(core.rglob("*.py"))
@@ -291,7 +291,7 @@ class EvaluationBoundaryTests(unittest.TestCase):
                 self.assertFalse(hasattr(module, identifier))
 
     def test_documentation_uses_repository_evaluation_command(self):
-        root = Path(__file__).parents[1]
+        root = REPO_ROOT
         for relative_path in ("README.md", "docs/usage.md"):
             with self.subTest(path=relative_path):
                 text = (root / relative_path).read_text(encoding="utf-8")

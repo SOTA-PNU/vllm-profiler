@@ -23,7 +23,7 @@ from tools.evaluation.failure import (
 from tools.evaluation.paths import ExperimentPaths
 from tools.evaluation.schedule import canonical_schedule_bytes
 
-from tests.test_experiment_contract import write_config
+from tests.support.experiment import write_config
 
 
 class ResumeTests(unittest.TestCase):

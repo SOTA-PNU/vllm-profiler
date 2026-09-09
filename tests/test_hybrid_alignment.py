@@ -22,7 +22,7 @@ from perfetto_hetero_profiler.schema import (
     validate_record,
 )
 
-from tests.hybrid_fixtures import event
+from tests.support.records import event
 
 
 def transform(**overrides):

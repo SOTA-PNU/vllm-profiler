@@ -1,4 +1,4 @@
-"""Synthetic schema-valid GPU/NPU source bundles for hybrid tests."""
+"""Synthetic schema-valid GPU/NPU source bundles shared by tests."""
 
 from __future__ import annotations
 
@@ -6,6 +6,9 @@ from pathlib import Path
 import hashlib
 import time
 
+from perfetto_hetero_profiler.hybrid.runtime_markers import (
+    CANONICAL_MARKER_PHASES,
+)
 from perfetto_hetero_profiler.schema import (
     ArtifactKind,
     ArtifactReference,
@@ -35,7 +38,7 @@ from perfetto_hetero_profiler.schema import (
 )
 
 
-PHASES = {
+EXPECTED_CANONICAL_MARKER_PHASES = {
     "request_received": Phase.REQUEST,
     "prefill_start": Phase.PREFILL,
     "prefill_end": Phase.PREFILL,
@@ -87,6 +90,25 @@ NPU_MARKERS = (
     "response_done",
 )
 
+EXPECTED_MARKER_ORDER = (
+    "request_received",
+    "prefill_start",
+    "prefill_end",
+    "kv_export_start",
+    "kv_export_end",
+    "kv_transfer_start",
+    "kv_transfer_end",
+    "kv_transform_start",
+    "kv_transform_end",
+    "decode_loop_start",
+    "decode_step_start",
+    "decode_step_end",
+    "sampling_start",
+    "sampling_end",
+    "decode_loop_end",
+    "response_done",
+)
+
 
 def event(
     *,
@@ -105,7 +127,7 @@ def event(
         event_id=event_id or f"{event_name}-{timestamp_ns}",
         event_name=event_name,
         event_type=EventType.INSTANT,
-        phase=PHASES[event_name],
+        phase=CANONICAL_MARKER_PHASES[event_name],
         host_id=host_id,
         clock_domain_id=clock_domain_id,
         timestamp_ns=timestamp_ns,

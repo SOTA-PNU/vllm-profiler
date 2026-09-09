@@ -13,6 +13,9 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from perfetto_hetero_profiler.hybrid.runtime_markers import (
+    CANONICAL_MARKER_PHASES,
+)
 from perfetto_hetero_profiler.perfetto.artifacts import (
     ARTIFACT_MANIFEST_NAME,
     ARTIFACT_VALIDATION_NAME,
@@ -146,37 +149,6 @@ def synthetic_manifest() -> RunManifest:
     )
 
 
-_EVENT_PHASES = {
-    "request_received": Phase.REQUEST,
-    "response_done": Phase.RESPONSE,
-    "prefill_start": Phase.PREFILL,
-    "prefill_end": Phase.PREFILL,
-    "kv_export_start": Phase.KV_EXPORT,
-    "kv_export_end": Phase.KV_EXPORT,
-    "kv_transfer_start": Phase.KV_TRANSFER,
-    "kv_transfer_end": Phase.KV_TRANSFER,
-    "kv_handoff_start": Phase.KV_TRANSFER,
-    "kv_handoff_end": Phase.KV_TRANSFER,
-    "kv_transfer_setup_start": Phase.KV_TRANSFER,
-    "kv_transfer_setup_end": Phase.KV_TRANSFER,
-    "kv_transfer_wait_start": Phase.KV_TRANSFER,
-    "kv_transfer_wait_end": Phase.KV_TRANSFER,
-    "kv_device_sync_start": Phase.KV_TRANSFER,
-    "kv_device_sync_end": Phase.KV_TRANSFER,
-    "kv_transform_start": Phase.KV_TRANSFORM,
-    "kv_transform_end": Phase.KV_TRANSFORM,
-    "decode_loop_start": Phase.DECODE,
-    "decode_schedule_wait_start": Phase.DECODE,
-    "decode_schedule_wait_end": Phase.DECODE,
-    "decode_loop_end": Phase.DECODE,
-    "decode_step_start": Phase.DECODE,
-    "decode_step_end": Phase.DECODE,
-    "sampling_start": Phase.SAMPLING,
-    "sampling_end": Phase.SAMPLING,
-    "first_token_emitted": Phase.RESPONSE,
-    "token_emitted": Phase.RESPONSE,
-}
-
 
 def instant_event(
     name: str,
@@ -211,7 +183,7 @@ def instant_event(
         event_id=f"{name}-{timestamp_ns}{discriminator}-{correlation_id}",
         event_name=name,
         event_type=EventType.INSTANT,
-        phase=_EVENT_PHASES[name],
+        phase=CANONICAL_MARKER_PHASES[name],
         host_id="host-0",
         clock_domain_id=CLOCK_ID,
         timestamp_ns=timestamp_ns,

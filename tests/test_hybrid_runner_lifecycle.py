@@ -36,8 +36,8 @@ from perfetto_hetero_profiler.schema import (
     read_jsonl,
 )
 
-from tests.hybrid_fixtures import GPU_MARKERS, NPU_MARKERS, build_source_bundle
-from tests.test_hybrid_runner_config import document
+from tests.support.records import GPU_MARKERS, NPU_MARKERS, build_source_bundle
+from tests.support.runner_fakes import document
 
 
 class _Telemetry:

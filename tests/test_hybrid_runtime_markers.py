@@ -16,6 +16,7 @@ from perfetto_hetero_profiler.hybrid import (
     ingest_runtime_marker_files,
 )
 from perfetto_hetero_profiler.schema import (
+    CANONICAL_EVENT_NAMES,
     DeviceType,
     RunPaths,
     RunStatus,
@@ -23,7 +24,8 @@ from perfetto_hetero_profiler.schema import (
     write_jsonl,
 )
 
-from tests.hybrid_fixtures import (
+from tests.support.records import (
+    EXPECTED_CANONICAL_MARKER_PHASES,
     GPU_MARKERS,
     NPU_MARKERS,
     build_source_bundle,
@@ -223,6 +225,14 @@ class RuntimeMarkerIngestTests(unittest.TestCase):
             )
 
     def test_wrong_phase_is_rejected(self):
+        self.assertEqual(
+            CANONICAL_MARKER_PHASES,
+            EXPECTED_CANONICAL_MARKER_PHASES,
+        )
+        self.assertEqual(
+            set(EXPECTED_CANONICAL_MARKER_PHASES),
+            set(CANONICAL_EVENT_NAMES),
+        )
         with tempfile.TemporaryDirectory() as directory:
             row = marker("prefill_start", 10)
             row["phase"] = "decode"

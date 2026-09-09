@@ -45,7 +45,7 @@ from perfetto_hetero_profiler.perfetto.timeline_summary import (
     TIMELINE_SUMMARY_MAPPING_VERSION,
 )
 
-from tests.test_perfetto_conversion import (
+from tests.support.perfetto_family import (
     _build_monitor_family,
     _tree_state,
 )

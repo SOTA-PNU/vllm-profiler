@@ -26,6 +26,7 @@ from perfetto_hetero_profiler.schema import (
     read_jsonl,
     RunStatus,
 )
+from tests.support.gpu_fakes import FakeBinding, client as FakeGpuClient
 
 
 class CollectionConfigTests(unittest.TestCase):
@@ -124,12 +125,6 @@ class CollectionCliTests(unittest.TestCase):
             self.assertFalse(json.loads(output.getvalue())["executes"])
 
 
-def FakeGpuClient():
-    from tests.test_gpu_telemetry import FakeBinding
-
-    return NvmlClient(binding=FakeBinding())
-
-
 class FakeServer:
     def __init__(self, _config, stdout, stderr):
         self.stdout = stdout
@@ -176,8 +171,6 @@ class FakeCompletionClient:
 
 class CollectionFakeIntegrationTests(unittest.TestCase):
     def test_discovery_failure_shuts_down_nvml_before_server_start(self) -> None:
-        from tests.test_gpu_telemetry import FakeBinding
-
         with tempfile.TemporaryDirectory() as directory:
             binding = FakeBinding(devices=[])
             config = CollectionConfigTests().config(

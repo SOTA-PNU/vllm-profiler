@@ -29,7 +29,7 @@ from perfetto_hetero_profiler.schema import (
     write_jsonl,
 )
 
-from tests.hybrid_fixtures import (
+from tests.support.records import (
     GPU_MARKERS,
     NPU_MARKERS,
     build_source_bundle,
