@@ -92,6 +92,15 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--output", type=Path)
     compare.add_argument("--baseline")
     compare.add_argument("--dry-run", action="store_true")
+    wave = commands.add_parser(
+        "concurrent-wave", help="Plan or run barrier-released Hybrid requests."
+    )
+    wave.add_argument("--matrix", type=Path, required=True)
+    wave.add_argument("--hybrid-config", type=Path)
+    wave.add_argument("--condition-id")
+    wave.add_argument("--round", type=int, dest="round_index")
+    wave.add_argument("--block-root", type=Path)
+    wave.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -146,6 +155,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 parser.print_help()
                 return 0
+        elif args.command == "concurrent-wave":
+            from .concurrent_wave import plan, run_block
+
+            if args.dry_run:
+                result = plan(args.matrix)
+            else:
+                names = ("hybrid_config", "condition_id", "round_index", "block_root")
+                required = {"--" + name.replace("_", "-"): getattr(args, name)
+                            for name in names}
+                missing = [name for name, value in required.items() if value is None]
+                if missing:
+                    parser.error("concurrent-wave requires " + ", ".join(missing))
+                result = run_block(matrix_path=args.matrix,
+                                   hybrid_config_path=args.hybrid_config,
+                                   condition_id=args.condition_id,
+                                   round_index=args.round_index,
+                                   block_root=args.block_root)
         elif args.overview_command == "compare":
             from .overview import (
                 OverviewComparisonConfig,
