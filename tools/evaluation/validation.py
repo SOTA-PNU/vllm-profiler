@@ -10,6 +10,7 @@ from typing import Any
 
 from perfetto_hetero_profiler.hybrid.layout import (
     HybridRunLayout,
+    existing_collection_result_path,
     existing_related_run_root,
 )
 from perfetto_hetero_profiler.support.files import sha256_file
@@ -202,13 +203,14 @@ def validate_trial(
     require_derived_products: bool = True,
 ) -> dict[str, object]:
     roots = _paths(attempt, attempt_id)
+    collection_result = existing_collection_result_path(roots["coordinator"])
     if any(path.is_symlink() for path in attempt.rglob("*")):
         raise TrialValidationError("trial contains a symlink")
     required = [
         roots["hybrid"] / "manifest.json",
         roots["gpu"] / "manifest.json",
         roots["npu"] / "manifest.json",
-        roots["coordinator"] / "result.json",
+        collection_result,
         roots["coordinator"] / "requests.json",
         roots["coordinator"] / "cleanup.json",
         roots["coordinator"] / "source_fingerprint.json",
@@ -232,7 +234,7 @@ def validate_trial(
     manifests = [_json(roots[name] / "manifest.json") for name in ("hybrid", "gpu", "npu")]
     if any(item.get("status") != "succeeded" for item in manifests):
         raise TrialValidationError("one or more source/hybrid manifests did not succeed")
-    result = _json(roots["coordinator"] / "result.json")
+    result = _json(collection_result)
     if result.get("status") != "succeeded":
         raise TrialValidationError("hybrid runner result did not succeed")
     requests = _json(roots["coordinator"] / "requests.json")

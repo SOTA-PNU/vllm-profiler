@@ -14,6 +14,7 @@ from ..support.files import sha256_file
 from ..support.publication import publish_directory_no_replace
 
 from ..schema import SCHEMA_VERSION
+from ..hybrid.layout import existing_collection_result_path
 from .artifacts import (
     ARTIFACT_MANIFEST_NAME,
     ARTIFACT_VALIDATION_NAME,
@@ -323,7 +324,7 @@ def convert_perfetto(
         artifact_manifest = build_manifest(
             roots,
             output_root_id=OUTPUT_ROOT_ID,
-            required_artifacts=_required_artifacts(config, native),
+            required_artifacts=_required_artifacts(config, native, loaded),
         )
         manifest_path = staging / ARTIFACT_MANIFEST_NAME
         write_json_exclusive(manifest_path, artifact_manifest)
@@ -1099,9 +1100,16 @@ def _artifact_roots(
 def _required_artifacts(
     config: PerfettoConversionConfig,
     native: NativeDetailResult,
+    loaded: LoadedHybridRun,
 ) -> tuple[tuple[str, str], ...]:
+    coordinator = next(
+        fingerprint.root
+        for fingerprint in loaded.root_fingerprints
+        if fingerprint.root_id == "coordinator"
+    )
+    collection_result_name = existing_collection_result_path(coordinator).name
     required = [
-        ("coordinator", "result.json"),
+        ("coordinator", collection_result_name),
         (OUTPUT_ROOT_ID, CONVERSION_MANIFEST_NAME),
         (OUTPUT_ROOT_ID, TRACE_NAME),
         (OUTPUT_ROOT_ID, TRACE_VALIDATION_NAME),

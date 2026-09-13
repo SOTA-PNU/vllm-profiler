@@ -52,7 +52,7 @@ class RunPathTests(unittest.TestCase):
     def test_valid_artifact_relative_path(self) -> None:
         validate_record(artifact("raw/gpu/telemetry.jsonl"))
 
-    def test_create_builds_reserved_layout(self) -> None:
+    def test_create_builds_normalized_layout_without_empty_raw_or_trace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             paths = RunPaths(Path(directory) / "runs", "run-1")
             paths.create()
@@ -60,12 +60,12 @@ class RunPathTests(unittest.TestCase):
                 paths.events.parent,
                 paths.metrics.parent,
                 paths.clock_domains.parent,
-                paths.perfetto_trace.parent,
+                paths.artifacts.parent,
                 paths.overview.parent,
-                paths.root / "raw" / "gpu",
-                paths.root / "raw" / "npu",
             ):
                 self.assertTrue(path.is_dir())
+            self.assertFalse((paths.root / "raw").exists())
+            self.assertFalse(paths.perfetto_trace.parent.exists())
 
     def test_nonempty_run_reuse_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

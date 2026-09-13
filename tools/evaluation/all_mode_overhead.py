@@ -23,7 +23,11 @@ import tempfile
 import time
 from typing import Any, Iterable, Sequence
 
-from perfetto_hetero_profiler.hybrid.layout import HybridRunLayout
+from perfetto_hetero_profiler.hybrid.layout import (
+    HybridRunLayout,
+    existing_collection_result_path,
+    existing_final_result_path,
+)
 from perfetto_hetero_profiler.hybrid.runner import HybridRunner, _cache_fingerprint
 from perfetto_hetero_profiler.hybrid.runner_config import (
     HybridRunnerConfig,
@@ -1529,7 +1533,7 @@ def recover_failed_postprocess(
     if not str(failure.get("failure_message", "")).startswith("postprocess "):
         raise AllModeOverheadError("only a postprocess-only failure can be recovered")
     layout = HybridRunLayout(block_root / "runs", block_id)
-    runner_result = _read_json(layout.publication / "result.json")
+    runner_result = _read_json(existing_final_result_path(layout.publication))
     failures = runner_result.get("failures")
     if (
         runner_result.get("measured_completed") != config.formal_requests_per_block
@@ -1541,7 +1545,9 @@ def recover_failed_postprocess(
         )
     ):
         raise AllModeOverheadError("runner failure was not limited to postprocessing")
-    coordinator_result = _read_json(layout.coordinator / "result.json")
+    coordinator_result = _read_json(
+        existing_collection_result_path(layout.coordinator)
+    )
     shutdown = _read_json(layout.coordinator / "shutdown_integrity.json")
     if (
         coordinator_result.get("status") != "succeeded"
@@ -1708,7 +1714,7 @@ def recover_failed_postprocess(
         "hardware_rerun": False,
         "original_failure_evidence": "failure.json",
         "original_failed_publication_result": (
-            layout.publication / "result.json"
+            existing_final_result_path(layout.publication)
         ).relative_to(block_root).as_posix(),
         "trial_validation": trial,
         "sampling_validation": sampling,

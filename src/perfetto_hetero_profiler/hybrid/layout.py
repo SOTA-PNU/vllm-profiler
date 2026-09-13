@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+COLLECTION_RESULT_NAME = "collection_result.json"
+FINAL_RESULT_NAME = "final_result.json"
+LEGACY_RESULT_NAME = "result.json"
+
+
 _GROUPED_PATHS = {
     "hybrid": Path("hybrid"),
     "gpu": Path("sources/gpu"),
@@ -75,6 +80,26 @@ def existing_related_run_root(
         if (historical / sentinel).is_file():
             return historical
     return canonical
+
+
+def existing_collection_result_path(coordinator_root: Path) -> Path:
+    """Resolve collection status across canonical and historical filenames."""
+
+    canonical = Path(coordinator_root) / COLLECTION_RESULT_NAME
+    if canonical.is_file():
+        return canonical
+    legacy = Path(coordinator_root) / LEGACY_RESULT_NAME
+    return legacy if legacy.is_file() else canonical
+
+
+def existing_final_result_path(publication_root: Path) -> Path:
+    """Resolve final runner status across canonical and historical filenames."""
+
+    canonical = Path(publication_root) / FINAL_RESULT_NAME
+    if canonical.is_file():
+        return canonical
+    legacy = Path(publication_root) / LEGACY_RESULT_NAME
+    return legacy if legacy.is_file() else canonical
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,7 +178,12 @@ class HybridRunLayout:
 
 
 __all__ = [
+    "COLLECTION_RESULT_NAME",
+    "FINAL_RESULT_NAME",
     "HybridRunLayout",
+    "LEGACY_RESULT_NAME",
+    "existing_collection_result_path",
+    "existing_final_result_path",
     "existing_related_run_root",
     "related_run_root",
 ]

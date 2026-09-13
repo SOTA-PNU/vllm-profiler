@@ -185,6 +185,8 @@ class HybridBundleTests(unittest.TestCase):
             result = HybridBundleMerger(merge_config(case)).merge()
             self.assertIs(result.status, RunStatus.SUCCEEDED)
             self.assertEqual(result.joined_request_count, 1)
+            self.assertFalse((case.output / "raw").exists())
+            self.assertFalse((case.output / "trace").exists())
 
     def test_unaligned_native_clock_is_preserved_without_transform(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -18,6 +18,7 @@ from perfetto_hetero_profiler.hybrid.detailed_profile import (
     build_profiler_alignment,
     build_profiler_clock_domain,
 )
+from perfetto_hetero_profiler.hybrid.layout import COLLECTION_RESULT_NAME
 from perfetto_hetero_profiler.perfetto.converter import (
     CONVERSION_MANIFEST_NAME,
     TRACE_NAME,
@@ -57,7 +58,7 @@ CORRELATION_ID = "correlation-1"
 NATIVE_CLOCK_ID = "rbln-profiler-native"
 
 _CLOSEOUT_REQUIRED = (
-    ("coordinator", "result.json"),
+    ("coordinator", COLLECTION_RESULT_NAME),
     ("gpu", "manifest.json"),
     ("hybrid", "artifacts/artifacts.jsonl"),
     ("hybrid", "clocks/clock_domains.jsonl"),
@@ -104,15 +105,25 @@ def _write_closeout(
     gpu: Path,
     npu: Path,
     run_id: str = RUN_ID,
+    fatal_shutdown: bool = False,
 ) -> tuple[Path, Path]:
     coordinator = runs / f"{run_id}-coordinator"
     coordinator.mkdir()
-    (coordinator / "result.json").write_text(
+    (coordinator / COLLECTION_RESULT_NAME).write_text(
         json.dumps(
             {
                 "run_id": run_id,
-                "status": "succeeded",
+                "status": "failed" if fatal_shutdown else "succeeded",
                 "hardware_rerun": False,
+                "shutdown_integrity": (
+                    "invalid" if fatal_shutdown else "valid"
+                ),
+                "shutdown_reason": (
+                    "native_sigsegv_rtnl_tc_unregister"
+                    if fatal_shutdown
+                    else None
+                ),
+                "demo_only": fatal_shutdown,
             },
             sort_keys=True,
         )
@@ -484,29 +495,6 @@ def _build_monitor_family(
             ],
             overwrite=True,
         )
-    if fatal_shutdown:
-        stderr = npu / "raw/server/decode.stderr.log"
-        stderr.parent.mkdir(parents=True, exist_ok=True)
-        stderr.write_text(
-            "Segfault encountered\nrtnl_tc_unregister\n",
-            encoding="utf-8",
-        )
-        artifacts_path = npu / "artifacts/artifacts.jsonl"
-        write_jsonl(
-            artifacts_path,
-            [
-                *read_jsonl(artifacts_path),
-                _artifact(
-                    npu,
-                    artifact_id="decode-stderr",
-                    artifact_kind=ArtifactKind.RAW_LOG,
-                    relative_path="raw/server/decode.stderr.log",
-                    format_name="text",
-                    clock_domain_id=None,
-                ),
-            ],
-            overwrite=True,
-        )
     if rbln_profile:
         _add_rbln_profile(npu)
     result = HybridBundleMerger(
@@ -591,6 +579,7 @@ def _build_monitor_family(
         gpu=gpu,
         npu=npu,
         run_id=run_id,
+        fatal_shutdown=fatal_shutdown,
     )
     return {
         "runs": runs,

@@ -209,14 +209,14 @@ profiler는 기본 Monitor와 항상 동시에 활성화하지 않으며 5% 이�
 
 ```text
 runs/<run-id>/
-├── coordinator/            server logs, cleanup and validation evidence
+├── coordinator/            collection_result.json, telemetry and server evidence
 ├── sources/
 │   ├── gpu/                immutable GPU source and raw capture
 │   └── npu/                immutable NPU source and raw capture
 ├── hybrid/                 normalized hybrid bundle
 ├── perfetto/               full and request-focused traces, shared validation
 ├── overview/               external overview.json and overview.html
-├── publication/            overall result and output hashes
+├── publication/            final_result.json and output hashes
 └── recovery/               detached immutable-input manifest
 ```
 
@@ -233,11 +233,19 @@ trace를 같은 `perfetto/` bundle에 생성하고, 그 bundle에서 Overview를
 evaluation에서 같은 입력을 두 번 생성하여 검증합니다. 과거 runner가 반복 생성
 검증 후 기록한 `byte_identical: true` artifact도 계속 읽을 수 있습니다.
 
-실패 원인은 `<run-id>/coordinator/result.json`과
-`<run-id>/coordinator/raw/*.stderr.log`에서
-확인합니다. Runner는 leader의 정상 종료를 먼저 요청하고, 필요할 때만 자신이
-만든 process group을 단계적으로 정리합니다. 기존 서버나 다른 사용자 process는
-종료하지 않습니다.
+수집·종료 단계의 상태는 `<run-id>/coordinator/collection_result.json`, 파생
+산출물까지 포함한 최종 상태와 실패 원인은
+`<run-id>/publication/final_result.json`에서 확인합니다. 서버 측 실패 증거는
+`<run-id>/coordinator/raw/*.stderr.log`에 있습니다. Runner는 leader의 정상
+종료를 먼저 요청하고, 필요할 때만 자신이 만든 process group을 단계적으로
+정리합니다. 기존 서버나 다른 사용자 process는 종료하지 않습니다.
+
+이전 버전의 `coordinator/result.json`과 `publication/result.json`은 분석 시 계속
+읽을 수 있지만, 새 실행에서는 중복 alias를 만들지 않습니다.
+
+Server stdout/stderr는 `coordinator/raw/`에만 보관하며 GPU/NPU source 아래에
+복사하지 않습니다. Closeout recovery manifest가 coordinator 로그도 크기와
+SHA-256으로 inventory하므로 단일 보관 상태에서도 변경 여부를 검증할 수 있습니다.
 
 RBLN PB는 공식 Perfetto trace이지만 canonical `CLOCK_MONOTONIC` anchor가 없는
 경우 `trace.rbln-native.pftrace`로 분리됩니다. Relative timestamp를 임의로
@@ -342,7 +350,7 @@ runs/<run-id>/
 ├── events/events.jsonl
 ├── metrics/metrics.jsonl
 ├── artifacts/artifacts.jsonl
-├── raw/
+├── raw/                     # 원본 artifact가 있을 때만 생성
 └── summary/
 ```
 
@@ -503,7 +511,9 @@ timestamp와의 실제 차이입니다. Boundary query는 request latency 계산
 `telemetry.sample_interval_ms`의 최소 요청값은 20 ms입니다. 이는 polling 요청
 간격이며 NVML API 또는 `rbln-smi`의 실제 query latency보다 빠른 cadence를
 보장한다는 뜻은 아닙니다. 실제 min/mean/max interval과 baseline/background/final
-sample 수는 각 source의 `summary/telemetry_lifecycle.json`에 기록됩니다.
+sample 수는 전체 stream과 request 경계를 함께 보존하는
+`coordinator/telemetry_lifecycle.json` 한 파일에 기록됩니다. Source bundle에는
+같은 lifecycle의 부분 복사본을 만들지 않습니다.
 
 여러 Overview의 진단용 비교는 repository-only 평가 명령으로 실행합니다.
 

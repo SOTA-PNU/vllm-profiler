@@ -18,7 +18,11 @@ from perfetto_hetero_profiler.hybrid.runner import (
     _wait_http,
     _wait_runtime_marker_completion,
 )
-from perfetto_hetero_profiler.hybrid.layout import HybridRunLayout
+from perfetto_hetero_profiler.hybrid.layout import (
+    COLLECTION_RESULT_NAME,
+    FINAL_RESULT_NAME,
+    HybridRunLayout,
+)
 from perfetto_hetero_profiler.hybrid import (
     AlignmentMethod,
     HybridBundleMerger,
@@ -518,6 +522,65 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
             self.assertTrue(runner.layout.coordinator.is_dir())
             self.assertTrue(runner.layout.gpu.is_dir())
             self.assertTrue(runner.layout.npu.is_dir())
+            self.assertTrue(
+                (runner.layout.coordinator / COLLECTION_RESULT_NAME).is_file()
+            )
+            self.assertTrue(
+                (runner.layout.publication / FINAL_RESULT_NAME).is_file()
+            )
+            self.assertFalse(
+                (runner.layout.coordinator / "result.json").exists()
+            )
+            self.assertFalse(
+                (runner.layout.publication / "result.json").exists()
+            )
+
+    def test_only_selected_detailed_profiler_directory_is_created(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = _config(root / "assets")
+            modes = {
+                "monitor": None,
+                "gpu-torch": ("gpu", config.profiler_outputs.gpu_torch_subdir),
+                "gpu-nsys": (
+                    "gpu",
+                    config.profiler_outputs.gpu_nsys_basename.parent,
+                ),
+                "npu-torch": ("npu", config.profiler_outputs.npu_torch_subdir),
+                "npu-rbln": ("npu", config.profiler_outputs.npu_rbln_subdir),
+            }
+            _Process.fail_name = "decode"
+
+            with mock.patch(
+                "perfetto_hetero_profiler.hybrid.runner._Telemetry", _Telemetry
+            ), mock.patch(
+                "perfetto_hetero_profiler.hybrid.runner.port_available",
+                return_value=True,
+            ):
+                for mode, selected in modes.items():
+                    with self.subTest(mode=mode):
+                        runner = HybridRunner(
+                            config,
+                            run_root=root / "runs",
+                            run_id=f"lazy-{mode}",
+                            profile_mode=mode,
+                            process_factory=_Process,
+                        )
+                        result = runner.run()
+                        self.assertIs(result.status, RunStatus.FAILED)
+
+                        outputs = {
+                            ("gpu", config.profiler_outputs.gpu_torch_subdir),
+                            (
+                                "gpu",
+                                config.profiler_outputs.gpu_nsys_basename.parent,
+                            ),
+                            ("npu", config.profiler_outputs.npu_torch_subdir),
+                            ("npu", config.profiler_outputs.npu_rbln_subdir),
+                        }
+                        for role, relative in outputs:
+                            path = getattr(runner.layout, role) / relative
+                            self.assertEqual(path.is_dir(), (role, relative) == selected)
 
     def test_server_pythonpath_uses_configured_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -845,8 +908,8 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
             for role in ("gpu", "npu"):
                 bundle = getattr(layout, role)
                 self.assertTrue((bundle / "metrics/metrics.jsonl").is_file())
-                self.assertTrue(
-                    (bundle / "summary/telemetry_lifecycle.json").is_file()
+                self.assertFalse(
+                    (bundle / "summary/telemetry_lifecycle.json").exists()
                 )
                 manifest = read_json(bundle / "manifest.json")
                 self.assertIs(manifest.status, RunStatus.FAILED)
@@ -866,7 +929,9 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
                 "events/events.jsonl",
                 "metrics/metrics.jsonl",
             ):
-                (gpu_root / relative).write_text(
+                path = gpu_root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
                     "", encoding="utf-8"
                 )
             trace = (
@@ -901,6 +966,112 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
             self.assertEqual(torch_artifact.format, "chrome_trace_json_gzip")
             self.assertEqual(
                 torch_artifact.clock_domain_id, "gpu:torch-chrome-trace"
+            )
+
+    def test_source_artifacts_do_not_duplicate_coordinator_server_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = HybridRunner(
+                _config(root / "assets"),
+                run_root=root / "runs",
+                run_id="single-owner-logs",
+                profile_mode="monitor",
+                process_factory=_Process,
+            )
+            for role in ("gpu", "npu"):
+                source = getattr(runner.layout, role)
+                RunPaths(source.parent, source.name).create()
+                for relative in ("events/events.jsonl", "metrics/metrics.jsonl"):
+                    (source / relative).write_text("", encoding="utf-8")
+            measured = runner.layout.gpu / "raw/client/measured_requests.jsonl"
+            measured.parent.mkdir(parents=True)
+            measured.write_text("", encoding="utf-8")
+            raw = runner.layout.coordinator / "raw"
+            raw.mkdir(parents=True)
+            for server in ("prefill", "decode"):
+                for stream in ("stdout", "stderr"):
+                    (raw / f"{server}.{stream}.log").write_text(
+                        "server log\n", encoding="utf-8"
+                    )
+
+            gpu_artifacts = runner._artifacts(runner.layout.gpu, "gpu", None)
+            npu_artifacts = runner._artifacts(runner.layout.npu, "npu", None)
+
+            self.assertFalse((runner.layout.gpu / "raw/server").exists())
+            self.assertFalse((runner.layout.npu / "raw/server").exists())
+            self.assertFalse(
+                any(
+                    artifact.relative_path.startswith("raw/server/")
+                    for artifact in (*gpu_artifacts, *npu_artifacts)
+                )
+            )
+
+    def test_trace_attributes_use_coordinator_shutdown_result(self) -> None:
+        from perfetto_hetero_profiler.perfetto.trace_attributes import (
+            _source_status_attributes,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            coordinator = Path(directory)
+            (coordinator / COLLECTION_RESULT_NAME).write_text(
+                json.dumps(
+                    {
+                        "shutdown_integrity": "invalid",
+                        "shutdown_reason": "native_sigsegv_rtnl_tc_unregister",
+                        "demo_only": True,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            loaded = mock.Mock(
+                manifest=mock.Mock(status=RunStatus.SUCCEEDED),
+                root_fingerprints=(
+                    mock.Mock(root_id="coordinator", root=coordinator),
+                ),
+                sources=(),
+            )
+
+            attributes = _source_status_attributes(loaded)
+
+            self.assertEqual(attributes["demo_only"], "true")
+            self.assertEqual(attributes["source.shutdown_integrity"], "invalid")
+            self.assertEqual(
+                attributes["source.shutdown_reason"],
+                "native_sigsegv_rtnl_tc_unregister",
+            )
+
+    def test_trace_attributes_accept_legacy_coordinator_result_name(self) -> None:
+        from perfetto_hetero_profiler.perfetto.trace_attributes import (
+            _source_status_attributes,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            coordinator = Path(directory)
+            (coordinator / "result.json").write_text(
+                json.dumps(
+                    {
+                        "shutdown_integrity": "invalid",
+                        "shutdown_reason": "legacy-shutdown-failure",
+                        "demo_only": True,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            loaded = mock.Mock(
+                manifest=mock.Mock(status=RunStatus.SUCCEEDED),
+                root_fingerprints=(
+                    mock.Mock(root_id="coordinator", root=coordinator),
+                ),
+                sources=(),
+            )
+
+            attributes = _source_status_attributes(loaded)
+
+            self.assertEqual(attributes["source.shutdown_integrity"], "invalid")
+            self.assertEqual(
+                attributes["source.shutdown_reason"], "legacy-shutdown-failure"
             )
 
     def test_runner_closeout_publishes_loader_compatible_detached_evidence(self) -> None:
@@ -941,8 +1112,13 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
             self.assertIs(merged.status, RunStatus.SUCCEEDED)
             coordinator = layout.coordinator
             coordinator.mkdir()
-            (coordinator / "result.json").write_text(
+            (coordinator / COLLECTION_RESULT_NAME).write_text(
                 '{"status":"succeeded"}\n', encoding="utf-8"
+            )
+            raw = coordinator / "raw"
+            raw.mkdir()
+            (raw / "decode.stderr.log").write_text(
+                "coordinator-owned log\n", encoding="utf-8"
             )
             runner = HybridRunner(
                 _config(root / "assets"), run_root=runs, run_id="closeout",
@@ -952,6 +1128,21 @@ class HybridRunnerLifecycleTests(unittest.TestCase):
             loaded = load_hybrid_run(layout.hybrid)
             self.assertEqual(loaded.manifest.run_id, "closeout")
             self.assertGreater(loaded.closeout_artifact_count, 0)
+            closeout = json.loads(
+                (layout.recovery / "artifact_manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            closeout_artifacts = {
+                (artifact["root_id"], artifact["relative_path"])
+                for artifact in closeout["artifacts"]
+            }
+            self.assertIn(
+                ("coordinator", COLLECTION_RESULT_NAME), closeout_artifacts
+            )
+            self.assertIn(
+                ("coordinator", "raw/decode.stderr.log"), closeout_artifacts
+            )
 
     def test_failure_classification_ignores_profiler_in_absolute_path(self) -> None:
         from perfetto_hetero_profiler.hybrid.runner import classify_failure

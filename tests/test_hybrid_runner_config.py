@@ -10,7 +10,11 @@ import unittest
 
 from perfetto_hetero_profiler.cli import main
 from perfetto_hetero_profiler.hybrid.layout import (
+    COLLECTION_RESULT_NAME,
+    FINAL_RESULT_NAME,
     HybridRunLayout,
+    existing_collection_result_path,
+    existing_final_result_path,
     existing_related_run_root,
     related_run_root,
 )
@@ -104,6 +108,35 @@ class HybridRunnerConfigTests(unittest.TestCase):
                     current.hybrid, "new", "request_perfetto"
                 ),
                 current.perfetto,
+            )
+
+    def test_result_paths_prefer_canonical_names_and_accept_legacy_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            layout = HybridRunLayout(Path(directory), "run")
+            layout.coordinator.mkdir(parents=True)
+            layout.publication.mkdir()
+            legacy_collection = layout.coordinator / "result.json"
+            legacy_final = layout.publication / "result.json"
+            legacy_collection.write_text("{}\n", encoding="utf-8")
+            legacy_final.write_text("{}\n", encoding="utf-8")
+            self.assertEqual(
+                existing_collection_result_path(layout.coordinator),
+                legacy_collection,
+            )
+            self.assertEqual(
+                existing_final_result_path(layout.publication), legacy_final
+            )
+
+            canonical_collection = layout.coordinator / COLLECTION_RESULT_NAME
+            canonical_final = layout.publication / FINAL_RESULT_NAME
+            canonical_collection.write_text("{}\n", encoding="utf-8")
+            canonical_final.write_text("{}\n", encoding="utf-8")
+            self.assertEqual(
+                existing_collection_result_path(layout.coordinator),
+                canonical_collection,
+            )
+            self.assertEqual(
+                existing_final_result_path(layout.publication), canonical_final
             )
 
     def test_valid_config_and_plan_are_side_effect_free(self) -> None:

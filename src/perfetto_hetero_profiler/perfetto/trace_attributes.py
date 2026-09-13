@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 import hashlib
+import json
 import math
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
@@ -16,6 +17,7 @@ from ..artifact_compatibility import (
     LEGACY_MEASURED_WINDOW_SCOPE,
     LEGACY_SINGLE_REQUEST_SCOPE,
 )
+from ..hybrid.layout import existing_collection_result_path
 from ..schema import Availability
 from ..schema.catalog import TRACE_ATTRIBUTE_PRESENTATIONS
 from ..schema.metric_catalog import METRIC_CATALOG
@@ -168,6 +170,66 @@ def _source_status_attributes(loaded: object) -> dict[str, str]:
         _enum_value(getattr(manifest, "status", None)),
         field="source inference status",
     )
+    coordinator = [
+        fingerprint
+        for fingerprint in getattr(loaded, "root_fingerprints", ())
+        if getattr(fingerprint, "root_id", None) == "coordinator"
+    ]
+    if len(coordinator) > 1:
+        raise TraceAttributeExportError("coordinator root is ambiguous")
+    if coordinator:
+        result_path = existing_collection_result_path(
+            Path(getattr(coordinator[0], "root"))
+        )
+        try:
+            before = result_path.lstat()
+            if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+                raise TraceAttributeExportError(
+                    "validated coordinator result is not a regular file"
+                )
+            payload = result_path.read_bytes()
+            after = result_path.lstat()
+        except OSError as error:
+            raise TraceAttributeExportError(
+                "validated coordinator result cannot be read"
+            ) from error
+        state = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")
+        if any(getattr(before, field) != getattr(after, field) for field in state):
+            raise TraceAttributeExportError(
+                "validated coordinator result changed while read"
+            )
+        try:
+            result = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise TraceAttributeExportError(
+                "validated coordinator result is invalid JSON"
+            ) from error
+        if not isinstance(result, dict):
+            raise TraceAttributeExportError("coordinator result must be an object")
+        shutdown_status = result.get("shutdown_integrity")
+        if shutdown_status == "invalid":
+            reason = _safe_string(
+                result.get("shutdown_reason"), field="source shutdown reason"
+            )
+            demo_only = result.get("demo_only")
+            if not isinstance(demo_only, bool):
+                raise TraceAttributeExportError(
+                    "coordinator demo_only must be a boolean"
+                )
+            return {
+                "demo_only": "true" if demo_only else "false",
+                "source.inference_status": inference_status,
+                "source.shutdown_integrity": "invalid",
+                "source.shutdown_reason": reason,
+            }
+        if shutdown_status not in {None, "valid"}:
+            raise TraceAttributeExportError(
+                "coordinator shutdown_integrity is invalid"
+            )
+
+    # Historical bundles classified the known NIXL shutdown signature from a
+    # source-local copy of decode stderr. New runs retain logs only in the
+    # coordinator and use its validated result above.
     stderr = _read_source_artifact(
         loaded,
         source_role="npu",

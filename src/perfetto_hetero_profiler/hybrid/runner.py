@@ -63,7 +63,7 @@ from .detailed_profile import (
 )
 from .join import validate_marker_order
 from .runner_config import HybridProfileMode, HybridRunnerConfig
-from .layout import HybridRunLayout
+from .layout import COLLECTION_RESULT_NAME, FINAL_RESULT_NAME, HybridRunLayout
 from .runtime_markers import ingest_runtime_marker_files
 
 
@@ -597,13 +597,18 @@ class HybridRunner:
         RunPaths(layout.npu.parent, layout.npu.name).create()
         layout.coordinator.mkdir(parents=True)
         layout.publication.mkdir(parents=True)
-        for path in (
-            layout.gpu / config.profiler_outputs.gpu_torch_subdir,
-            layout.gpu / config.profiler_outputs.gpu_nsys_basename.parent,
-            layout.npu / config.profiler_outputs.npu_torch_subdir,
-            layout.npu / config.profiler_outputs.npu_rbln_subdir,
-            layout.coordinator / "raw/runtime_markers",
-        ):
+        profile_output = {
+            "gpu-torch": layout.gpu / config.profiler_outputs.gpu_torch_subdir,
+            "gpu-nsys": (
+                layout.gpu / config.profiler_outputs.gpu_nsys_basename.parent
+            ),
+            "npu-torch": layout.npu / config.profiler_outputs.npu_torch_subdir,
+            "npu-rbln": layout.npu / config.profiler_outputs.npu_rbln_subdir,
+        }.get(self.profile_mode)
+        output_directories = [layout.coordinator / "raw/runtime_markers"]
+        if profile_output is not None:
+            output_directories.append(profile_output)
+        for path in output_directories:
             path.mkdir(parents=True, exist_ok=True)
         commands = _commands(config, layout, self.profile_mode)
         write_pretty_json(layout.coordinator / "execution_plan.json", build_hybrid_run_plan(
@@ -806,7 +811,7 @@ class HybridRunner:
                         },
                     )
                     write_pretty_json(
-                        layout.coordinator / "result.json",
+                        layout.coordinator / COLLECTION_RESULT_NAME,
                         {
                             "run_id": layout.run_id,
                             "profile_mode": self.profile_mode,
@@ -855,9 +860,11 @@ class HybridRunner:
                     "publication": str(layout.publication),
                 },
             }
-        if not (layout.coordinator / "result.json").exists():
-            write_pretty_json(layout.coordinator / "result.json", result_payload)
-        write_pretty_json(layout.publication / "result.json", result_payload)
+        if not (layout.coordinator / COLLECTION_RESULT_NAME).exists():
+            write_pretty_json(
+                layout.coordinator / COLLECTION_RESULT_NAME, result_payload
+            )
+        write_pretty_json(layout.publication / FINAL_RESULT_NAME, result_payload)
         return HybridRunResult(
             status=status,
             run_directory=layout.hybrid,
@@ -1268,41 +1275,6 @@ class HybridRunner:
             self.layout.coordinator / "telemetry_lifecycle.json",
             telemetry_lifecycle,
         )
-        write_pretty_json(
-            self.layout.gpu / "summary/telemetry_lifecycle.json",
-            {
-                "requested_interval_ms": telemetry_lifecycle["requested_interval_ms"],
-                "request_start_ns": telemetry_lifecycle["request_start_ns"],
-                "request_end_ns": telemetry_lifecycle["request_end_ns"],
-                "boundaries": {
-                    role: {
-                        name: sample
-                        for name, sample in samples.items()
-                        if name in {"gpu", "system"}
-                    }
-                    for role, samples in telemetry_lifecycle["boundaries"].items()
-                },
-                "streams": {
-                    name: telemetry_lifecycle["streams"][name]
-                    for name in ("gpu", "system")
-                },
-                "errors": telemetry_lifecycle["errors"],
-            },
-        )
-        write_pretty_json(
-            self.layout.npu / "summary/telemetry_lifecycle.json",
-            {
-                "requested_interval_ms": telemetry_lifecycle["requested_interval_ms"],
-                "request_start_ns": telemetry_lifecycle["request_start_ns"],
-                "request_end_ns": telemetry_lifecycle["request_end_ns"],
-                "boundaries": {
-                    role: {"npu": samples["npu"]}
-                    for role, samples in telemetry_lifecycle["boundaries"].items()
-                },
-                "streams": {"npu": telemetry_lifecycle["streams"]["npu"]},
-                "errors": telemetry_lifecycle["errors"],
-            },
-        )
         measured_rows = [
             {
                 "request_id": item.request_id,
@@ -1337,11 +1309,15 @@ class HybridRunner:
             if path.is_file():
                 shutil.copyfile(path, npu_marker_root / path.name)
         if telemetry.gpu.last_raw_snapshot is not None:
-            (self.layout.gpu / "raw/gpu/nvml-last.json").write_text(
+            raw_gpu = self.layout.gpu / "raw/gpu/nvml-last.json"
+            raw_gpu.parent.mkdir(parents=True, exist_ok=True)
+            raw_gpu.write_text(
                 telemetry.gpu.last_raw_snapshot, encoding="utf-8"
             )
         if telemetry.npu.last_raw_output is not None:
-            (self.layout.npu / "raw/npu/rbln-smi-last.json").write_text(
+            raw_npu = self.layout.npu / "raw/npu/rbln-smi-last.json"
+            raw_npu.parent.mkdir(parents=True, exist_ok=True)
+            raw_npu.write_text(
                 telemetry.npu.last_raw_output, encoding="utf-8"
             )
         for role, (root, events, metrics) in source_data.items():
@@ -1415,12 +1391,6 @@ class HybridRunner:
     ) -> list[ArtifactReference]:
         run_id = f"{self.layout.run_id}-{role}"
         files: list[tuple[Path, ArtifactKind, str, str | None]] = []
-        coordinator = self.layout.coordinator
-        server_name = "prefill" if role == "gpu" else "decode"
-        for suffix in ("stdout", "stderr"):
-            source = coordinator / f"raw/{server_name}.{suffix}.log"
-            if source.is_file():
-                files.append((source, ArtifactKind.RAW_LOG, "text", None))
         if role == "gpu":
             files.append((root / "raw/client/measured_requests.jsonl", ArtifactKind.RAW_LOG, "jsonl", None))
         files.extend(
@@ -1446,9 +1416,6 @@ class HybridRunner:
                     None,
                 )
             )
-        lifecycle_path = root / "summary/telemetry_lifecycle.json"
-        if lifecycle_path.is_file():
-            files.append((lifecycle_path, ArtifactKind.OTHER, "json", None))
         if profile is not None and profile["root"] == root:
             alignment = root / "clocks/profiler_alignment.json"
             detail = root / "summary/detailed_profile.json"
@@ -1482,14 +1449,7 @@ class HybridRunner:
                     files.append((path, ArtifactKind.OTHER, "sqlite", None))
         artifacts = []
         for index, (path, kind, format_name, clock) in enumerate(files):
-            if path.is_relative_to(root):
-                relative = path.relative_to(root).as_posix()
-            else:
-                # Logs remain owned by the coordinator; source bundles require local refs.
-                target = root / "raw/server" / path.name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(path, target)
-                path, relative = target, target.relative_to(root).as_posix()
+            relative = path.relative_to(root).as_posix()
             is_nvml = role == "gpu" and path.name == "nvml-last.json"
             artifacts.append(
                 ArtifactReference(
@@ -1679,7 +1639,7 @@ class HybridRunner:
                 "postprocess_only": True,
             },
             required_artifacts=(
-                ("coordinator", "result.json"),
+                ("coordinator", COLLECTION_RESULT_NAME),
                 ("gpu", "manifest.json"),
                 ("hybrid", "artifacts/artifacts.jsonl"),
                 ("hybrid", "clocks/clock_domains.jsonl"),

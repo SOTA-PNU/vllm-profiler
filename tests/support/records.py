@@ -288,6 +288,7 @@ def build_source_bundle(
     artifacts = []
     if include_artifact:
         artifact_path = paths.root / "raw/client/source.log"
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
         artifact_path.write_text("source\n", encoding="utf-8")
         data = artifact_path.read_bytes()
         artifacts.append(

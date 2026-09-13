@@ -427,6 +427,7 @@ class NpuRunCollector:
         ]
         if raw_npu is not None:
             raw_path = self.config.paths.root / "raw/npu/rbln-smi-last.json"
+            raw_path.parent.mkdir(parents=True, exist_ok=True)
             raw_path.write_text(raw_npu, encoding="utf-8")
             artifacts.append(
                 self._artifact(
@@ -438,6 +439,7 @@ class NpuRunCollector:
             )
         if errors:
             error_path = self.config.paths.root / "raw/system/collector-errors.json"
+            error_path.parent.mkdir(parents=True, exist_ok=True)
             error_path.write_text(
                 json.dumps({"errors": list(errors)}, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",

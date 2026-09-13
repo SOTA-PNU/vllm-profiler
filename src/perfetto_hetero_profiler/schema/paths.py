@@ -68,11 +68,6 @@ class RunPaths:
             self.root / "events",
             self.root / "metrics",
             self.root / "artifacts",
-            self.root / "raw" / "client",
-            self.root / "raw" / "gpu",
-            self.root / "raw" / "npu",
-            self.root / "raw" / "system",
-            self.root / "trace",
             self.root / "summary",
         )
         for directory in directories:
