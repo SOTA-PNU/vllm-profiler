@@ -6,6 +6,7 @@ import hashlib
 from typing import Any, Mapping
 
 from ..perfetto.loader import LoadedHybridRun
+from ..perfetto.model import base_track_key
 from .loader import (
     LoadedPerfettoBundle,
     phase_duration_reconciliation,
@@ -105,10 +106,12 @@ def build_overview_validation(
 
     plan = perfetto.planning
     decode_steps = sum(
-        item.track_key == "npu_decode_step" for item in plan.plan.slices
+        base_track_key(item.track_key) == "npu_decode_step"
+        for item in plan.plan.slices
     )
     sampling_steps = sum(
-        item.track_key == "sampling" for item in plan.plan.slices
+        base_track_key(item.track_key) == "sampling"
+        for item in plan.plan.slices
     )
     counts = perfetto.fresh_trace_validation["counts"]
     expected_kpi_counters = plan.metadata.timeline_summary_kpi_counter_count

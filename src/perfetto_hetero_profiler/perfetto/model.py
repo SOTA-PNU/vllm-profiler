@@ -10,6 +10,24 @@ from .compatibility import LEGACY_TIMELINE_MAPPING_VERSION
 
 AnnotationValue: TypeAlias = bool | int | float | str
 TraceAttributeValue: TypeAlias = int | str
+_TRACK_LANE_SEPARATOR = ":lane:"
+
+
+def base_track_key(track_key: str) -> str:
+    """Return the stable semantic key for a deterministic concurrent lane."""
+
+    base, separator, lane = track_key.rpartition(_TRACK_LANE_SEPARATOR)
+    if separator and base and lane.isdecimal():
+        return base
+    return track_key
+
+
+def lane_track_key(track_key: str, lane: int) -> str:
+    """Keep lane zero compatible and name additional lanes deterministically."""
+
+    if lane < 0:
+        raise ValueError("track lane must be non-negative")
+    return track_key if lane == 0 else f"{track_key}{_TRACK_LANE_SEPARATOR}{lane}"
 
 
 @dataclass(frozen=True)

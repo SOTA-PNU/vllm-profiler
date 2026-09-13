@@ -311,6 +311,59 @@ def non_resource_metric() -> MetricSample:
 
 
 class PlannerTests(unittest.TestCase):
+    def test_crossing_concurrent_requests_use_deterministic_lanes(self):
+        events: list[EventRecord] = []
+        for request_index in range(4):
+            correlation_id = f"correlation-{request_index + 1}"
+            for event in canonical_events():
+                attributes = dict(event.attributes)
+                attributes["hybrid.correlation_id"] = correlation_id
+                if "hybrid.transfer_id" in attributes:
+                    attributes["hybrid.transfer_id"] = (
+                        f"{attributes['hybrid.transfer_id']}-{correlation_id}"
+                    )
+                events.append(
+                    replace(
+                        event,
+                        event_id=f"{event.event_id}-{correlation_id}",
+                        timestamp_ns=event.timestamp_ns + 10 * request_index,
+                        request_id=f"request-{request_index + 1}",
+                        attributes=attributes,
+                    )
+                )
+
+        first = build_trace_plan(
+            synthetic_manifest(),
+            events,
+            (),
+            canonical_clock_domain_id=CLOCK_ID,
+        )
+        reordered = build_trace_plan(
+            synthetic_manifest(),
+            tuple(reversed(events)),
+            (),
+            canonical_clock_domain_id=CLOCK_ID,
+        )
+
+        self.assertEqual(first.plan, reordered.plan)
+        for base in ("request", "gpu_prefill", "npu_decode_step"):
+            for lane in range(4):
+                key = base if lane == 0 else f"{base}:lane:{lane}"
+                self.assertIn(key, first.plan.track_by_key)
+        by_track: dict[str, list[tuple[int, int]]] = {}
+        for item in first.plan.slices:
+            by_track.setdefault(item.track_key, []).append(
+                (item.timestamp_ns, item.timestamp_ns + item.duration_ns)
+            )
+        for intervals in by_track.values():
+            previous_end = None
+            for start_ns, end_ns in sorted(intervals):
+                if previous_end is not None:
+                    self.assertGreaterEqual(start_ns, previous_end)
+                previous_end = end_ns
+        if serialize_trace is not None:
+            serialize_trace(first.plan)
+
     def test_observed_transfer_and_schedule_intervals_get_distinct_tracks(self):
         details = (
             instant_event(

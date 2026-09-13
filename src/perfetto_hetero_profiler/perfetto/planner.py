@@ -33,6 +33,8 @@ from .model import (
     TrackSpec,
     TracePlan,
     UnclassifiedGapSpec,
+    base_track_key,
+    lane_track_key,
 )
 from .timeline_summary import (
     LEGACY_MAPPING_VERSION,
@@ -157,6 +159,20 @@ _BOUNDARY_EVENT_NAMES = frozenset(
 )
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _track_sibling_order_rank(base_key: str, lane: int) -> int:
+    if base_key in _PIPELINE_TRACK_ORDER:
+        return _PIPELINE_TRACK_ORDER[base_key] + lane * (
+            max(_PIPELINE_TRACK_ORDER.values()) + 1
+        )
+    if base_key in _DECODE_DETAIL_TRACK_ORDER:
+        return _DECODE_DETAIL_TRACK_ORDER[base_key] + lane * (
+            max(_DECODE_DETAIL_TRACK_ORDER.values()) + 1
+        )
+    if base_key == "profiler":
+        return lane
+    return (1 if base_key == "request" else 2) + lane
 
 
 def _stable_uint64(run_id: str, namespace: str, value: str) -> int:
@@ -483,6 +499,54 @@ def _pair_slices(
                 )
             )
     return paired
+
+
+def _assign_concurrent_lanes(paired: list[_PairedSlice]) -> list[_PairedSlice]:
+    """Put overlapping request slices on non-overlapping TrackEvent lanes."""
+
+    by_track: dict[str, list[_PairedSlice]] = {}
+    for item in paired:
+        by_track.setdefault(item.definition.track_key, []).append(item)
+
+    updated: dict[tuple[str, tuple[object, ...]], _PairedSlice] = {}
+    for track_key, rows in by_track.items():
+        lane_intervals: list[tuple[int, int]] = []
+        for item in sorted(
+            rows,
+            key=lambda row: (
+                row.spec.timestamp_ns,
+                row.spec.timestamp_ns + row.spec.duration_ns,
+                row.correlation_id,
+                repr(row.key),
+            ),
+        ):
+            start_ns = item.spec.timestamp_ns
+            end_ns = start_ns + item.spec.duration_ns
+            lane = next(
+                (
+                    index
+                    for index, (previous_start, previous_end) in enumerate(
+                        lane_intervals
+                    )
+                    if start_ns >= previous_end
+                    and not (
+                        previous_start == previous_end == start_ns == end_ns
+                    )
+                ),
+                len(lane_intervals),
+            )
+            if lane == len(lane_intervals):
+                lane_intervals.append((start_ns, end_ns))
+            else:
+                lane_intervals[lane] = (start_ns, end_ns)
+            updated[(track_key, item.key)] = replace(
+                item,
+                spec=replace(
+                    item.spec,
+                    track_key=lane_track_key(track_key, lane),
+                ),
+            )
+    return [updated[(item.definition.track_key, item.key)] for item in paired]
 
 
 def _validate_decode_details(paired: Iterable[_PairedSlice]) -> None:
@@ -1295,6 +1359,7 @@ def build_trace_plan(
         _unclassified_gaps(paired) if grouped_timeline else ()
     )
     paired, flows = _build_flows(manifest.run_id, paired)
+    paired = _assign_concurrent_lanes(paired)
     slices = [item.spec for item in paired]
     native_slices = _native_slices(envelope_rows)
     slices.extend(native_slices)
@@ -1432,8 +1497,15 @@ def build_trace_plan(
             continue
         if key.startswith(("summary.", "telemetry.")):
             continue
-        if key in fixed_tracks:
-            name, description = fixed_tracks[key]
+        base_key = base_track_key(key)
+        lane = 0 if key == base_key else int(key.rsplit(":", 1)[1])
+        if base_key in fixed_tracks:
+            name, description = fixed_tracks[base_key]
+            if key != base_key:
+                name = f"{name} [lane {lane + 1}]"
+                description = (
+                    f"{description} Concurrent request lane {lane + 1}."
+                )
         elif key.startswith("phase:"):
             phase = key.split(":", 1)[1]
             name = f"{phase.replace('_', ' ').title()} events"
@@ -1452,30 +1524,20 @@ def build_trace_plan(
                     if not grouped_timeline
                     else (
                         "summary.pipeline"
-                        if key in _PIPELINE_TRACK_ORDER
+                        if base_key in _PIPELINE_TRACK_ORDER
                         else (
                             "summary.decode_details"
-                            if key in _DECODE_DETAIL_TRACK_ORDER
+                            if base_key in _DECODE_DETAIL_TRACK_ORDER
                             else (
                                 "summary.native_details"
-                                if key == "profiler"
+                                if base_key == "profiler"
                                 else "summary.boundaries"
                             )
                         )
                     )
                 ),
                 sibling_order_rank=(
-                    _PIPELINE_TRACK_ORDER.get(
-                        key,
-                        _DECODE_DETAIL_TRACK_ORDER.get(
-                            key,
-                            (
-                                0
-                                if key == "profiler"
-                                else (1 if key == "request" else 2)
-                            ),
-                        ),
-                    )
+                    _track_sibling_order_rank(base_key, lane)
                     if grouped_timeline
                     else None
                 ),

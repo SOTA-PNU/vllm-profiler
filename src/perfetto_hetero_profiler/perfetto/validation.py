@@ -23,7 +23,7 @@ from perfetto.trace_processor import (
 )
 
 from ..schema.constants import SCHEMA_VERSION
-from .model import AnnotationValue, SliceSpec, TracePlan
+from .model import AnnotationValue, SliceSpec, TracePlan, base_track_key
 from .tooling import (
     PERFETTO_PACKAGE_VERSION,
     PROTOBUF_PACKAGE_VERSION,
@@ -1193,11 +1193,17 @@ def _timeline_summary_plan_contract_mismatches(plan: TracePlan) -> list[str]:
         "decode_schedule_wait",
         "npu_decode",
     }
-    for key in pipeline_keys & set(track_by_key):
-        if track_by_key[key].parent_key != "summary.pipeline":
+    for key, track in track_by_key.items():
+        if (
+            base_track_key(key) in pipeline_keys
+            and track.parent_key != "summary.pipeline"
+        ):
             mismatches.append(f"pipeline track {key!r} is outside Pipeline Stages")
-    for key in {"npu_decode_step", "sampling"} & set(track_by_key):
-        if track_by_key[key].parent_key != "summary.decode_details":
+    for key, track in track_by_key.items():
+        if (
+            base_track_key(key) in {"npu_decode_step", "sampling"}
+            and track.parent_key != "summary.decode_details"
+        ):
             mismatches.append(f"decode detail track {key!r} is outside Decode Details")
 
     boundaries = [
@@ -1218,27 +1224,52 @@ def _timeline_summary_plan_contract_mismatches(plan: TracePlan) -> list[str]:
             mismatches.append(f"boundary instant {spec.name!r} exposes sensitive data")
 
     step_rows = [
-        spec for spec in plan.slices if spec.track_key == "npu_decode_step"
+        spec
+        for spec in plan.slices
+        if base_track_key(spec.track_key) == "npu_decode_step"
     ]
-    step_indices = [dict(spec.annotations).get("hetero.step_index") for spec in step_rows]
-    if any(isinstance(value, bool) or not isinstance(value, int) for value in step_indices):
-        mismatches.append("decode step index is not a non-boolean integer")
-    elif sorted(step_indices) != list(range(len(step_indices))):
-        mismatches.append("decode step indices are duplicated or non-contiguous")
-    decode_by_index = {
-        dict(spec.annotations).get("hetero.step_index"): dict(spec.annotations).get(
-            "hetero.correlation_id"
+    step_identities = [
+        (
+            dict(spec.annotations).get("hetero.correlation_id"),
+            dict(spec.annotations).get("hetero.step_index"),
         )
         for spec in step_rows
-    }
-    for spec in (row for row in plan.slices if row.track_key == "sampling"):
+    ]
+    if any(
+        not isinstance(correlation_id, str)
+        or not correlation_id
+        or isinstance(index, bool)
+        or not isinstance(index, int)
+        for correlation_id, index in step_identities
+    ):
+        mismatches.append("decode step index is not a non-boolean integer")
+    else:
+        by_correlation: dict[str, list[int]] = {}
+        for correlation_id, index in step_identities:
+            by_correlation.setdefault(correlation_id, []).append(index)
+        if any(
+            sorted(indices) != list(range(len(indices)))
+            for indices in by_correlation.values()
+        ):
+            mismatches.append("decode step indices are duplicated or non-contiguous")
+    decode_identities = set(step_identities)
+    for spec in (
+        row
+        for row in plan.slices
+        if base_track_key(row.track_key) == "sampling"
+    ):
         annotations = dict(spec.annotations)
-        index = annotations.get("hetero.step_index")
-        if decode_by_index.get(index) != annotations.get("hetero.correlation_id"):
+        identity = (
+            annotations.get("hetero.correlation_id"),
+            annotations.get("hetero.step_index"),
+        )
+        if identity not in decode_identities:
             mismatches.append("sampling/decode correlation or step index differs")
 
     wait_rows = [
-        spec for spec in plan.slices if spec.track_key == "kv_transfer_wait"
+        spec
+        for spec in plan.slices
+        if base_track_key(spec.track_key) == "kv_transfer_wait"
     ]
     if any(
         dict(spec.annotations).get("hetero.wait_observation")

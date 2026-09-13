@@ -41,6 +41,7 @@ from ..perfetto.native_details import (
     build_native_detail_plan,
     native_validation_metadata,
 )
+from ..perfetto.model import base_track_key
 from ..perfetto.planner import PlanBuildResult, build_trace_plan
 from ..perfetto.tooling import ToolchainRuntime, resolve_toolchain
 from ..perfetto.timeline_summary import (
@@ -832,7 +833,7 @@ def phase_duration_reconciliation(
         track_key: slice_name for _, track_key, slice_name in mapping
     }
     for item in bundle.planning.plan.slices:
-        slice_name = detail_keys.get(item.track_key)
+        slice_name = detail_keys.get(base_track_key(item.track_key))
         if slice_name is not None:
             expected[slice_name].append(item.duration_ns)
     slice_query = next(
@@ -841,8 +842,9 @@ def phase_duration_reconciliation(
         if query["name"] == "slices"
     )
     detail_track_names = {
-        bundle.planning.plan.track_by_key[track_key].name: slice_name
-        for _, track_key, slice_name in mapping
+        track.name: detail_keys[base_track_key(track.key)]
+        for track in bundle.planning.plan.tracks
+        if base_track_key(track.key) in detail_keys
     }
     actual: dict[str, list[int]] = {
         slice_name: [] for _, _, slice_name in mapping
