@@ -85,6 +85,7 @@ class CampaignConfig:
     tokenizer_python: Path
     gpu_vllm: Path
     npu_vllm_launcher: Path
+    hybrid_npu_vllm_launcher: Path
     trace_processor: Path
     nsys: Path
     models: dict[str, Model]
@@ -197,6 +198,7 @@ def load_config(path: Path) -> CampaignConfig:
         _path(paths["tokenizer_python"], "tokenizer_python"),
         _path(paths["gpu_vllm"], "gpu_vllm"),
         _path(paths["npu_vllm_launcher"], "npu_vllm_launcher"),
+        _path(paths["hybrid_npu_vllm_launcher"], "hybrid_npu_vllm_launcher"),
         _path(paths["trace_processor"], "trace_processor"),
         _path(paths["nsys"], "nsys"), models, caches, ports,
         float(timeouts["startup_sec"]), float(timeouts["request_sec"]),
@@ -273,6 +275,7 @@ def preflight(config: CampaignConfig, *, query_devices: bool = True) -> dict[str
     required = (
         config.matrix, config.prompt_file, config.profiler_python,
         config.tokenizer_python, config.gpu_vllm, config.npu_vllm_launcher,
+        config.hybrid_npu_vllm_launcher,
         config.trace_processor, config.nsys,
         *(model.snapshot for model in config.models.values()),
         *(cache.path for cache in config.caches.values()),
@@ -631,7 +634,7 @@ def _hybrid_config(config: CampaignConfig, block: BlockSpec) -> HybridRunnerConf
         config_path=config.path, model_path=model.snapshot, served_model_name=model.served_name,
         rbln_cache_path=cache.path,
         prefill=ServerConfig(config.gpu_vllm, config.vllm_rbln_root, config.vllm_rbln_root, "127.0.0.1", config.ports["gpu_http"], config.ports["gpu_nixl"], common),
-        decode=ServerConfig(config.npu_vllm_launcher, config.vllm_rbln_root, config.vllm_rbln_root, "127.0.0.1", config.ports["npu_http"], config.ports["npu_nixl"], (*common, "--gpu-memory-utilization", "0.92")),
+        decode=ServerConfig(config.hybrid_npu_vllm_launcher, config.vllm_rbln_root, config.vllm_rbln_root, "127.0.0.1", config.ports["npu_http"], config.ports["npu_nixl"], (*common, "--gpu-memory-utilization", "0.92")),
         proxy_python=config.profiler_python,
         proxy_entry_point="perfetto_hetero_profiler.hybrid.proxy", proxy_host="127.0.0.1",
         proxy_port=config.ports["proxy_http"],

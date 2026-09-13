@@ -11,6 +11,10 @@ is rejected unless the persistent graphs are cache hits and the only compile mar
 are the expected non-persistent sampler graphs. Cache fingerprints are compared before
 and after every NPU-using block.
 
+Hybrid decode additionally uses the vendor P/D contract: device tensors are enabled,
+the source GPU is visible to UCX, layout reorder is fixed to zero, and the RBLN runtime
+addresses are loopback. NPU-only validation keeps its separate non-P/D launcher.
+
 Run these commands from the evaluation worktree. Dry-run and preflight do not create
 the campaign directory. Preflight queries device state but starts no server and sends
 no inference request.

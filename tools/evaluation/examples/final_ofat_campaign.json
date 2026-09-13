@@ -10,6 +10,7 @@
     "tokenizer_python": "/home/yewon/perfetto-hetero-profiler/.venvs/native-dtype-rbln/bin/python",
     "gpu_vllm": "/home/yewon/perfetto-hetero-profiler/.venvs/native-dtype-cuda/bin/vllm",
     "npu_vllm_launcher": "/home/yewon/perfetto-hetero-profiler/profiler-concurrent-wave-evaluation/tools/evaluation/require_cache_hit_vllm",
+    "hybrid_npu_vllm_launcher": "/home/yewon/perfetto-hetero-profiler/profiler-concurrent-wave-evaluation/tools/evaluation/require_cache_hit_hybrid_vllm",
     "trace_processor": "/home/yewon/perfetto-hetero-profiler/.venvs/perfetto-tools/bin/trace_processor_shell-v56.1",
     "nsys": "/usr/local/bin/nsys"
   },

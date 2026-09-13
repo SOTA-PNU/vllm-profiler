@@ -132,6 +132,10 @@ class CampaignTests(unittest.TestCase):
         self.assertIn("unset VLLM_RBLN_COMPILE_ONLY", launcher)
         self.assertIn("unset VLLM_RBLN_COMPILE_STRICT_MODE", launcher)
         self.assertIn("VLLM_RBLN_REQUIRE_CACHE_HIT=1", launcher)
+        hybrid_launcher = config.hybrid_npu_vllm_launcher.read_text(encoding="utf-8")
+        self.assertIn("VLLM_RBLN_USE_DEVICE_TENSOR=1", hybrid_launcher)
+        self.assertIn("CUDA_VISIBLE_DEVICES", hybrid_launcher)
+        self.assertEqual(hybrid.decode.executable, config.hybrid_npu_vllm_launcher)
 
     def test_first_failure_stops_campaign_and_resume_refuses_retry(self):
         config = load_config(CONFIG)

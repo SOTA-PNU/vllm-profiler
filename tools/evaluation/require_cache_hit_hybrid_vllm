@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+unset VLLM_RBLN_COMPILE_ONLY
+unset VLLM_RBLN_COMPILE_STRICT_MODE
+export VLLM_RBLN_REQUIRE_CACHE_HIT=1
+export VLLM_RBLN_USE_DEVICE_TENSOR=1
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+export VLLM_RBLN_PDD_LAYOUT_REORDER=0
+export RBLN_USE_CUSTOM_KERNEL=0
+export RBLN_ROOT_IP=127.0.0.1
+export RBLN_LOCAL_IP=127.0.0.1
+
+exec /home/yewon/perfetto-hetero-profiler/.venvs/native-dtype-rbln/bin/vllm "$@"
