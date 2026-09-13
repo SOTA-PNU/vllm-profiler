@@ -11,9 +11,15 @@ is rejected unless the persistent graphs are cache hits and the only compile mar
 are the expected non-persistent sampler graphs. Cache fingerprints are compared before
 and after every NPU-using block.
 
-Hybrid decode additionally uses the vendor P/D contract: device tensors are enabled,
-the source GPU is visible to UCX, layout reorder is fixed to zero, and the RBLN runtime
-addresses are loopback. NPU-only validation keeps its separate non-P/D launcher.
+All NPU execution uses the device-tensor persistent-graph contract. Hybrid decode
+additionally uses the vendor P/D contract: the source GPU is visible to UCX, layout
+reorder is fixed to zero, and the RBLN runtime addresses are loopback. NPU-only keeps
+its separate non-P/D launcher but uses the same device-tensor cache shape.
+
+The five cache paths in the checked-in example remain historical until replacement
+device-tensor caches have passed compile-forbidden readiness. Do not start a campaign
+from those paths; update the paths and fingerprints only from accepted readiness
+results.
 
 The campaign publishes one path-free `environment.json`. Every block publishes
 `condition_metadata.json`, references the campaign environment by relative path and

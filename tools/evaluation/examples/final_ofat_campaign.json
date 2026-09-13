@@ -1,5 +1,6 @@
 {
   "schema_version": "1.0",
+  "cache_contract_status": "pending_device_tensor_rebuild",
   "automatic_retries": 0,
   "paths": {
     "matrix": "/home/yewon/perfetto-hetero-profiler/experiment-data/active/model-batch-topology/plan/final-experiment-plan/experiment_matrix.json",

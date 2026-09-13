@@ -101,6 +101,7 @@ class CampaignConfig:
     startup_sec: float
     request_sec: float
     shutdown_sec: float
+    cache_contract_status: str
 
 
 def _sha256(path: Path) -> str:
@@ -163,6 +164,11 @@ def load_config(path: Path) -> CampaignConfig:
     value = json.loads(path.read_text(encoding="utf-8"))
     if value.get("schema_version") != "1.0" or value.get("automatic_retries") != 0:
         raise FormalCampaignError("config must be schema 1.0 with automatic_retries=0")
+    cache_contract_status = value.get("cache_contract_status")
+    if cache_contract_status not in {
+        "pending_device_tensor_rebuild", "accepted_device_tensor_readiness",
+    }:
+        raise FormalCampaignError("invalid cache_contract_status")
     protocol = value.get("protocol", {})
     expected = {
         "input_tokens": 256, "output_tokens": 32, "temperature": 0,
@@ -209,7 +215,7 @@ def load_config(path: Path) -> CampaignConfig:
         _path(paths["trace_processor"], "trace_processor"),
         _path(paths["nsys"], "nsys"), models, caches, ports,
         float(timeouts["startup_sec"]), float(timeouts["request_sec"]),
-        float(timeouts["shutdown_sec"]),
+        float(timeouts["shutdown_sec"]), cache_contract_status,
     )
     blocks = load_matrix_blocks(config.matrix)
     _validate_matrix_config(config)
@@ -329,6 +335,10 @@ def _import_version(python: Path, root: Path) -> tuple[str, str]:
 
 
 def preflight(config: CampaignConfig, *, query_devices: bool = True) -> dict[str, object]:
+    if config.cache_contract_status != "accepted_device_tensor_readiness":
+        raise FormalCampaignError(
+            "device-tensor cache build and compile-forbidden readiness are pending"
+        )
     required = (
         config.matrix, config.prompt_file, config.profiler_python,
         config.tokenizer_python, config.gpu_vllm, config.npu_vllm_launcher,

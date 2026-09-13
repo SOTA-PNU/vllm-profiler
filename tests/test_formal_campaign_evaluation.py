@@ -16,6 +16,7 @@ from tools.evaluation.formal_campaign import (
     _server_args,
     load_config,
     plan,
+    preflight,
     run_campaign,
 )
 from tools.evaluation.formal_client import FormalStreamingClient
@@ -105,6 +106,10 @@ class CompileGateTests(unittest.TestCase):
 
 
 class CampaignTests(unittest.TestCase):
+    def test_preflight_blocks_historical_non_device_tensor_caches(self):
+        with self.assertRaisesRegex(FormalCampaignError, "device-tensor cache"):
+            preflight(load_config(CONFIG), query_devices=False)
+
     def test_matrix_model_identity_mismatch_is_rejected(self):
         source = json.loads(CONFIG.read_text(encoding="utf-8"))
         matrix_source = Path(source["paths"]["matrix"])
@@ -151,6 +156,8 @@ class CampaignTests(unittest.TestCase):
         self.assertIn("unset VLLM_RBLN_COMPILE_ONLY", launcher)
         self.assertIn("unset VLLM_RBLN_COMPILE_STRICT_MODE", launcher)
         self.assertIn("VLLM_RBLN_REQUIRE_CACHE_HIT=1", launcher)
+        self.assertIn("VLLM_RBLN_USE_DEVICE_TENSOR=1", launcher)
+        self.assertIn("RBLN_USE_CUSTOM_KERNEL=0", launcher)
         hybrid_launcher = config.hybrid_npu_vllm_launcher.read_text(encoding="utf-8")
         self.assertIn("VLLM_RBLN_USE_DEVICE_TENSOR=1", hybrid_launcher)
         self.assertIn("CUDA_VISIBLE_DEVICES", hybrid_launcher)
