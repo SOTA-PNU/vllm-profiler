@@ -478,17 +478,17 @@ def _compile_evidence(stdout_path: Path, stderr_path: Path, concurrency: int) ->
     stderr = stderr_path.read_text(encoding="utf-8", errors="replace")
     expected = 5 if concurrency == 1 else 10
     markers = [int(item) for item in re.findall(r"Compile\(#(\d+)\)", stderr)]
-    expected_markers = list(range(2, expected + 2))
     miss = "PersistentRBLNCacheMissError" in stdout + stderr or "Persistent RBLN model cache miss" in stdout + stderr
     valid = (
-        markers == expected_markers and not miss
+        len(markers) == expected and len(set(markers)) == expected
+        and not any(item in {0, 1} for item in markers) and not miss
         and stdout.count("cache_policy=persistent_cache_hit_required") == 2
         and stdout.count("cache_policy=non_persistent_compile_allowed") == expected
         and stdout.count("Persistent RBLN cache-hit guard enabled: env=1 active=true mode=non-strict") == 2
     )
     return {
         "valid": valid, "persistent_compile_count": sum(item in {0, 1} for item in markers),
-        "sampler_compile_ids": markers, "expected_sampler_compile_ids": expected_markers,
+        "sampler_compile_ids": markers, "expected_sampler_compile_count": expected,
         "cache_miss_count": int(miss), "require_cache_hit": True,
         "compile_only": "unset", "strict_mode": "unset",
     }

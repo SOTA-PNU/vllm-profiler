@@ -72,14 +72,14 @@ class FormalClientTests(unittest.TestCase):
 
 
 class CompileGateTests(unittest.TestCase):
-    def _evidence(self, concurrency: int, *, persistent=False):
+    def _evidence(self, concurrency: int, *, persistent=False, markers=None):
         expected = 5 if concurrency == 1 else 10
         stdout = (
             "cache_policy=persistent_cache_hit_required\n" * 2
             + "cache_policy=non_persistent_compile_allowed\n" * expected
             + "Persistent RBLN cache-hit guard enabled: env=1 active=true mode=non-strict\n" * 2
         )
-        markers = list(range(2, expected + 2))
+        markers = list(range(2, expected + 2)) if markers is None else list(markers)
         if persistent:
             markers.insert(0, 0)
         directory = tempfile.TemporaryDirectory()
@@ -90,7 +90,7 @@ class CompileGateTests(unittest.TestCase):
         )
         return directory, _compile_evidence(root / "stdout", root / "stderr", concurrency)
 
-    def test_accepts_only_exact_sampler_sequence(self):
+    def test_accepts_expected_sampler_count(self):
         for concurrency in (1, 2, 4):
             with self.subTest(concurrency=concurrency):
                 directory, evidence = self._evidence(concurrency)
@@ -103,6 +103,12 @@ class CompileGateTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.assertFalse(evidence["valid"])
         self.assertEqual(evidence["persistent_compile_count"], 1)
+
+    def test_accepts_device_tensor_sampler_ids_with_internal_gap(self):
+        directory, evidence = self._evidence(1, markers=[2, 4, 5, 6, 7])
+        self.addCleanup(directory.cleanup)
+        self.assertTrue(evidence["valid"])
+        self.assertEqual(evidence["expected_sampler_compile_count"], 5)
 
 
 class CampaignTests(unittest.TestCase):
