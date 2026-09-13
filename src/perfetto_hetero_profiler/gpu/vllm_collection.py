@@ -44,6 +44,7 @@ from ..schema import (
     write_jsonl,
 )
 from ..schema.manifests import publish_run_manifest
+from ..runtime_metadata import topology_metadata
 from ..support.files import sha256_file
 from ..support.json_io import replace_pretty_json
 from .openai_client import CompletionObservation, OpenAICompletionClient
@@ -480,7 +481,7 @@ class GpuVllmCollectionRunner:
             ],
             software=[
                 SoftwareDescriptor(
-                    name="vllm", version="0.18.0", role="inference-server",
+                    name="vllm", version=None, role="inference-server",
                     path=str(config.vllm_bin or config.server_python),
                 ),
                 SoftwareDescriptor(
@@ -499,6 +500,16 @@ class GpuVllmCollectionRunner:
                 "measured_requests": config.measured_requests,
                 "max_output_tokens": config.max_output_tokens, "offline": config.offline,
                 "server_argv": list(build_server_argv(config.server_config)),
+                "runtime_metadata": {
+                    "topology": topology_metadata(RunMode.GPU_ONLY),
+                    "software_availability": {
+                        "server_version": {
+                            "availability": "not_available",
+                            "value": None,
+                            "reason": "server runtime version was not queried reliably",
+                        }
+                    },
+                },
             },
             attributes={"vendor.collector": LEGACY_GPU_COLLECTION_PRODUCER,
                         "vendor.collector_errors": list(errors)},

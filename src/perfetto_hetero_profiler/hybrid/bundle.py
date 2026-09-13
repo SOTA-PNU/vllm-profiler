@@ -53,6 +53,11 @@ from .clock_sync import (
 )
 from .config import AlignmentMethod, HybridMergeConfig
 from .join import JoinResult, join_requests
+from ..runtime_metadata import (
+    RuntimeMetadataError,
+    merged_runtime_metadata,
+    transfer_dimensions,
+)
 from .validation import (
     SourceBundle,
     SourceBundleError,
@@ -110,7 +115,10 @@ class HybridBundleMerger:
                     "source device identity collision: "
                     "(host_id, device_id) must be unique"
                 )
-        except SourceBundleError as error:
+            runtime_metadata = merged_runtime_metadata(
+                gpu.manifest, npu.manifest
+            )
+        except (SourceBundleError, RuntimeMetadataError) as error:
             paths.create()
             return self._write_failed_source_bundle(str(error))
 
@@ -268,7 +276,9 @@ class HybridBundleMerger:
                 "json",
             ),
         ]
-        manifest = self._manifest(gpu, npu, status, reasons, joins, estimate)
+        manifest = self._manifest(
+            gpu, npu, status, reasons, joins, estimate, runtime_metadata
+        )
         validate_hybrid_records(
             config.run_id,
             config.canonical_clock_domain_id,
@@ -881,15 +891,19 @@ class HybridBundleMerger:
                 reason=reason,
                 source_event_ids=sources,
                 scope=scope,
-                dimensions=(
-                    {"hybrid.transfer_id": transfer_identity}
-                    if transfer_identity is not None
-                    else None
-                ),
+                dimensions={
+                    **transfer_dimensions(),
+                    **(
+                        {"hybrid.transfer_id": transfer_identity}
+                        if transfer_identity is not None
+                        else {}
+                    ),
+                },
                 attributes={
                     "hybrid.runtime_marker_capability": (
                         "transfer_wait_observability_v1" if capable else "absent"
-                    )
+                    ),
+                    "hybrid.transfer_direction": "gpu_to_npu",
                 },
             )
 
@@ -995,6 +1009,7 @@ class HybridBundleMerger:
         reasons: tuple[str, ...],
         joins: tuple[JoinResult, ...],
         estimate: ClockEstimate,
+        runtime_metadata: dict[str, object] | None,
     ) -> RunManifest:
         hosts = []
         seen_hosts = set()
@@ -1028,12 +1043,12 @@ class HybridBundleMerger:
             models=[gpu_model, npu_model],
             workload=WorkloadDescriptor(
                 request_count=joined_count,
-                concurrency=None,
+                concurrency=gpu.manifest.workload.concurrency,
                 request_rate_per_s=None,
-                input_tokens=None,
-                output_tokens=None,
-                max_model_len=None,
-                warmup_requests=None,
+                input_tokens=gpu.manifest.workload.input_tokens,
+                output_tokens=gpu.manifest.workload.output_tokens,
+                max_model_len=gpu.manifest.workload.max_model_len,
+                warmup_requests=gpu.manifest.workload.warmup_requests,
             ),
             hosts=hosts,
             software=software,
@@ -1044,6 +1059,11 @@ class HybridBundleMerger:
                 "alignment_method": self.config.alignment_method.value,
                 "maximum_uncertainty_ns": self.config.max_uncertainty_ns,
                 "canonical_clock_domain_id": self.config.canonical_clock_domain_id,
+                **(
+                    {"runtime_metadata": runtime_metadata}
+                    if runtime_metadata is not None
+                    else {}
+                ),
             },
             attributes={
                 "hybrid.source_gpu_status": gpu.manifest.status.value,
@@ -1051,6 +1071,9 @@ class HybridBundleMerger:
                 "hybrid.alignment_offset_ns": estimate.offset_ns,
                 "hybrid.alignment_uncertainty_ns": estimate.uncertainty_ns,
                 "hybrid.status_reasons": list(reasons),
+                "hybrid.transfer_direction": "gpu_to_npu",
+                "hybrid.transfer_producer_role": "kv_producer",
+                "hybrid.transfer_consumer_role": "kv_consumer",
                 "hybrid.runtime_marker_capabilities": sorted(
                     set(
                         gpu.manifest.attributes.get(

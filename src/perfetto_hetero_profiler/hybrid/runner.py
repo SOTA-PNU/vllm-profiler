@@ -14,6 +14,7 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from .. import __version__
 from ..collectors.command import CommandSpec, mask_command
 from ..collectors.gpu import (
     NVML_DISTRIBUTION,
@@ -65,6 +66,14 @@ from .join import validate_marker_order
 from .runner_config import HybridProfileMode, HybridRunnerConfig
 from .layout import COLLECTION_RESULT_NAME, FINAL_RESULT_NAME, HybridRunLayout
 from .runtime_markers import ingest_runtime_marker_files
+from ..runtime_metadata import (
+    RuntimeMetadataError,
+    lifecycle_metadata,
+    measured_request_concurrency,
+    measured_token_metadata,
+    model_identity_metadata,
+    topology_metadata,
+)
 
 
 HOST_ID = "localhost"
@@ -593,6 +602,7 @@ class HybridRunner:
     def run(self) -> HybridRunResult:
         config, layout = self.config, self.layout
         self._preflight()
+        run_started_unix_ns = time.time_ns()
         RunPaths(layout.gpu.parent, layout.gpu.name).create()
         RunPaths(layout.npu.parent, layout.npu.name).create()
         layout.coordinator.mkdir(parents=True)
@@ -840,6 +850,22 @@ class HybridRunner:
             errors.append(shutdown_error)
 
         status = RunStatus.SUCCEEDED if not errors else RunStatus.FAILED
+        run_finished_unix_ns = time.time_ns()
+        normalized_lifecycle = lifecycle_metadata(
+            started_at_unix_ns=run_started_unix_ns,
+            finished_at_unix_ns=run_finished_unix_ns,
+            terminal_statuses=[status.value],
+            measured_request_count=len(observations),
+            shutdown_integrity=shutdown_integrity["status"],
+            cleanup_status=(
+                "complete"
+                if len(shutdown) == len(started) and all(
+                    isinstance(value, dict) and value.get("killed") is False
+                    for value in shutdown.values()
+                )
+                else "incomplete"
+            ),
+        )
         result_payload = {
                 "run_id": layout.run_id,
                 "profile_mode": self.profile_mode,
@@ -851,6 +877,7 @@ class HybridRunner:
                     {"failure_class": classify_failure(error), "message": error}
                     for error in errors
                 ],
+                "lifecycle": normalized_lifecycle,
                 "outputs": {
                     "hybrid": str(layout.hybrid), "gpu": str(layout.gpu),
                     "npu": str(layout.npu), "perfetto": str(layout.perfetto),
@@ -1371,6 +1398,8 @@ class HybridRunner:
                     else RunStatus.SUCCEEDED
                 ),
                 detailed=profile is not None and profile["root"] == root,
+                observations=observations,
+                telemetry=telemetry,
             )
             write_json(root / "manifest.json", manifest)
         write_pretty_json(
@@ -1468,25 +1497,111 @@ class HybridRunner:
             )
         return artifacts
 
-    def _manifest(self, *, role: str, status: RunStatus, detailed: bool) -> RunManifest:
+    def _device_descriptors(
+        self, role: str, telemetry: _Telemetry
+    ) -> list[DeviceDescriptor]:
         config = self.config
-        device_type = DeviceType.GPU if role == "gpu" else DeviceType.NPU
+        collector = telemetry.gpu if role == "gpu" else telemetry.npu
+        discovered = getattr(collector, "discovered_rows", ())
+        rows = tuple(discovered) if isinstance(discovered, (tuple, list)) else ()
+        by_index = {getattr(row, "index", None): row for row in rows}
         indices = config.gpu_indices if role == "gpu" else config.npu_indices
+        result = []
+        for index in indices:
+            row = by_index.get(index)
+            model = "not_available"
+            memory_total_bytes = None
+            availability = "not_available"
+            reason = "device identity was not reported by runtime telemetry"
+            device_status = "not_available"
+            if row is not None:
+                name = getattr(row, "name", None)
+                name_availability = getattr(row, "name_availability", None)
+                name_available = (
+                    getattr(name_availability, "value", None) == "available"
+                    if role == "gpu"
+                    else isinstance(name, str) and bool(name.strip())
+                )
+                if name_available and isinstance(name, str) and name.strip():
+                    model = name.strip()
+                    availability = "available"
+                    reason = None
+                    device_status = (
+                        str(getattr(row, "status", "available"))
+                        if role == "npu"
+                        else "available"
+                    )
+                memory = getattr(row, "memory_total_bytes", None)
+                memory_value = getattr(memory, "value", memory)
+                if isinstance(memory_value, int) and not isinstance(memory_value, bool):
+                    memory_total_bytes = memory_value
+            result.append(
+                DeviceDescriptor(
+                    host_id=HOST_ID,
+                    device_type=DeviceType.GPU if role == "gpu" else DeviceType.NPU,
+                    device_id=f"{role}-{index}",
+                    vendor="NVIDIA" if role == "gpu" else "Rebellions",
+                    model=model,
+                    status=device_status,
+                    memory_total_bytes=memory_total_bytes,
+                    attributes={
+                        "runtime.device_index": index,
+                        "runtime.identity_availability": availability,
+                        "runtime.identity_unavailable_reason": reason,
+                    },
+                )
+            )
+        return result
+
+    def _manifest(
+        self,
+        *,
+        role: str,
+        status: RunStatus,
+        detailed: bool,
+        observations: list[CompletionObservation],
+        telemetry: _Telemetry,
+    ) -> RunManifest:
+        config = self.config
+        token_counts = measured_token_metadata(observations)
+        actual_concurrency = measured_request_concurrency(observations)
+        if (
+            actual_concurrency is not None
+            and actual_concurrency != config.workload.request_concurrency
+        ):
+            raise RuntimeMetadataError(
+                "measured request concurrency does not match configured concurrency "
+                f"({actual_concurrency} != {config.workload.request_concurrency})"
+            )
+        model_identity = model_identity_metadata(
+            served_model_id=config.served_model_name,
+            revision=config.model_revision,
+            tokenizer_id=config.tokenizer_id,
+            dtype=config.dtype,
+            size_label=config.model_size_label,
+            exact_parameter_count=config.exact_parameter_count,
+            metadata_origin=config.model_metadata_origin,
+        )
+        mode = RunMode.GPU_ONLY if role == "gpu" else RunMode.NPU_ONLY
         return RunManifest(
             run_id=f"{self.layout.run_id}-{role}",
-            mode=RunMode.GPU_ONLY if role == "gpu" else RunMode.NPU_ONLY,
+            mode=mode,
             profile_mode=ProfileMode.DETAILED_PROFILE if detailed else ProfileMode.MONITOR,
             status=status,
             created_at_unix_ns=time.time_ns(),
             models=[ModelDescriptor(
                 role="prefill" if role == "gpu" else "decode",
-                model_id=str(config.model_path), revision=None,
-                tokenizer_id=None, dtype="bfloat16",
+                model_id=config.served_model_name,
+                revision=config.model_revision,
+                tokenizer_id=config.tokenizer_id,
+                dtype=config.dtype,
             )],
             workload=WorkloadDescriptor(
-                request_count=config.workload.measured_requests, concurrency=1,
-                request_rate_per_s=None, input_tokens=None,
-                output_tokens=config.workload.max_output_tokens,
+                request_count=len(observations),
+                concurrency=actual_concurrency,
+                request_rate_per_s=None,
+                input_tokens=token_counts["input_tokens"]["value"],
+                output_tokens=token_counts["output_tokens"]["value"],
                 max_model_len=config.max_model_len,
                 warmup_requests=config.workload.warmup_requests,
             ),
@@ -1507,6 +1622,12 @@ class HybridRunner:
                         else config.prefill.executable
                     ),
                 ),
+                SoftwareDescriptor(
+                    name="perfetto-hetero-profiler",
+                    version=__version__,
+                    role="coordinator",
+                    path=None,
+                ),
                 *(
                     [
                         SoftwareDescriptor(
@@ -1520,24 +1641,47 @@ class HybridRunner:
                     else []
                 ),
             ],
-            devices=[DeviceDescriptor(
-                host_id=HOST_ID, device_type=device_type,
-                device_id=f"{role}-{index}",
-                vendor="NVIDIA" if role == "gpu" else "Rebellions",
-                model="discovered-by-telemetry", status="available",
-                memory_total_bytes=None,
-                attributes={
-                    "nvml.gpu_index" if role == "gpu" else "device.index": index
-                },
-            ) for index in indices],
+            devices=self._device_descriptors(role, telemetry),
             configuration={
                 "profile_mode": self.profile_mode,
                 "max_model_len": config.max_model_len,
+                "max_num_seqs": config.max_num_seqs,
                 "block_size": config.block_size,
                 "offline": config.offline,
+                "runtime_metadata": {
+                    "source_merge_contract": "truthful_runtime_metadata_v1",
+                    "model_identity": model_identity,
+                    "token_counts": token_counts,
+                    "max_num_seqs_capacity": config.max_num_seqs,
+                    "topology": topology_metadata(mode),
+                    "software_availability": {
+                        "server_version": {
+                            "availability": "not_available",
+                            "value": None,
+                            "reason": "server runtime version was not queried reliably",
+                        },
+                        "telemetry_backend_version": {
+                            "availability": (
+                                "available" if role == "gpu" else "not_available"
+                            ),
+                            "value": (
+                                NVML_DISTRIBUTION_VERSION if role == "gpu" else None
+                            ),
+                            "reason": (
+                                None
+                                if role == "gpu"
+                                else "rbln-smi version was not collected by the hybrid runner"
+                            ),
+                        },
+                    },
+                },
             },
             attributes={
                 "hybrid.source_role": role,
+                "hybrid.transfer_role": (
+                    "kv_producer" if role == "gpu" else "kv_consumer"
+                ),
+                "hybrid.transfer_direction": "gpu_to_npu",
                 "hybrid.real_source": True,
                 "hybrid.runner": "collect hybrid",
                 **(

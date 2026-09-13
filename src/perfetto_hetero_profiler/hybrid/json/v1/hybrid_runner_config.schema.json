@@ -49,7 +49,13 @@
       "properties": {
         "path": {"$ref": "#/$defs/path_string"},
         "served_name": {"$ref": "#/$defs/nonempty_string"},
-        "rbln_cache_path": {"$ref": "#/$defs/path_string"}
+        "rbln_cache_path": {"$ref": "#/$defs/path_string"},
+        "revision": {"type": ["string", "null"], "minLength": 1, "pattern": "\\S"},
+        "tokenizer_id": {"type": ["string", "null"], "minLength": 1, "pattern": "\\S"},
+        "dtype": {"type": ["string", "null"], "minLength": 1, "pattern": "\\S"},
+        "size_label": {"type": ["string", "null"], "minLength": 1, "pattern": "\\S"},
+        "exact_parameter_count": {"type": ["integer", "null"], "minimum": 1},
+        "metadata_origin": {"type": "string", "minLength": 1, "pattern": "\\S"}
       }
     },
     "proxy": {
@@ -74,7 +80,8 @@
         "measured_requests": {"type": "integer", "minimum": 1, "maximum": 1000},
         "max_output_tokens": {"type": "integer", "minimum": 1, "maximum": 16},
         "temperature": {"type": "number", "minimum": 0, "maximum": 2},
-        "streaming": {"type": "boolean"}
+        "streaming": {"type": "boolean"},
+        "request_concurrency": {"type": "integer", "minimum": 1, "maximum": 4096}
       },
       "oneOf": [
         {

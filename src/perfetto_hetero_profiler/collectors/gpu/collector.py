@@ -31,6 +31,7 @@ from ...schema import (
     write_jsonl,
 )
 from ...schema.manifests import publish_run_manifest
+from ...runtime_metadata import topology_metadata
 from ..command import mask_command
 from ..process import ManagedProcess
 from ..run import run_monitored_process
@@ -306,6 +307,9 @@ class GpuRunCollector:
                 "command": mask_command(self.config.command),
                 "cwd": str(self.config.cwd) if self.config.cwd else None,
                 "timeout_sec": self.config.timeout_sec,
+                "runtime_metadata": {
+                    "topology": topology_metadata(RunMode.GPU_ONLY),
+                },
             },
             attributes={
                 "vendor.collector": "gpu-monitor",

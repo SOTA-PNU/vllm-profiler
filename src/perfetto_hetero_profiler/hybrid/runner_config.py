@@ -105,6 +105,7 @@ class WorkloadConfig:
     max_output_tokens: int
     temperature: float
     streaming: bool
+    request_concurrency: int = 1
 
     def prompt_text(self) -> str:
         if self.prompt_file is not None:
@@ -153,6 +154,12 @@ class HybridRunnerConfig:
     trace_processor_path: Path | None
     nsys_executable: Path
     offline: bool
+    model_revision: str | None = None
+    tokenizer_id: str | None = None
+    dtype: str | None = None
+    model_size_label: str | None = None
+    exact_parameter_count: int | None = None
+    model_metadata_origin: str = "declared_config"
 
     def __post_init__(self) -> None:
         ports = (self.prefill.http_port, self.decode.http_port, self.proxy_port)
@@ -163,6 +170,10 @@ class HybridRunnerConfig:
             raise HybridRunnerConfigError("HTTP and NIXL ports must all be unique")
         if not self.offline:
             raise HybridRunnerConfigError("hybrid execution requires offline=true")
+        if self.workload.request_concurrency > self.max_num_seqs:
+            raise HybridRunnerConfigError(
+                "workload.request_concurrency must not exceed runtime.max_num_seqs"
+            )
 
     def with_overrides(
         self,
@@ -317,6 +328,7 @@ def load_hybrid_runner_config(path: Path) -> HybridRunnerConfig:
             max_output_tokens=workload["max_output_tokens"],
             temperature=workload["temperature"],
             streaming=workload["streaming"],
+            request_concurrency=workload.get("request_concurrency", 1),
         ),
         prefill_connector=prefill_connector,
         decode_connector=decode_connector,
@@ -351,6 +363,12 @@ def load_hybrid_runner_config(path: Path) -> HybridRunnerConfig:
         ),
         nsys_executable=_absolute_path(tool_config["nsys"], "tools.nsys"),
         offline=root["offline"],
+        model_revision=model.get("revision"),
+        tokenizer_id=model.get("tokenizer_id"),
+        dtype=model.get("dtype"),
+        model_size_label=model.get("size_label"),
+        exact_parameter_count=model.get("exact_parameter_count"),
+        model_metadata_origin=model.get("metadata_origin", "declared_config"),
     )
 
 

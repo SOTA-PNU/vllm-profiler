@@ -33,6 +33,7 @@ from ...schema import (
     write_jsonl,
 )
 from ...schema.manifests import publish_run_manifest
+from ...runtime_metadata import topology_metadata
 from ...support.files import sha256_file
 from ..command import mask_command
 from ..process import ManagedProcess
@@ -353,6 +354,9 @@ class NpuRunCollector:
                 "rbln_profiler_enabled": (
                     self.config.profile_mode is ProfileMode.DETAILED_PROFILE
                 ),
+                "runtime_metadata": {
+                    "topology": topology_metadata(RunMode.NPU_ONLY),
+                },
             },
             attributes={
                 "vendor.collector": "npu-monitor",
@@ -386,7 +390,7 @@ class NpuRunCollector:
                 SoftwareDescriptor(
                     name=package_name,
                     version=version,
-                    role="npu-runtime",
+                    role="collector-environment",
                     path=None,
                 )
             )
