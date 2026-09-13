@@ -39,6 +39,13 @@ from .concurrent_wave import (
     write_block_artifacts,
 )
 from .formal_client import FormalStreamingClient
+from .formal_metadata import (
+    build_condition_metadata,
+    collect_canonical_environment,
+    declared_model_size_label,
+    validate_environment,
+    validate_published_block,
+)
 
 
 PROMPT_SHA256 = "928a5d427df9460d7b5f69178206f8d7bfd79c56cb4e54f21976456844a80c1f"
@@ -205,11 +212,61 @@ def load_config(path: Path) -> CampaignConfig:
         float(timeouts["shutdown_sec"]),
     )
     blocks = load_matrix_blocks(config.matrix)
+    _validate_matrix_config(config)
     for block in blocks:
         cache = caches[block.condition_id.rsplit("-", 1)[0]]
         if cache.max_num_seqs != block.concurrency:
             raise FormalCampaignError(f"cache batch mismatch for {block.condition_id}")
     return config
+
+
+def _validate_matrix_config(config: CampaignConfig) -> None:
+    try:
+        matrix = json.loads(config.matrix.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise FormalCampaignError("formal matrix is unreadable") from error
+    if not isinstance(matrix, dict):
+        raise FormalCampaignError("formal matrix must be an object")
+    request = matrix.get("request_protocol")
+    fixed_request = {
+        "prompt_sha256": PROMPT_SHA256,
+        "input_tokens": 256,
+        "output_tokens": 32,
+        "temperature": 0,
+        "streaming": True,
+        "max_model_len": 512,
+        "block_size": 512,
+        "sample_interval_ms": 1000,
+        "measured_requests_per_block": 52,
+        "automatic_retries": 0,
+    }
+    if not isinstance(request, dict) or any(
+        request.get(key) != expected for key, expected in fixed_request.items()
+    ):
+        raise FormalCampaignError("matrix request protocol differs from campaign config")
+    matrix_models = matrix.get("models")
+    if not isinstance(matrix_models, list):
+        raise FormalCampaignError("matrix model declarations are missing")
+    by_key = {
+        item.get("id"): item for item in matrix_models if isinstance(item, dict)
+    }
+    if set(by_key) != set(config.models) or len(by_key) != len(matrix_models):
+        raise FormalCampaignError("matrix and campaign model keys differ")
+    for key, model in config.models.items():
+        item = by_key[key]
+        if (
+            str(item.get("name", "")).rsplit("/", 1)[-1] != model.served_name
+            or item.get("revision") != model.revision
+            or item.get("snapshot_fingerprint") != model.snapshot_fingerprint
+            or item.get("dtype") != "bfloat16"
+        ):
+            raise FormalCampaignError(f"matrix model identity mismatch: {key}")
+    topologies = matrix.get("topologies")
+    topology_ids = {
+        item.get("id") for item in topologies if isinstance(item, dict)
+    } if isinstance(topologies, list) else set()
+    if topology_ids != {"gpu", "npu", "hybrid"}:
+        raise FormalCampaignError("matrix topology declarations differ from campaign")
 
 
 def _git_state(root: Path) -> tuple[str, str]:
@@ -302,7 +359,10 @@ def preflight(config: CampaignConfig, *, query_devices: bool = True) -> dict[str
         expected_import = str((config.vllm_rbln_root / "vllm_rbln/__init__.py").resolve())
         if not version.startswith("0.22.") or import_path != expected_import:
             raise FormalCampaignError(f"{role} vLLM/import path mismatch")
-        imports[role] = {"vllm_version": version, "vllm_rbln": import_path}
+        imports[role] = {
+            "vllm_version": version,
+            "vllm_rbln_import_verified": True,
+        }
     for model in config.models.values():
         if model.snapshot.name != model.revision:
             raise FormalCampaignError(f"snapshot revision mismatch: {model.key}")
@@ -340,11 +400,18 @@ def preflight(config: CampaignConfig, *, query_devices: bool = True) -> dict[str
         if parsed.get("contexts"):
             raise FormalCampaignError("NPU contexts are not empty")
         devices = {"queried": True, "gpu": gpu.stdout.strip(), "npu_contexts": []}
+    environment = collect_canonical_environment(
+        config,
+        profiler_head=profiler_head,
+        vllm_rbln_head=vllm_head,
+        query_devices=query_devices,
+    )
     return {
         "valid": True, "executes": False, "creates_output": False,
         "profiler_head": profiler_head, "vllm_rbln_head": vllm_head,
         "block_count": 21, "cache_count": 5, "imports": imports,
         "devices": devices,
+        "environment": environment,
     }
 
 
@@ -638,7 +705,10 @@ def _hybrid_config(config: CampaignConfig, block: BlockSpec) -> HybridRunnerConf
         proxy_python=config.profiler_python,
         proxy_entry_point="perfetto_hetero_profiler.hybrid.proxy", proxy_host="127.0.0.1",
         proxy_port=config.ports["proxy_http"],
-        workload=WorkloadConfig(None, config.prompt_file, block.warmup_requests, block.measured_requests, 32, 0, True),
+        workload=WorkloadConfig(
+            None, config.prompt_file, block.warmup_requests,
+            block.measured_requests, 32, 0, True, block.concurrency,
+        ),
         prefill_connector={"kv_connector": "NixlConnector", "kv_role": "kv_producer", "kv_buffer_device": "cuda", "kv_load_failure_policy": "fail", "kv_connector_extra_config": {"kv_recompute_threshold": 0}},
         decode_connector={"kv_connector": "RblnNixlConnector", "kv_role": "kv_consumer", "kv_buffer_device": "cpu", "kv_load_failure_policy": "fail", "kv_connector_extra_config": {"kv_recompute_threshold": 0, "remote_nixl_memory_type": "VRAM", "rbln_external_kv_format": "host_visible_hnd_to_runtime_private", "rbln_external_kv_source_dtype": "bfloat16"}},
         profiler_outputs=ProfilerOutputConfig(Path("raw/gpu/torch"), Path("raw/gpu/nsys/prefill"), Path("raw/npu/torch"), Path("raw/npu/rbln")),
@@ -647,6 +717,10 @@ def _hybrid_config(config: CampaignConfig, block: BlockSpec) -> HybridRunnerConf
         sample_interval_ms=1000, startup_timeout_sec=config.startup_sec,
         request_timeout_sec=config.request_sec, shutdown_timeout_sec=config.shutdown_sec,
         trace_processor_path=config.trace_processor, nsys_executable=config.nsys, offline=True,
+        model_revision=model.revision, tokenizer_id=None, dtype="bfloat16",
+        model_size_label=declared_model_size_label(model.key),
+        exact_parameter_count=None,
+        model_metadata_origin="declared_experiment_contract",
     )
 
 
@@ -664,6 +738,8 @@ def run_campaign(config: CampaignConfig, campaign_root: Path, *, resume: bool = 
     if not campaign_root.is_absolute():
         raise FormalCampaignError("campaign root must be absolute")
     preflight_result = preflight(config)
+    environment = preflight_result.get("environment")
+    validate_environment(environment)
     blocks = load_matrix_blocks(config.matrix)
     if campaign_root.exists() and not resume:
         raise FormalCampaignError("campaign root already exists")
@@ -671,15 +747,26 @@ def run_campaign(config: CampaignConfig, campaign_root: Path, *, resume: bool = 
         campaign_root.mkdir(parents=True)
         shutil.copyfile(config.path, campaign_root / "campaign-config.json")
         write_pretty_json(campaign_root / "plan.json", plan(config, campaign_root))
-        write_pretty_json(campaign_root / "preflight.json", preflight_result)
+        write_pretty_json(campaign_root / "environment.json", environment)
+        published_preflight = dict(preflight_result)
+        published_preflight["environment"] = {
+            "relative_path": "environment.json",
+            "sha256": _sha256(campaign_root / "environment.json"),
+        }
+        write_pretty_json(campaign_root / "preflight.json", published_preflight)
     else:
         snapshot = campaign_root / "campaign-config.json"
         saved_preflight = campaign_root / "preflight.json"
+        environment_path = campaign_root / "environment.json"
         if (
             not snapshot.is_file() or _sha256(snapshot) != _sha256(config.path)
-            or not saved_preflight.is_file()
+            or not saved_preflight.is_file() or not environment_path.is_file()
         ):
             raise FormalCampaignError("campaign snapshot differs from the fixed config")
+        saved_environment = json.loads(environment_path.read_text(encoding="utf-8"))
+        validate_environment(saved_environment)
+        if saved_environment != environment:
+            raise FormalCampaignError("environment changed since the campaign began")
         previous = json.loads(saved_preflight.read_text(encoding="utf-8"))
         if any(
             previous.get(key) != preflight_result.get(key)
@@ -694,12 +781,39 @@ def run_campaign(config: CampaignConfig, campaign_root: Path, *, resume: bool = 
             result = json.loads(result_path.read_text(encoding="utf-8"))
             if result.get("status") != "succeeded":
                 raise FormalCampaignError("failed block exists; automatic retry is forbidden")
+            validation = validate_published_block(
+                config, block, position=position, block_root=root,
+                environment_path=campaign_root / "environment.json",
+            )
+            if (
+                result.get("condition_metadata_sha256")
+                != validation["condition_metadata_sha256"]
+                or result.get("environment_sha256")
+                != validation["environment_sha256"]
+                or result.get("condition_validation_sha256")
+                != _sha256(root / "condition_validation.json")
+                or validation != json.loads(
+                    (root / "condition_validation.json").read_text(encoding="utf-8")
+                )
+            ):
+                raise FormalCampaignError("completed block validation record mismatch")
             completed += 1
             continue
         if root.exists():
             raise FormalCampaignError("incomplete block exists; automatic retry is forbidden")
         root.mkdir(parents=True)
-        write_pretty_json(root / "block.json", {"position": position, **block.to_dict()})
+        environment_sha = _sha256(campaign_root / "environment.json")
+        condition = build_condition_metadata(
+            config, block, position=position, environment_sha256=environment_sha
+        )
+        write_pretty_json(root / "condition_metadata.json", condition)
+        write_pretty_json(root / "block.json", {
+            "position": position, **block.to_dict(),
+            "condition_metadata": {
+                "relative_path": "condition_metadata.json",
+                "sha256": _sha256(root / "condition_metadata.json"),
+            },
+        })
         try:
             if block.topology == "hybrid":
                 cache_before = _cache_fingerprint(_model_cache(config, block)[1].path)
@@ -730,10 +844,25 @@ def run_campaign(config: CampaignConfig, campaign_root: Path, *, resume: bool = 
         if not postflight["valid"]:
             write_pretty_json(campaign_root / "status.json", {"status": "failed", "completed_blocks": completed, "failed_position": position, "automatic_retries": 0})
             raise FormalCampaignError("runtime postflight cleanup failed")
+        try:
+            validation = validate_published_block(
+                config, block, position=position, block_root=root,
+                environment_path=campaign_root / "environment.json",
+            )
+            write_pretty_json(root / "condition_validation.json", validation)
+        except Exception:
+            write_pretty_json(campaign_root / "status.json", {
+                "status": "failed", "completed_blocks": completed,
+                "failed_position": position, "automatic_retries": 0,
+            })
+            raise
         completed += 1
         write_pretty_json(result_path, {
             "status": "succeeded", "position": position,
             "condition_id": block.condition_id, "round": block.round_index,
+            "condition_metadata_sha256": validation["condition_metadata_sha256"],
+            "environment_sha256": validation["environment_sha256"],
+            "condition_validation_sha256": _sha256(root / "condition_validation.json"),
         })
         write_pretty_json(campaign_root / "status.json", {"status": "running", "completed_blocks": completed, "next_position": completed + 1 if completed < 21 else None, "automatic_retries": 0})
     result = {"status": "succeeded", "completed_blocks": completed, "automatic_retries": 0}

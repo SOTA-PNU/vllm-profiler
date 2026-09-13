@@ -15,15 +15,22 @@ Hybrid decode additionally uses the vendor P/D contract: device tensors are enab
 the source GPU is visible to UCX, layout reorder is fixed to zero, and the RBLN runtime
 addresses are loopback. NPU-only validation keeps its separate non-P/D launcher.
 
+The campaign publishes one path-free `environment.json`. Every block publishes
+`condition_metadata.json`, references the campaign environment by relative path and
+SHA-256, and receives a `condition_validation.json` success record only after request,
+wave, core-manifest, token, topology, and terminal-cleanup evidence agree. Unsupported
+hardware or software fields are explicit `not_available` records with reasons. These
+formal condition concepts remain repository-only and are excluded from distributions.
+
 Run these commands from the evaluation worktree. Dry-run and preflight do not create
 the campaign directory. Preflight queries device state but starts no server and sends
 no inference request.
 
 ```bash
-cd /home/yewon/perfetto-hetero-profiler/profiler-concurrent-wave-evaluation
+cd /home/yewon/perfetto-hetero-profiler/profiler-formal-experiment-metadata
 
-CONFIG=/home/yewon/perfetto-hetero-profiler/profiler-concurrent-wave-evaluation/tools/evaluation/examples/final_ofat_campaign.json
-RESULT=/home/yewon/perfetto-hetero-profiler/formal-ofat-20260913
+CONFIG=/home/yewon/perfetto-hetero-profiler/profiler-formal-experiment-metadata/tools/evaluation/examples/final_ofat_campaign.json
+RESULT=/home/yewon/perfetto-hetero-profiler/experiment-data/active/model-batch-topology/runs/formal-ofat-next
 PYTHON=/home/yewon/perfetto-hetero-profiler/.venvs/perfetto-tools/bin/python
 
 PYTHONPATH=src:. "$PYTHON" -m tools.evaluation formal-campaign \

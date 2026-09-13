@@ -363,8 +363,10 @@ def run_block(*, matrix_path: Path, hybrid_config_path: Path, condition_id: str,
         if config_override is not None
         else load_hybrid_runner_config(Path(hybrid_config_path))
     )
-    if config.max_num_seqs < block.concurrency:
-        raise ConcurrentWaveError("max_num_seqs must be >= concurrency")
+    if config.max_num_seqs != block.concurrency:
+        raise ConcurrentWaveError("max_num_seqs must equal the fixed cache capability")
+    if config.workload.request_concurrency != block.concurrency:
+        raise ConcurrentWaveError("core request concurrency does not match matrix protocol")
     if not config.workload.streaming:
         raise ConcurrentWaveError("hybrid workload must use streaming")
     if (config.workload.warmup_requests != block.warmup_requests

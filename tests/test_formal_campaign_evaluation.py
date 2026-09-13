@@ -105,6 +105,21 @@ class CompileGateTests(unittest.TestCase):
 
 
 class CampaignTests(unittest.TestCase):
+    def test_matrix_model_identity_mismatch_is_rejected(self):
+        source = json.loads(CONFIG.read_text(encoding="utf-8"))
+        matrix_source = Path(source["paths"]["matrix"])
+        matrix = json.loads(matrix_source.read_text(encoding="utf-8"))
+        matrix["models"][0]["revision"] = "0" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            matrix_path = root / "matrix.json"
+            config_path = root / "campaign.json"
+            matrix_path.write_text(json.dumps(matrix), encoding="utf-8")
+            source["paths"]["matrix"] = str(matrix_path)
+            config_path.write_text(json.dumps(source), encoding="utf-8")
+            with self.assertRaisesRegex(FormalCampaignError, "model identity mismatch"):
+                load_config(config_path)
+
     def test_fixed_plan_has_all_21_blocks_in_declared_order(self):
         result = plan(load_config(CONFIG), Path("/unused"))
         self.assertEqual(result["block_count"], 21)
@@ -124,9 +139,13 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--gpu-memory-utilization") + 1], "0.92")
         hybrid = _hybrid_config(
             config,
-            BlockSpec("m15-b1-hybrid", 1, 1, "hybrid", 1, 52, 52, 256, 32),
+            BlockSpec("m15-b4-hybrid", 1, 4, "hybrid", 4, 52, 13, 256, 32),
         )
         self.assertEqual(hybrid.gpu_memory_utilization, 0.2)
+        self.assertEqual(hybrid.max_num_seqs, 4)
+        self.assertEqual(hybrid.workload.request_concurrency, 4)
+        self.assertEqual(hybrid.model_size_label, "1.5B")
+        self.assertIsNone(hybrid.exact_parameter_count)
         self.assertIn("--gpu-memory-utilization", hybrid.decode.extra_args)
         launcher = config.npu_vllm_launcher.read_text(encoding="utf-8")
         self.assertIn("unset VLLM_RBLN_COMPILE_ONLY", launcher)
@@ -140,8 +159,8 @@ class CampaignTests(unittest.TestCase):
     def test_first_failure_stops_campaign_and_resume_refuses_retry(self):
         config = load_config(CONFIG)
         blocks = (
-            BlockSpec("m15-b1-gpu", 1, 1, "gpu", 1, 1, 1),
-            BlockSpec("m15-b1-npu", 1, 1, "npu", 1, 1, 1),
+            BlockSpec("m15-b1-gpu", 1, 1, "gpu", 1, 52, 52, 256, 32),
+            BlockSpec("m15-b1-npu", 1, 1, "npu", 1, 52, 52, 256, 32),
         )
         calls = []
 
@@ -155,7 +174,16 @@ class CampaignTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "campaign"
             with (
-                patch("tools.evaluation.formal_campaign.preflight", return_value={"valid": True}),
+                patch("tools.evaluation.formal_campaign.preflight", return_value={"valid": True, "environment": {}}),
+                patch("tools.evaluation.formal_campaign.validate_environment"),
+                patch(
+                    "tools.evaluation.formal_campaign.validate_published_block",
+                    return_value={
+                        "valid": True,
+                        "condition_metadata_sha256": "a" * 64,
+                        "environment_sha256": "b" * 64,
+                    },
+                ),
                 patch("tools.evaluation.formal_campaign._runtime_postflight", return_value={"valid": True}),
                 patch("tools.evaluation.formal_campaign.load_matrix_blocks", return_value=blocks),
                 patch("tools.evaluation.formal_campaign._standalone_block", side_effect=fake_block),

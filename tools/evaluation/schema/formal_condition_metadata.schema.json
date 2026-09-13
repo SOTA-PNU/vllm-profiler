@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sota-pnu.example/evaluation/formal-condition-metadata-v1.json",
+  "title": "Formal experiment condition metadata v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "condition_id", "position", "round", "model", "workload", "topology", "environment"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "condition_id": {"type": "string", "pattern": "^(m05|m15|m3)-b(1|2|4)-(gpu|npu|hybrid)$"},
+    "position": {"type": "integer", "minimum": 1, "maximum": 21},
+    "round": {"type": "integer", "minimum": 1, "maximum": 3},
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "served_model_name", "revision", "dtype", "size_label", "size_label_origin", "exact_parameter_count", "snapshot_fingerprint"],
+      "properties": {
+        "key": {"enum": ["m05", "m15", "m3"]},
+        "served_model_name": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "dtype": {"const": "bfloat16"},
+        "size_label": {"enum": ["0.5B", "1.5B", "3B"]},
+        "size_label_origin": {"const": "declared_experiment_contract"},
+        "exact_parameter_count": {"type": "null"},
+        "snapshot_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_concurrency", "batch_semantics", "max_num_seqs", "input_tokens", "output_tokens", "measured_requests", "measured_waves"],
+      "properties": {
+        "request_concurrency": {"enum": [1, 2, 4]},
+        "batch_semantics": {"const": "concurrent_requests_per_wave"},
+        "max_num_seqs": {"enum": [1, 2, 4]},
+        "input_tokens": {"const": 256},
+        "output_tokens": {"const": 32},
+        "measured_requests": {"const": 52},
+        "measured_waves": {"enum": [13, 26, 52]}
+      }
+    },
+    "topology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "partition_strategy", "prefill_device", "decode_device", "layer_partition_ratio", "layer_partition_ratio_status", "transfer_direction", "producer_role", "consumer_role"],
+      "properties": {
+        "mode": {"enum": ["gpu_only", "npu_only", "hybrid"]},
+        "partition_strategy": {"enum": ["all_gpu", "all_npu", "gpu_prefill_npu_decode"]},
+        "prefill_device": {"enum": ["gpu", "npu"]},
+        "decode_device": {"enum": ["gpu", "npu"]},
+        "layer_partition_ratio": {"type": "null"},
+        "layer_partition_ratio_status": {"const": "not_applicable"},
+        "transfer_direction": {"enum": ["not_applicable", "gpu_to_npu"]},
+        "producer_role": {"enum": ["kv_producer", null]},
+        "consumer_role": {"enum": ["kv_consumer", null]}
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256"],
+      "properties": {
+        "relative_path": {"const": "../../environment.json"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}
