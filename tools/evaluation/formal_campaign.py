@@ -91,6 +91,7 @@ class CampaignConfig:
     profiler_python: Path
     tokenizer_python: Path
     gpu_vllm: Path
+    gpu_vllm_launcher: Path
     npu_vllm_launcher: Path
     hybrid_npu_vllm_launcher: Path
     trace_processor: Path
@@ -210,6 +211,7 @@ def load_config(path: Path) -> CampaignConfig:
         _path(paths["profiler_python"], "profiler_python"),
         _path(paths["tokenizer_python"], "tokenizer_python"),
         _path(paths["gpu_vllm"], "gpu_vllm"),
+        _path(paths["gpu_vllm_launcher"], "gpu_vllm_launcher"),
         _path(paths["npu_vllm_launcher"], "npu_vllm_launcher"),
         _path(paths["hybrid_npu_vllm_launcher"], "hybrid_npu_vllm_launcher"),
         _path(paths["trace_processor"], "trace_processor"),
@@ -341,7 +343,8 @@ def preflight(config: CampaignConfig, *, query_devices: bool = True) -> dict[str
         )
     required = (
         config.matrix, config.prompt_file, config.profiler_python,
-        config.tokenizer_python, config.gpu_vllm, config.npu_vllm_launcher,
+        config.tokenizer_python, config.gpu_vllm, config.gpu_vllm_launcher,
+        config.npu_vllm_launcher,
         config.hybrid_npu_vllm_launcher,
         config.trace_processor, config.nsys,
         *(model.snapshot for model in config.models.values()),
@@ -427,6 +430,7 @@ def preflight(config: CampaignConfig, *, query_devices: bool = True) -> dict[str
 
 def _port_free(port: int) -> bool:
     with socket.socket() as stream:
+        stream.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             stream.bind(("127.0.0.1", port))
         except OSError:
@@ -591,7 +595,10 @@ def _model_cache(config: CampaignConfig, block: BlockSpec) -> tuple[Model, Cache
 
 def _server_args(config: CampaignConfig, block: BlockSpec, topology: str) -> tuple[str, ...]:
     model, _ = _model_cache(config, block)
-    executable = config.gpu_vllm if topology == "gpu" else config.npu_vllm_launcher
+    executable = (
+        config.gpu_vllm_launcher if topology == "gpu"
+        else config.npu_vllm_launcher
+    )
     port = config.ports[f"{topology}_http"]
     argv = [
         str(executable), "serve", str(model.snapshot), "--host", "127.0.0.1",
@@ -710,7 +717,7 @@ def _hybrid_config(config: CampaignConfig, block: BlockSpec) -> HybridRunnerConf
     return HybridRunnerConfig(
         config_path=config.path, model_path=model.snapshot, served_model_name=model.served_name,
         rbln_cache_path=cache.path,
-        prefill=ServerConfig(config.gpu_vllm, config.vllm_rbln_root, config.vllm_rbln_root, "127.0.0.1", config.ports["gpu_http"], config.ports["gpu_nixl"], common),
+        prefill=ServerConfig(config.gpu_vllm_launcher, config.vllm_rbln_root, config.vllm_rbln_root, "127.0.0.1", config.ports["gpu_http"], config.ports["gpu_nixl"], common),
         decode=ServerConfig(config.hybrid_npu_vllm_launcher, config.vllm_rbln_root, config.vllm_rbln_root, "127.0.0.1", config.ports["npu_http"], config.ports["npu_nixl"], (*common, "--gpu-memory-utilization", "0.92")),
         proxy_python=config.profiler_python,
         proxy_entry_point="perfetto_hetero_profiler.hybrid.proxy", proxy_host="127.0.0.1",

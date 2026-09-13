@@ -181,6 +181,16 @@ class CampaignTests(unittest.TestCase):
         self.assertIn("VLLM_RBLN_USE_DEVICE_TENSOR=1", hybrid_launcher)
         self.assertIn("CUDA_VISIBLE_DEVICES", hybrid_launcher)
         self.assertEqual(hybrid.decode.executable, config.hybrid_npu_vllm_launcher)
+        gpu_launcher = config.gpu_vllm_launcher.read_text(encoding="utf-8")
+        self.assertIn("VLLM_USE_FLASHINFER_SAMPLER=0", gpu_launcher)
+        self.assertIn(str(config.gpu_vllm), gpu_launcher)
+        self.assertEqual(hybrid.prefill.executable, config.gpu_vllm_launcher)
+        gpu_argv = _server_args(
+            config,
+            BlockSpec("m15-b1-gpu", 1, 1, "gpu", 1, 52, 52, 256, 32),
+            "gpu",
+        )
+        self.assertEqual(Path(gpu_argv[0]), config.gpu_vllm_launcher)
 
     def test_first_failure_stops_campaign_and_resume_refuses_retry(self):
         config = load_config(CONFIG)

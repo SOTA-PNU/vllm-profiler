@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# vLLM 0.22's bundled FlashInfer sampler misclassifies Blackwell sm120 during
+# JIT setup. Keep attention on its selected backend while using the supported
+# PyTorch-native top-k/top-p sampler for both APIServer and EngineCore.
+export VLLM_USE_FLASHINFER_SAMPLER=0
+
+exec /home/yewon/perfetto-hetero-profiler/.venvs/native-dtype-cuda/bin/vllm "$@"
