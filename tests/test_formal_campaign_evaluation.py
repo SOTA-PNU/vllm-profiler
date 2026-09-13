@@ -112,9 +112,22 @@ class CompileGateTests(unittest.TestCase):
 
 
 class CampaignTests(unittest.TestCase):
-    def test_preflight_blocks_historical_non_device_tensor_caches(self):
-        with self.assertRaisesRegex(FormalCampaignError, "device-tensor cache"):
-            preflight(load_config(CONFIG), query_devices=False)
+    def test_preflight_blocks_pending_device_tensor_caches(self):
+        source = json.loads(CONFIG.read_text(encoding="utf-8"))
+        source["cache_contract_status"] = "pending_device_tensor_rebuild"
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "campaign.json"
+            config_path.write_text(json.dumps(source), encoding="utf-8")
+            with self.assertRaisesRegex(FormalCampaignError, "device-tensor cache"):
+                preflight(load_config(config_path), query_devices=False)
+
+    def test_formal_config_selects_accepted_device_tensor_caches(self):
+        config = load_config(CONFIG)
+        self.assertEqual(
+            config.cache_contract_status, "accepted_device_tensor_readiness"
+        )
+        for cache in config.caches.values():
+            self.assertIn("final-device-tensor-caches-20260914", str(cache.path))
 
     def test_matrix_model_identity_mismatch_is_rejected(self):
         source = json.loads(CONFIG.read_text(encoding="utf-8"))

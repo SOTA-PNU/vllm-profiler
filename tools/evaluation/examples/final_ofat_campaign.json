@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "cache_contract_status": "pending_device_tensor_rebuild",
+  "cache_contract_status": "accepted_device_tensor_readiness",
   "automatic_retries": 0,
   "paths": {
     "matrix": "/home/yewon/perfetto-hetero-profiler/experiment-data/active/model-batch-topology/plan/final-experiment-plan/experiment_matrix.json",
@@ -54,32 +54,32 @@
   "caches": [
     {
       "key": "m05-b1",
-      "path": "/home/yewon/perfetto-hetero-profiler/experiment-data/active/model-batch-topology/caches/persistent/final-persistent-caches-20260910/qwen25-05b-b1",
-      "fingerprint": "eb25abf3ab7e6042cd66332186dbc1d2bce34588f5c47c088956e5da9d4143e3",
+      "path": "/home/yewon/perfetto-hetero-profiler/experiment-data/active/model-batch-topology/caches/persistent/final-device-tensor-caches-20260914/qwen25-05b-b1",
+      "fingerprint": "9429001ebcb924a85bfcf8e202d7f35d9f99fed67dfd67fc85523c155019709d",
       "max_num_seqs": 1
     },
     {
       "key": "m15-b1",
-      "path": "/home/yewon/perfetto-hetero-profiler/experiment-data/active/model-batch-topology/caches/persistent/final-persistent-caches-20260910/qwen25-15b-b1",
-      "fingerprint": "ad09e2575d132436d68be00e8ac8d8e5348506d66784ee4dc4c8662dc8975b77",
+      "path": "/home/yewon/perfetto-hetero-profiler/experiment-data/active/model-batch-topology/caches/persistent/final-device-tensor-caches-20260914/qwen25-15b-b1",
+      "fingerprint": "f83d342f9b2cc62b593c07d02ebf2c5b526e6f66317ae649fd258c60bcdfee15",
       "max_num_seqs": 1
     },
     {
       "key": "m15-b2",
-      "path": "/home/yewon/perfetto-hetero-profiler/experiment-data/active/model-batch-topology/caches/persistent/final-persistent-caches-20260910/qwen25-15b-b2",
-      "fingerprint": "ae20db3ce7e6c82308d4739005a58b9e4a8c6e267166021a02ba7bb2bb69317e",
+      "path": "/home/yewon/perfetto-hetero-profiler/experiment-data/active/model-batch-topology/caches/persistent/final-device-tensor-caches-20260914/qwen25-15b-b2",
+      "fingerprint": "95896f54d925da814429db80c4840cbe44933b8b6d22b7086eb1f45390f13aaf",
       "max_num_seqs": 2
     },
     {
       "key": "m15-b4",
-      "path": "/home/yewon/perfetto-hetero-profiler/experiment-data/active/model-batch-topology/caches/persistent/final-persistent-caches-20260910/qwen25-15b-b4",
-      "fingerprint": "3dfa726ea5e6799d3e6861e643a1c9b9fd9600a7d85b9f9d2e4551705e2b2a3d",
+      "path": "/home/yewon/perfetto-hetero-profiler/experiment-data/active/model-batch-topology/caches/persistent/final-device-tensor-caches-20260914/qwen25-15b-b4",
+      "fingerprint": "cf59f474fae9550146a2f14c5f1cac029e5aaba35b7bfbb0408c8b68b682713c",
       "max_num_seqs": 4
     },
     {
       "key": "m3-b1",
-      "path": "/home/yewon/perfetto-hetero-profiler/experiment-data/active/model-batch-topology/caches/persistent/final-persistent-caches-20260910/qwen25-3b-b1",
-      "fingerprint": "ebb39a0afe81e4016552369806cc0cffb91907d722b4982e059c043d03654ff5",
+      "path": "/home/yewon/perfetto-hetero-profiler/experiment-data/active/model-batch-topology/caches/persistent/final-device-tensor-caches-20260914/qwen25-3b-b1",
+      "fingerprint": "40eda145dcbf6ede44dd3b4628dfec88f37d694f572a0930fe771d8f3be0555e",
       "max_num_seqs": 1
     }
   ],
