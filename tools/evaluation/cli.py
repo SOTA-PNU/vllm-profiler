@@ -101,6 +101,14 @@ def build_parser() -> argparse.ArgumentParser:
     wave.add_argument("--round", type=int, dest="round_index")
     wave.add_argument("--block-root", type=Path)
     wave.add_argument("--dry-run", action="store_true")
+    formal = commands.add_parser(
+        "formal-campaign", help="Run the fixed 21-block OFAT campaign fail-closed."
+    )
+    formal.add_argument("--config", type=Path, required=True)
+    formal.add_argument("--campaign-root", type=Path, required=True)
+    formal.add_argument("--resume", action="store_true")
+    formal.add_argument("--dry-run", action="store_true")
+    formal.add_argument("--preflight-only", action="store_true")
     return parser
 
 
@@ -172,6 +180,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                                    condition_id=args.condition_id,
                                    round_index=args.round_index,
                                    block_root=args.block_root)
+        elif args.command == "formal-campaign":
+            from .formal_campaign import load_config, plan, preflight, run_campaign
+
+            config = load_config(args.config)
+            if args.dry_run and args.preflight_only:
+                parser.error("--dry-run and --preflight-only are mutually exclusive")
+            if args.dry_run:
+                result = plan(config, args.campaign_root)
+            elif args.preflight_only:
+                result = preflight(config)
+            else:
+                result = run_campaign(
+                    config, args.campaign_root, resume=args.resume,
+                )
         elif args.overview_command == "compare":
             from .overview import (
                 OverviewComparisonConfig,

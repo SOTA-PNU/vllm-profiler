@@ -220,7 +220,13 @@ class MatrixTests(unittest.TestCase):
             "m15-b1-npu",
         ]
         matrix = {
-            "request_protocol": {"measured_requests_per_block": 52},
+            "request_protocol": {
+                "measured_requests_per_block": 52,
+                "input_tokens": 256,
+                "output_tokens": 32,
+                "temperature": 0,
+                "streaming": True,
+            },
             "concurrency_protocol": [
                 {
                     "concurrency": value,
@@ -243,7 +249,13 @@ class MatrixTests(unittest.TestCase):
 
     def test_matrix_rejects_non_divisible_request_count(self):
         matrix = {
-            "request_protocol": {"measured_requests_per_block": 53},
+            "request_protocol": {
+                "measured_requests_per_block": 53,
+                "input_tokens": 256,
+                "output_tokens": 32,
+                "temperature": 0,
+                "streaming": True,
+            },
             "concurrency_protocol": [
                 {
                     "concurrency": value,

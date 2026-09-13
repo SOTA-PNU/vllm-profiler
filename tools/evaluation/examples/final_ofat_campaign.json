@@ -1,0 +1,96 @@
+{
+  "schema_version": "1.0",
+  "automatic_retries": 0,
+  "paths": {
+    "matrix": "/home/yewon/perfetto-hetero-profiler/final-experiment-plan/experiment_matrix.json",
+    "prompt_file": "/home/yewon/perfetto-hetero-profiler/model-topology-comparison-inputs/fixed-prompt.txt",
+    "profiler_root": "/home/yewon/perfetto-hetero-profiler/profiler-concurrent-wave-evaluation",
+    "vllm_rbln_root": "/home/yewon/perfetto-hetero-profiler/vllm-rbln-require-cache-hit",
+    "profiler_python": "/home/yewon/perfetto-hetero-profiler/.venvs/perfetto-tools/bin/python",
+    "tokenizer_python": "/home/yewon/perfetto-hetero-profiler/.venvs/native-dtype-rbln/bin/python",
+    "gpu_vllm": "/home/yewon/perfetto-hetero-profiler/.venvs/native-dtype-cuda/bin/vllm",
+    "npu_vllm_launcher": "/home/yewon/perfetto-hetero-profiler/profiler-concurrent-wave-evaluation/tools/evaluation/require_cache_hit_vllm",
+    "trace_processor": "/home/yewon/perfetto-hetero-profiler/.venvs/perfetto-tools/bin/trace_processor_shell-v56.1",
+    "nsys": "/usr/local/bin/nsys"
+  },
+  "protocol": {
+    "input_tokens": 256,
+    "output_tokens": 32,
+    "temperature": 0,
+    "streaming": true,
+    "ignore_eos": true,
+    "max_model_len": 512,
+    "block_size": 512,
+    "sample_interval_ms": 1000,
+    "gpu_memory_utilization": 0.2,
+    "npu_memory_utilization": 0.92,
+    "enable_prefix_caching": false
+  },
+  "models": [
+    {
+      "key": "m05",
+      "snapshot": "/home/yewon/.cache/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775",
+      "served_name": "Qwen2.5-0.5B-Instruct",
+      "revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+      "snapshot_fingerprint": "e4bc2d5d163385271b6fa01a7b54a074d8a2a5af2d0cc383c9e49eb11313f4a5"
+    },
+    {
+      "key": "m15",
+      "snapshot": "/home/yewon/.cache/huggingface/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+      "served_name": "Qwen2.5-1.5B-Instruct",
+      "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+      "snapshot_fingerprint": "8bb50dfc552913ba7190ac245e27b0b8231303d845faae9b25befd9dd8d8f391"
+    },
+    {
+      "key": "m3",
+      "snapshot": "/home/yewon/.cache/huggingface/hub/models--Qwen--Qwen2.5-3B-Instruct/snapshots/aa8e72537993ba99e69dfaafa59ed015b17504d1",
+      "served_name": "Qwen2.5-3B-Instruct",
+      "revision": "aa8e72537993ba99e69dfaafa59ed015b17504d1",
+      "snapshot_fingerprint": "0b32b9e4b69824d02813981543bd86a68ae07ea53bec69f15eb8cfd967074783"
+    }
+  ],
+  "caches": [
+    {
+      "key": "m05-b1",
+      "path": "/home/yewon/perfetto-hetero-profiler/final-persistent-caches-20260910/qwen25-05b-b1",
+      "fingerprint": "eb25abf3ab7e6042cd66332186dbc1d2bce34588f5c47c088956e5da9d4143e3",
+      "max_num_seqs": 1
+    },
+    {
+      "key": "m15-b1",
+      "path": "/home/yewon/perfetto-hetero-profiler/final-persistent-caches-20260910/qwen25-15b-b1",
+      "fingerprint": "ad09e2575d132436d68be00e8ac8d8e5348506d66784ee4dc4c8662dc8975b77",
+      "max_num_seqs": 1
+    },
+    {
+      "key": "m15-b2",
+      "path": "/home/yewon/perfetto-hetero-profiler/final-persistent-caches-20260910/qwen25-15b-b2",
+      "fingerprint": "ae20db3ce7e6c82308d4739005a58b9e4a8c6e267166021a02ba7bb2bb69317e",
+      "max_num_seqs": 2
+    },
+    {
+      "key": "m15-b4",
+      "path": "/home/yewon/perfetto-hetero-profiler/final-persistent-caches-20260910/qwen25-15b-b4",
+      "fingerprint": "3dfa726ea5e6799d3e6861e643a1c9b9fd9600a7d85b9f9d2e4551705e2b2a3d",
+      "max_num_seqs": 4
+    },
+    {
+      "key": "m3-b1",
+      "path": "/home/yewon/perfetto-hetero-profiler/final-persistent-caches-20260910/qwen25-3b-b1",
+      "fingerprint": "ebb39a0afe81e4016552369806cc0cffb91907d722b4982e059c043d03654ff5",
+      "max_num_seqs": 1
+    }
+  ],
+  "ports": {
+    "gpu_http": 19700,
+    "npu_http": 19701,
+    "proxy_http": 19702,
+    "gpu_nixl": 19759,
+    "npu_nixl": 19859
+  },
+  "timeouts": {
+    "startup_sec": 1800,
+    "request_sec": 300,
+    "shutdown_sec": 60
+  }
+}

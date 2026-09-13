@@ -39,6 +39,8 @@ class BlockSpec:
     warmup_requests: int
     measured_requests: int
     measured_waves: int
+    input_tokens: int = 256
+    output_tokens: int = 1
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -47,6 +49,7 @@ class BlockSpec:
             "warmup_requests": self.warmup_requests,
             "measured_requests": self.measured_requests,
             "measured_waves": self.measured_waves,
+            "input_tokens": self.input_tokens, "output_tokens": self.output_tokens,
         }
 
 
@@ -64,7 +67,16 @@ def load_matrix_blocks(path: Path) -> tuple[BlockSpec, ...]:
     protocols = value.get("concurrency_protocol")
     recommended = value.get("recommended_ofat")
     schedule = recommended.get("schedule") if isinstance(recommended, dict) else None
-    total = value.get("request_protocol", {}).get("measured_requests_per_block")
+    request_protocol = value.get("request_protocol", {})
+    total = request_protocol.get("measured_requests_per_block")
+    input_tokens = request_protocol.get("input_tokens")
+    output_tokens = request_protocol.get("output_tokens")
+    if (
+        input_tokens != 256 or output_tokens != 32
+        or request_protocol.get("temperature") != 0
+        or request_protocol.get("streaming") is not True
+    ):
+        raise ConcurrentWaveError("matrix does not match the fixed 256/32 stream contract")
     if not isinstance(protocols, list) or not isinstance(schedule, list):
         raise ConcurrentWaveError("matrix concurrency protocol or schedule is missing")
     by_concurrency: dict[int, dict[str, object]] = {}
@@ -98,7 +110,7 @@ def load_matrix_blocks(path: Path) -> tuple[BlockSpec, ...]:
             blocks.append(BlockSpec(
                 str(condition_id), round_index, concurrency, match.group("topology"),
                 int(protocol["warmup_requests"]), total,
-                int(protocol["measured_waves"]),
+                int(protocol["measured_waves"]), input_tokens, output_tokens,
             ))
     if len(blocks) != 21:
         raise ConcurrentWaveError("recommended schedule must contain 21 blocks")
@@ -249,12 +261,19 @@ class ConcurrentWaveClient:
             self._active += 1
         start_ns = end_ns = self.monotonic_ns()
         observation, error_text, error_status = None, None, None
+        success = False
         try:
             barrier.wait(timeout=self.timeout_sec)
             start_ns = self.monotonic_ns()
             with self.client_factory(self.base_url, timeout_sec=self.timeout_sec) as client:
                 observation = client.complete(**request)
             end_ns = observation.done_ns
+            if (
+                observation.input_tokens != self.block.input_tokens
+                or observation.output_tokens != self.block.output_tokens
+            ):
+                raise ConcurrentWaveError("token count mismatch")
+            success = True
         except Exception as error:
             end_ns, error_text = self.monotonic_ns(), _safe_error(error)
             status = re.search(r"http(?: error)?\s+(\d{3})", str(error).lower())
@@ -273,9 +292,9 @@ class ConcurrentWaveClient:
             "http_status": observation.http_status if observation else error_status,
             "input_tokens": observation.input_tokens if observation else None,
             "output_tokens": observation.output_tokens if observation else None,
-            "success": observation is not None, "error": error_text,
+            "success": success, "error": error_text,
         }
-        return _CallResult(row, observation)
+        return _CallResult(row, observation if success else None)
 
 
 def _select_block(path: Path, condition_id: str, round_index: int) -> BlockSpec:
@@ -292,47 +311,21 @@ def plan(matrix_path: Path) -> dict[str, object]:
             "blocks": [block.to_dict() for block in blocks]}
 
 
-def run_block(*, matrix_path: Path, hybrid_config_path: Path, condition_id: str,
-              round_index: int, block_root: Path) -> dict[str, object]:
-    """Run one scheduled Hybrid block through the existing lifecycle."""
-    block = _select_block(matrix_path, condition_id, round_index)
-    if block.topology != "hybrid":
-        raise ConcurrentWaveError("this adapter extends HybridRunner blocks only")
-    config = load_hybrid_runner_config(Path(hybrid_config_path))
-    if config.max_num_seqs < block.concurrency:
-        raise ConcurrentWaveError("max_num_seqs must be >= concurrency")
-    if not config.workload.streaming:
-        raise ConcurrentWaveError("hybrid workload must use streaming")
-    if (config.workload.warmup_requests != block.warmup_requests
-            or config.workload.measured_requests != block.measured_requests):
-        raise ConcurrentWaveError("hybrid request counts do not match matrix protocol")
-    output = Path(block_root)
-    if output.exists():
-        raise ConcurrentWaveError("block output already exists")
-    output.mkdir(parents=True)
-    holder: list[ConcurrentWaveClient] = []
-
-    def client_factory(base_url: str, *, timeout_sec: float) -> ConcurrentWaveClient:
-        holder.append(ConcurrentWaveClient(base_url, timeout_sec=timeout_sec, block=block))
-        return holder[-1]
-
-    runner_status, runner_errors = "failed", ()
-    try:
-        result = HybridRunner(
-            config, run_root=output / "runner", run_id=f"r{round_index:02d}-{condition_id}",
-            profile_mode="monitor", enable_telemetry=True, client_factory=client_factory,
-        ).run()
-        runner_status = result.status.value
-        runner_errors = tuple(_safe_error(RuntimeError(item)) for item in result.errors)
-    except Exception as error:
-        runner_errors = (_safe_error(error),)
-    requests = holder[0].request_rows if holder else []
-    waves = holder[0].wave_rows if holder else []
+def write_block_artifacts(
+    output: Path,
+    block: BlockSpec,
+    requests: list[dict[str, object]],
+    waves: list[dict[str, object]],
+    *,
+    runner_status: str,
+    runner_errors: tuple[str, ...] = (),
+) -> dict[str, object]:
+    """Publish the four deterministic evaluation artifacts for one block."""
     write_jsonl_exclusive(output / "requests.jsonl", requests)
     write_jsonl_exclusive(output / "waves.jsonl", waves)
     expected_waves = block.warmup_requests // block.concurrency + block.measured_waves
     validation = {
-        "condition_id": condition_id, "round": round_index,
+        "condition_id": block.condition_id, "round": block.round_index,
         "concurrency": block.concurrency, "expected_wave_count": expected_waves,
         "observed_wave_count": len(waves),
         "failed_wave_ids": [row["wave_id"] for row in waves if not row["success"]],
@@ -343,7 +336,7 @@ def run_block(*, matrix_path: Path, hybrid_config_path: Path, condition_id: str,
     write_pretty_json(output / "concurrency_validation.json", validation)
     valid = validation["valid"] is True and runner_status == RunStatus.SUCCEEDED.value
     summary = {
-        "condition_id": condition_id, "round": round_index,
+        "condition_id": block.condition_id, "round": block.round_index,
         "status": "succeeded" if valid else "failed", "runner_status": runner_status,
         "request_count": len(requests), "wave_count": len(waves),
         "runner_errors": list(runner_errors), "stores_prompt_or_generated_text": False,
@@ -354,3 +347,55 @@ def run_block(*, matrix_path: Path, hybrid_config_path: Path, condition_id: str,
     if not valid:
         raise ConcurrentWaveError(f"block failed; diagnostics preserved in {output}")
     return summary
+
+
+def run_block(*, matrix_path: Path, hybrid_config_path: Path, condition_id: str,
+              round_index: int, block_root: Path,
+              request_client_factory: Callable[..., object] = OpenAICompletionClient,
+              runner_factory: Callable[..., HybridRunner] = HybridRunner,
+              config_override: object | None = None) -> dict[str, object]:
+    """Run one scheduled Hybrid block through the existing lifecycle."""
+    block = _select_block(matrix_path, condition_id, round_index)
+    if block.topology != "hybrid":
+        raise ConcurrentWaveError("this adapter extends HybridRunner blocks only")
+    config = (
+        config_override
+        if config_override is not None
+        else load_hybrid_runner_config(Path(hybrid_config_path))
+    )
+    if config.max_num_seqs < block.concurrency:
+        raise ConcurrentWaveError("max_num_seqs must be >= concurrency")
+    if not config.workload.streaming:
+        raise ConcurrentWaveError("hybrid workload must use streaming")
+    if (config.workload.warmup_requests != block.warmup_requests
+            or config.workload.measured_requests != block.measured_requests
+            or config.workload.max_output_tokens != block.output_tokens):
+        raise ConcurrentWaveError("hybrid request counts do not match matrix protocol")
+    output = Path(block_root)
+    if output.exists():
+        raise ConcurrentWaveError("block output already exists")
+    output.mkdir(parents=True)
+    holder: list[ConcurrentWaveClient] = []
+
+    def client_factory(base_url: str, *, timeout_sec: float) -> ConcurrentWaveClient:
+        holder.append(ConcurrentWaveClient(
+            base_url, timeout_sec=timeout_sec, block=block,
+            client_factory=request_client_factory,
+        ))
+        return holder[-1]
+
+    runner_status, runner_errors = "failed", ()
+    try:
+        result = runner_factory(
+            config, run_root=output / "runner", run_id=f"r{round_index:02d}-{condition_id}",
+            profile_mode="monitor", enable_telemetry=True, client_factory=client_factory,
+        ).run()
+        runner_status = result.status.value
+        runner_errors = tuple(_safe_error(RuntimeError(item)) for item in result.errors)
+    except Exception as error:
+        runner_errors = (_safe_error(error),)
+    return write_block_artifacts(
+        output, block, holder[0].request_rows if holder else [],
+        holder[0].wave_rows if holder else [], runner_status=runner_status,
+        runner_errors=runner_errors,
+    )

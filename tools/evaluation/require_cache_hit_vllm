@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+unset VLLM_RBLN_COMPILE_ONLY
+unset VLLM_RBLN_COMPILE_STRICT_MODE
+export VLLM_RBLN_REQUIRE_CACHE_HIT=1
+
+exec /home/yewon/perfetto-hetero-profiler/.venvs/native-dtype-rbln/bin/vllm "$@"
