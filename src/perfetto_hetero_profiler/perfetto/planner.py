@@ -654,10 +654,6 @@ def _token_output_instant(evidence: TokenInstantEvidence) -> InstantSpec:
     )
 
 
-def _annotation_dict(spec: SliceSpec) -> dict[str, AnnotationValue]:
-    return dict(spec.annotations)
-
-
 def _matching_pair(
     paired: Iterable[_PairedSlice],
     track_key: str,

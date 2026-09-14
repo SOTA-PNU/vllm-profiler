@@ -191,6 +191,20 @@ def _normalize_roots(
     return normalized
 
 
+def _roots_with_output(
+    roots: Mapping[str, str | Path],
+    output_root_id: str,
+) -> dict[str, Path]:
+    """Normalize artifact roots and require the output root among them."""
+
+    normalized = _normalize_roots(roots)
+    if output_root_id not in normalized:
+        raise ArtifactInventoryError(
+            f"output_root_id is not an artifact root: {output_root_id!r}"
+        )
+    return normalized
+
+
 def _detached_outputs(output_root_id: str) -> frozenset[tuple[str, str]]:
     return frozenset(
         {
@@ -408,11 +422,7 @@ def build_manifest(
 ) -> dict[str, Any]:
     """Build a deterministic manifest without writing or mutating any root."""
 
-    normalized = _normalize_roots(roots)
-    if output_root_id not in normalized:
-        raise ArtifactInventoryError(
-            f"output_root_id is not an artifact root: {output_root_id!r}"
-        )
+    normalized = _roots_with_output(roots, output_root_id)
     exclusions = _detached_outputs(output_root_id)
     artifacts = _inventory(normalized, exclusions=exclusions)
     required = _normalize_required(
@@ -652,11 +662,7 @@ def validate_manifest(
 ) -> dict[str, Any]:
     """Purely validate a manifest against current disk state."""
 
-    normalized = _normalize_roots(roots)
-    if output_root_id not in normalized:
-        raise ArtifactInventoryError(
-            f"output_root_id is not an artifact root: {output_root_id!r}"
-        )
+    normalized = _roots_with_output(roots, output_root_id)
     path = _manifest_path(
         manifest_path,
         normalized,
@@ -765,11 +771,7 @@ def verify_stored_sidecar(
 ) -> dict[str, Any]:
     """Verify the immutable sidecar against the manifest and a fresh report."""
 
-    normalized = _normalize_roots(roots)
-    if output_root_id not in normalized:
-        raise ArtifactInventoryError(
-            f"output_root_id is not an artifact root: {output_root_id!r}"
-        )
+    normalized = _roots_with_output(roots, output_root_id)
     manifest = _manifest_path(
         manifest_path,
         normalized,

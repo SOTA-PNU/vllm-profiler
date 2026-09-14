@@ -340,6 +340,325 @@ def _safe_observed_schema_version(value: object) -> str:
     return f"<{type(value).__name__}>"
 
 
+def _nsys_slice(
+    *,
+    bridge: _ClockBridge,
+    session_unix_ns: int,
+    track_key: str,
+    name: str,
+    category: str,
+    start: int,
+    end: int,
+    duration_label: str,
+    values: dict[str, object],
+    endpoint_kind: str,
+    correlation_id: int | None = None,
+    correlation_scope: str | None = None,
+) -> _NativeSlice:
+    """Build one Nsight slice; every activity table shares this shape."""
+
+    return _NativeSlice(
+        spec=SliceSpec(
+            track_key=track_key,
+            name=name,
+            timestamp_ns=bridge.unix_to_canonical(session_unix_ns + int(start)),
+            duration_ns=_positive_duration(start, end, duration_label),
+            annotations=_nsys_annotations(
+                bridge,
+                native_start_ns=int(start),
+                values=values,
+            ),
+        ),
+        category=category,
+        correlation_id=correlation_id,
+        endpoint_kind=endpoint_kind,
+        correlation_scope=correlation_scope,
+    )
+
+
+def _nsys_device_link(
+    correlation: object,
+    global_pid: object,
+) -> tuple[int | None, str | None]:
+    """Link a device activity to its process only when the pid is explicit."""
+
+    if _non_bool_int_or_none(global_pid) is None:
+        return None, None
+    return _non_bool_int_or_none(correlation), f"nsight-process:{int(global_pid)}"
+
+
+def _nsys_process_values(
+    process_names: Mapping[int, tuple[int, str]],
+    global_pid: object,
+) -> dict[str, object]:
+    """Resolve the recorded OS process for one device activity row."""
+
+    process = process_names.get(int(global_pid)) if global_pid is not None else None
+    return {
+        "pid": process[0] if process else None,
+        "process_name": process[1] if process else None,
+    }
+
+
+def _read_runtime_rows(connection, strings, bridge, session_ns, ensure_track):
+    rows = connection.execute(
+        """
+        SELECT start, end, eventClass, globalTid, correlationId, nameId,
+               returnValue
+        FROM CUPTI_ACTIVITY_KIND_RUNTIME
+        ORDER BY start, end, eventClass, globalTid, correlationId, nameId
+        """
+    )
+    for start, end, event_class, global_tid, correlation, name_id, return_value in rows:
+        category = _nsys_api_category(event_class)
+        leaf = ensure_track(
+            category, f"tid:{global_tid}", f"Nsight globalTid {global_tid}"
+        )
+        yield _nsys_slice(
+            bridge=bridge,
+            session_unix_ns=session_ns,
+            track_key=leaf,
+            name=strings.get(int(name_id), f"StringId {name_id}"),
+            category=category,
+            start=start,
+            end=end,
+            duration_label="Nsight API",
+            values={
+                "category": category,
+                "global_tid": global_tid,
+                "correlation_id": correlation,
+                "return_value": return_value,
+                "event_class": event_class,
+            },
+            endpoint_kind="host_api",
+            correlation_id=_non_bool_int_or_none(correlation),
+            correlation_scope=(
+                f"nsight-process:{int(global_tid) & _NSYS_GLOBAL_PID_MASK}"
+            ),
+        )
+
+
+def _read_kernel_rows(
+    connection, strings, process_names, bridge, session_ns, ensure_track
+):
+    rows = connection.execute(
+        """
+        SELECT start, end, deviceId, contextId, streamId, correlationId,
+               globalPid, demangledName, shortName, gridX, gridY, gridZ,
+               blockX, blockY, blockZ, registersPerThread,
+               staticSharedMemory, dynamicSharedMemory
+        FROM CUPTI_ACTIVITY_KIND_KERNEL
+        ORDER BY start, end, deviceId, contextId, streamId, correlationId
+        """
+    )
+    category = "CUDA kernels"
+    for row in rows:
+        (
+            start, end, device, context, stream, correlation, global_pid,
+            demangled_name, short_name, grid_x, grid_y, grid_z,
+            block_x, block_y, block_z, registers, static_shared, dynamic_shared,
+        ) = row
+        leaf = ensure_track(
+            category,
+            f"device:{device}:context:{context}:stream:{stream}",
+            f"GPU {device} / context {context} / stream {stream}",
+        )
+        correlation_id, correlation_scope = _nsys_device_link(correlation, global_pid)
+        yield _nsys_slice(
+            bridge=bridge,
+            session_unix_ns=session_ns,
+            track_key=leaf,
+            name=strings.get(
+                int(demangled_name),
+                strings.get(int(short_name), f"StringId {short_name}"),
+            ),
+            category=category,
+            start=start,
+            end=end,
+            duration_label="Nsight kernel",
+            values={
+                "category": category,
+                "device": device,
+                "context": context,
+                "stream": stream,
+                "correlation_id": correlation,
+                "global_pid": global_pid,
+                **_nsys_process_values(process_names, global_pid),
+                "grid": f"{grid_x},{grid_y},{grid_z}",
+                "block": f"{block_x},{block_y},{block_z}",
+                "registers_per_thread": registers,
+                "static_shared_memory": static_shared,
+                "dynamic_shared_memory": dynamic_shared,
+            },
+            endpoint_kind="device",
+            correlation_id=correlation_id,
+            correlation_scope=correlation_scope,
+        )
+
+
+def _read_memcpy_rows(connection, process_names, bridge, session_ns, ensure_track):
+    rows = connection.execute(
+        """
+        SELECT m.start, m.end, m.deviceId, m.contextId, m.streamId,
+               m.correlationId, m.globalPid, m.bytes, m.copyKind,
+               copy.label, m.srcKind, src.label, m.dstKind, dst.label
+        FROM CUPTI_ACTIVITY_KIND_MEMCPY AS m
+        LEFT JOIN ENUM_CUDA_MEMCPY_OPER AS copy ON copy.id = m.copyKind
+        LEFT JOIN ENUM_CUDA_MEM_KIND AS src ON src.id = m.srcKind
+        LEFT JOIN ENUM_CUDA_MEM_KIND AS dst ON dst.id = m.dstKind
+        ORDER BY m.start, m.end, m.deviceId, m.contextId, m.streamId,
+                 m.correlationId
+        """
+    )
+    category = "CUDA memcpy"
+    for row in rows:
+        (
+            start, end, device, context, stream, correlation, global_pid,
+            byte_count, copy_kind, copy_label, src_kind, src_label,
+            dst_kind, dst_label,
+        ) = row
+        leaf = ensure_track(
+            category,
+            f"device:{device}:context:{context}:stream:{stream}",
+            f"GPU {device} / context {context} / stream {stream}",
+        )
+        correlation_id, correlation_scope = _nsys_device_link(correlation, global_pid)
+        yield _nsys_slice(
+            bridge=bridge,
+            session_unix_ns=session_ns,
+            track_key=leaf,
+            name=f"Memcpy {copy_label or copy_kind}",
+            category=category,
+            start=start,
+            end=end,
+            duration_label="Nsight memcpy",
+            values={
+                "category": category,
+                "device": device,
+                "context": context,
+                "stream": stream,
+                "correlation_id": correlation,
+                "global_pid": global_pid,
+                **_nsys_process_values(process_names, global_pid),
+                "bytes": byte_count,
+                "copy_kind": copy_kind,
+                "copy_label": copy_label,
+                "source_kind": src_kind,
+                "source_label": src_label,
+                "destination_kind": dst_kind,
+                "destination_label": dst_label,
+            },
+            endpoint_kind="device",
+            correlation_id=correlation_id,
+            correlation_scope=correlation_scope,
+        )
+
+
+def _read_memset_rows(connection, bridge, session_ns, ensure_track):
+    # Nsight omits activity tables that have no rows in some exports.  Memset
+    # is an optional activity for conversion, so a missing table means there
+    # were no memset events rather than that the export is malformed.
+    has_memset = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        ("CUPTI_ACTIVITY_KIND_MEMSET",),
+    ).fetchone()
+    rows = (
+        connection.execute(
+            """
+            SELECT start, end, deviceId, contextId, streamId, correlationId,
+                   globalPid, value, bytes, memKind
+            FROM CUPTI_ACTIVITY_KIND_MEMSET
+            ORDER BY start, end, deviceId, contextId, streamId, correlationId
+            """
+        )
+        if has_memset is not None
+        else ()
+    )
+    category = "CUDA memset"
+    for (
+        start, end, device, context, stream, correlation, global_pid,
+        value, byte_count, mem_kind,
+    ) in rows:
+        leaf = ensure_track(
+            category,
+            f"device:{device}:context:{context}:stream:{stream}",
+            f"GPU {device} / context {context} / stream {stream}",
+        )
+        correlation_id, correlation_scope = _nsys_device_link(correlation, global_pid)
+        yield _nsys_slice(
+            bridge=bridge,
+            session_unix_ns=session_ns,
+            track_key=leaf,
+            name="Memset",
+            category=category,
+            start=start,
+            end=end,
+            duration_label="Nsight memset",
+            values={
+                "category": category,
+                "device": device,
+                "context": context,
+                "stream": stream,
+                "correlation_id": correlation,
+                "global_pid": global_pid,
+                "value": value,
+                "bytes": byte_count,
+                "memory_kind": mem_kind,
+            },
+            endpoint_kind="device",
+            correlation_id=correlation_id,
+            correlation_scope=correlation_scope,
+        )
+
+
+def _read_nvtx_rows(connection, strings, bridge, session_ns, ensure_track):
+    rows = connection.execute(
+        """
+        SELECT start, end, eventType, rangeId, text, globalTid, textId,
+               domainId
+        FROM NVTX_EVENTS
+        ORDER BY start, end, eventType, globalTid, rangeId
+        """
+    )
+    category = "NVTX ranges"
+    result: list[_NativeSlice] = []
+    metadata_count = 0
+    for start, end, event_type, range_id, text, global_tid, text_id, domain_id in rows:
+        if end is None or int(end) <= int(start):
+            metadata_count += 1
+            continue
+        leaf = ensure_track(
+            category,
+            f"tid:{global_tid}:domain:{domain_id}",
+            f"Nsight globalTid {global_tid} / domain {domain_id}",
+        )
+        result.append(
+            _nsys_slice(
+                bridge=bridge,
+                session_unix_ns=session_ns,
+                track_key=leaf,
+                name=(
+                    str(text)
+                    if text
+                    else strings.get(int(text_id), f"NVTX range {range_id}")
+                ),
+                category=category,
+                start=start,
+                end=end,
+                duration_label="NVTX range",
+                values={
+                    "category": category,
+                    "event_type": event_type,
+                    "range_id": range_id,
+                    "global_tid": global_tid,
+                    "domain_id": domain_id,
+                },
+                endpoint_kind="annotation",
+            )
+        )
+    return result, metadata_count
+
+
 def _read_nsys_rows(
     loaded: LoadedHybridRun,
     connection: sqlite3.Connection,
@@ -379,8 +698,6 @@ def _read_nsys_rows(
         "CUDA memset": 5,
     }
     category_keys: dict[str, str] = {}
-    result: list[_NativeSlice] = []
-    counts: Counter[str] = Counter()
 
     def ensure_track(
         category: str,
@@ -421,343 +738,23 @@ def _read_nsys_rows(
             )
         return leaf_key
 
-    runtime_rows = connection.execute(
-        """
-        SELECT start, end, eventClass, globalTid, correlationId, nameId,
-               returnValue
-        FROM CUPTI_ACTIVITY_KIND_RUNTIME
-        ORDER BY start, end, eventClass, globalTid, correlationId, nameId
-        """
+    session_ns = session_unix_ns
+    result = list(
+        _read_runtime_rows(connection, strings, bridge, session_ns, ensure_track)
     )
-    for start, end, event_class, global_tid, correlation, name_id, return_value in runtime_rows:
-        category = _nsys_api_category(event_class)
-        lane = f"Nsight globalTid {global_tid}"
-        leaf = ensure_track(category, f"tid:{global_tid}", lane)
-        name = strings.get(int(name_id), f"StringId {name_id}")
-        annotations = _nsys_annotations(
-            bridge,
-            native_start_ns=int(start),
-            values={
-                "category": category,
-                "global_tid": global_tid,
-                "correlation_id": correlation,
-                "return_value": return_value,
-                "event_class": event_class,
-            },
-        )
-        result.append(
-            _NativeSlice(
-                spec=SliceSpec(
-                    track_key=leaf,
-                    name=name,
-                    timestamp_ns=bridge.unix_to_canonical(
-                        session_unix_ns + int(start)
-                    ),
-                    duration_ns=_positive_duration(start, end, "Nsight API"),
-                    annotations=annotations,
-                ),
-                category=category,
-                correlation_id=_non_bool_int_or_none(correlation),
-                endpoint_kind="host_api",
-                correlation_scope=(
-                    f"nsight-process:{int(global_tid) & _NSYS_GLOBAL_PID_MASK}"
-                ),
-            )
-        )
-        counts[category] += 1
-
-    kernel_rows = connection.execute(
-        """
-        SELECT start, end, deviceId, contextId, streamId, correlationId,
-               globalPid, demangledName, shortName, gridX, gridY, gridZ,
-               blockX, blockY, blockZ, registersPerThread,
-               staticSharedMemory, dynamicSharedMemory
-        FROM CUPTI_ACTIVITY_KIND_KERNEL
-        ORDER BY start, end, deviceId, contextId, streamId, correlationId
-        """
+    result += _read_kernel_rows(
+        connection, strings, process_names, bridge, session_ns, ensure_track
     )
-    for row in kernel_rows:
-        (
-            start,
-            end,
-            device,
-            context,
-            stream,
-            correlation,
-            global_pid,
-            demangled_name,
-            short_name,
-            grid_x,
-            grid_y,
-            grid_z,
-            block_x,
-            block_y,
-            block_z,
-            registers,
-            static_shared,
-            dynamic_shared,
-        ) = row
-        category = "CUDA kernels"
-        lane = (
-            f"GPU {device} / context {context} / stream {stream}"
-        )
-        leaf = ensure_track(
-            category,
-            f"device:{device}:context:{context}:stream:{stream}",
-            lane,
-        )
-        process = process_names.get(int(global_pid)) if global_pid is not None else None
-        values = {
-            "category": category,
-            "device": device,
-            "context": context,
-            "stream": stream,
-            "correlation_id": correlation,
-            "global_pid": global_pid,
-            "pid": process[0] if process else None,
-            "process_name": process[1] if process else None,
-            "grid": f"{grid_x},{grid_y},{grid_z}",
-            "block": f"{block_x},{block_y},{block_z}",
-            "registers_per_thread": registers,
-            "static_shared_memory": static_shared,
-            "dynamic_shared_memory": dynamic_shared,
-        }
-        result.append(
-            _NativeSlice(
-                spec=SliceSpec(
-                    track_key=leaf,
-                    name=strings.get(
-                        int(demangled_name),
-                        strings.get(int(short_name), f"StringId {short_name}"),
-                    ),
-                    timestamp_ns=bridge.unix_to_canonical(
-                        session_unix_ns + int(start)
-                    ),
-                    duration_ns=_positive_duration(start, end, "Nsight kernel"),
-                    annotations=_nsys_annotations(
-                        bridge,
-                        native_start_ns=int(start),
-                        values=values,
-                    ),
-                ),
-                category=category,
-                correlation_id=(
-                    _non_bool_int_or_none(correlation)
-                    if _non_bool_int_or_none(global_pid) is not None
-                    else None
-                ),
-                endpoint_kind="device",
-                correlation_scope=(
-                    f"nsight-process:{int(global_pid)}"
-                    if _non_bool_int_or_none(global_pid) is not None
-                    else None
-                ),
-            )
-        )
-        counts[category] += 1
-
-    memcpy_rows = connection.execute(
-        """
-        SELECT m.start, m.end, m.deviceId, m.contextId, m.streamId,
-               m.correlationId, m.globalPid, m.bytes, m.copyKind,
-               copy.label, m.srcKind, src.label, m.dstKind, dst.label
-        FROM CUPTI_ACTIVITY_KIND_MEMCPY AS m
-        LEFT JOIN ENUM_CUDA_MEMCPY_OPER AS copy ON copy.id = m.copyKind
-        LEFT JOIN ENUM_CUDA_MEM_KIND AS src ON src.id = m.srcKind
-        LEFT JOIN ENUM_CUDA_MEM_KIND AS dst ON dst.id = m.dstKind
-        ORDER BY m.start, m.end, m.deviceId, m.contextId, m.streamId,
-                 m.correlationId
-        """
+    result += _read_memcpy_rows(
+        connection, process_names, bridge, session_ns, ensure_track
     )
-    for row in memcpy_rows:
-        (
-            start,
-            end,
-            device,
-            context,
-            stream,
-            correlation,
-            global_pid,
-            byte_count,
-            copy_kind,
-            copy_label,
-            src_kind,
-            src_label,
-            dst_kind,
-            dst_label,
-        ) = row
-        category = "CUDA memcpy"
-        leaf = ensure_track(
-            category,
-            f"device:{device}:context:{context}:stream:{stream}",
-            f"GPU {device} / context {context} / stream {stream}",
-        )
-        process = process_names.get(int(global_pid)) if global_pid is not None else None
-        result.append(
-            _NativeSlice(
-                spec=SliceSpec(
-                    track_key=leaf,
-                    name=f"Memcpy {copy_label or copy_kind}",
-                    timestamp_ns=bridge.unix_to_canonical(
-                        session_unix_ns + int(start)
-                    ),
-                    duration_ns=_positive_duration(start, end, "Nsight memcpy"),
-                    annotations=_nsys_annotations(
-                        bridge,
-                        native_start_ns=int(start),
-                        values={
-                            "category": category,
-                            "device": device,
-                            "context": context,
-                            "stream": stream,
-                            "correlation_id": correlation,
-                            "global_pid": global_pid,
-                            "pid": process[0] if process else None,
-                            "process_name": process[1] if process else None,
-                            "bytes": byte_count,
-                            "copy_kind": copy_kind,
-                            "copy_label": copy_label,
-                            "source_kind": src_kind,
-                            "source_label": src_label,
-                            "destination_kind": dst_kind,
-                            "destination_label": dst_label,
-                        },
-                    ),
-                ),
-                category=category,
-                correlation_id=(
-                    _non_bool_int_or_none(correlation)
-                    if _non_bool_int_or_none(global_pid) is not None
-                    else None
-                ),
-                endpoint_kind="device",
-                correlation_scope=(
-                    f"nsight-process:{int(global_pid)}"
-                    if _non_bool_int_or_none(global_pid) is not None
-                    else None
-                ),
-            )
-        )
-        counts[category] += 1
-
-    # Nsight omits activity tables that have no rows in some exports.  Memset
-    # is an optional activity for conversion, so a missing table means there
-    # were no memset events rather than that the export is malformed.
-    has_memset = connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-        ("CUPTI_ACTIVITY_KIND_MEMSET",),
-    ).fetchone()
-    memset_rows = (
-        connection.execute(
-            """
-            SELECT start, end, deviceId, contextId, streamId, correlationId,
-                   globalPid, value, bytes, memKind
-            FROM CUPTI_ACTIVITY_KIND_MEMSET
-            ORDER BY start, end, deviceId, contextId, streamId, correlationId
-            """
-        )
-        if has_memset is not None
-        else ()
+    result += _read_memset_rows(connection, bridge, session_ns, ensure_track)
+    nvtx_slices, metadata_count = _read_nvtx_rows(
+        connection, strings, bridge, session_ns, ensure_track
     )
-    for start, end, device, context, stream, correlation, global_pid, value, byte_count, mem_kind in memset_rows:
-        category = "CUDA memset"
-        leaf = ensure_track(
-            category,
-            f"device:{device}:context:{context}:stream:{stream}",
-            f"GPU {device} / context {context} / stream {stream}",
-        )
-        result.append(
-            _NativeSlice(
-                spec=SliceSpec(
-                    track_key=leaf,
-                    name="Memset",
-                    timestamp_ns=bridge.unix_to_canonical(
-                        session_unix_ns + int(start)
-                    ),
-                    duration_ns=_positive_duration(start, end, "Nsight memset"),
-                    annotations=_nsys_annotations(
-                        bridge,
-                        native_start_ns=int(start),
-                        values={
-                            "category": category,
-                            "device": device,
-                            "context": context,
-                            "stream": stream,
-                            "correlation_id": correlation,
-                            "global_pid": global_pid,
-                            "value": value,
-                            "bytes": byte_count,
-                            "memory_kind": mem_kind,
-                        },
-                    ),
-                ),
-                category=category,
-                correlation_id=(
-                    _non_bool_int_or_none(correlation)
-                    if _non_bool_int_or_none(global_pid) is not None
-                    else None
-                ),
-                endpoint_kind="device",
-                correlation_scope=(
-                    f"nsight-process:{int(global_pid)}"
-                    if _non_bool_int_or_none(global_pid) is not None
-                    else None
-                ),
-            )
-        )
-        counts[category] += 1
-
-    metadata_count = 0
-    nvtx_rows = connection.execute(
-        """
-        SELECT start, end, eventType, rangeId, text, globalTid, textId,
-               domainId
-        FROM NVTX_EVENTS
-        ORDER BY start, end, eventType, globalTid, rangeId
-        """
-    )
-    for start, end, event_type, range_id, text, global_tid, text_id, domain_id in nvtx_rows:
-        if end is None or int(end) <= int(start):
-            metadata_count += 1
-            continue
-        category = "NVTX ranges"
-        leaf = ensure_track(
-            category,
-            f"tid:{global_tid}:domain:{domain_id}",
-            f"Nsight globalTid {global_tid} / domain {domain_id}",
-        )
-        name = (
-            str(text)
-            if text
-            else strings.get(int(text_id), f"NVTX range {range_id}")
-        )
-        result.append(
-            _NativeSlice(
-                spec=SliceSpec(
-                    track_key=leaf,
-                    name=name,
-                    timestamp_ns=bridge.unix_to_canonical(
-                        session_unix_ns + int(start)
-                    ),
-                    duration_ns=_positive_duration(start, end, "NVTX range"),
-                    annotations=_nsys_annotations(
-                        bridge,
-                        native_start_ns=int(start),
-                        values={
-                            "category": category,
-                            "event_type": event_type,
-                            "range_id": range_id,
-                            "global_tid": global_tid,
-                            "domain_id": domain_id,
-                        },
-                    ),
-                ),
-                category=category,
-                correlation_id=None,
-                endpoint_kind="annotation",
-            )
-        )
-        counts[category] += 1
+    result += nvtx_slices
+    # Every appended slice is counted exactly once by its own category.
+    counts: Counter[str] = Counter(item.category for item in result)
     return result, tracks, counts, metadata_count
 
 

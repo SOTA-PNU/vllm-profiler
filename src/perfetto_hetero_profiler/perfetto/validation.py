@@ -1355,13 +1355,7 @@ def _timeline_summary_plan_contract_mismatches(plan: TracePlan) -> list[str]:
         ):
             mismatches.append("unclassified gap metadata is invalid")
 
-    detail_sources: list[int] = []
-    detail_destinations: list[int] = []
-    for spec in plan.slices:
-        detail_sources.extend(spec.begin_flow_ids)
-        detail_sources.extend(spec.end_flow_ids)
-        detail_destinations.extend(spec.begin_terminating_flow_ids)
-        detail_destinations.extend(spec.end_terminating_flow_ids)
+    detail_sources, detail_destinations = _flow_endpoints(plan)
     declared_counts = Counter(flow.flow_id for flow in plan.flows)
     expected_counts = Counter({flow_id: 1 for flow_id in declared_counts})
     if (
@@ -1372,46 +1366,9 @@ def _timeline_summary_plan_contract_mismatches(plan: TracePlan) -> list[str]:
     return mismatches
 
 
-def _validate_unavailable_kpi_annotations(
-    annotations: Mapping[str, AnnotationValue],
-    available_identities: set[str],
-    mismatches: list[str],
-) -> None:
-    raw_count = annotations.get("hetero.unavailable_kpi_count")
-    raw_json = annotations.get("hetero.unavailable_kpis_json")
-    if (
-        isinstance(raw_count, bool)
-        or not isinstance(raw_count, int)
-        or raw_count < 0
-        or not isinstance(raw_json, str)
-    ):
-        mismatches.append("Data Quality unavailable KPI annotations are invalid")
-        return
-    try:
-        unavailable = json.loads(raw_json)
-    except (json.JSONDecodeError, TypeError):
-        mismatches.append("Data Quality unavailable KPI JSON is invalid")
-        return
-    if (
-        not isinstance(unavailable, dict)
-        or len(unavailable) != raw_count
-        or any(
-            not isinstance(identity, str)
-            or not identity
-            or not isinstance(reason, str)
-            or not reason
-            for identity, reason in unavailable.items()
-        )
-    ):
-        mismatches.append("Data Quality unavailable KPI inventory differs")
-        return
-    if available_identities.intersection(unavailable):
-        mismatches.append(
-            "unavailable KPI was also emitted as an available counter"
-        )
+def _flow_endpoints(plan: TracePlan) -> tuple[list[int], list[int]]:
+    """Collect declared flow endpoint ids from every slice, in plan order."""
 
-
-def _flow_endpoint_summary(plan: TracePlan) -> dict[str, object]:
     sources: list[int] = []
     destinations: list[int] = []
     for spec in plan.slices:
@@ -1419,6 +1376,11 @@ def _flow_endpoint_summary(plan: TracePlan) -> dict[str, object]:
         sources.extend(spec.end_flow_ids)
         destinations.extend(spec.begin_terminating_flow_ids)
         destinations.extend(spec.end_terminating_flow_ids)
+    return sources, destinations
+
+
+def _flow_endpoint_summary(plan: TracePlan) -> dict[str, object]:
+    sources, destinations = _flow_endpoints(plan)
     declared = [flow.flow_id for flow in plan.flows]
     source_counts = Counter(sources)
     destination_counts = Counter(destinations)

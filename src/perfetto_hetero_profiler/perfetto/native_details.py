@@ -32,6 +32,7 @@ from typing import Any, Final
 from ..support.files import sha256_file
 from .loader import LoadedHybridRun, SourceRunMetadata
 from .model import CounterSpec, FlowSpec, InstantSpec, SliceSpec, TrackSpec, TracePlan
+from .planner import _stable_uint64
 
 
 class NativeDetailError(RuntimeError):
@@ -1021,16 +1022,6 @@ def _read_nsys_rows(
     return read_nsys_rows(connection, bridge, native_epoch_base_ns)
 
 
-def _rbln_flow_edge_count(
-    endpoints: Mapping[int, Sequence[tuple[int, int, bool]]],
-) -> int:
-    """Compatibility entry point for RBLN flow validation."""
-
-    from .native_rbln import rbln_flow_edge_count
-
-    return rbln_flow_edge_count(endpoints)
-
-
 def _rbln_native_only_result(
     source: SourceRunMetadata,
     *,
@@ -1618,14 +1609,6 @@ def _stable_token(value: str) -> str:
     readable = readable[:40] or "item"
     digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
     return f"{readable}-{digest}"
-
-
-def _stable_uint64(run_id: str, namespace: str, value: str) -> int:
-    digest = hashlib.sha256(
-        f"{run_id}\0{namespace}\0{value}".encode("utf-8")
-    ).digest()
-    result = int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
-    return result or 1
 
 
 def _validate_combined_native_plan(

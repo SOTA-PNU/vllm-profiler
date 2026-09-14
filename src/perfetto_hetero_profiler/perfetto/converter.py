@@ -33,6 +33,7 @@ from .native_details import (
 )
 from .planner import NativeProfileEnvelope, PlanBuildResult, build_trace_plan
 from .tooling import (
+    _absolute_without_resolving,
     PERFETTO_PACKAGE_VERSION,
     PERFETTO_UPSTREAM_REVISION,
     PERFETTO_WHEEL_FILENAME,
@@ -112,15 +113,7 @@ def plan_perfetto_conversion(
                 "request-focused native detail plan validation failed"
             )
         focused_metadata = {
-            "track_count": len(focused.tracks),
-            "slice_count": len(focused.slices),
-            "instant_count": len(focused.instants),
-            "counter_count": len(focused.counters),
-            "flow_count": len(focused.flows),
-            "resource_telemetry_included": bool(focused.counters),
-            "timestamp_rebased": False,
-            "presentation_policy": _presentation_policy(focused),
-            **_native_request_membership_metadata(native),
+            **_focused_plan_metadata(focused, native),
             "native_validation": focused_native_validation,
         }
     return {
@@ -235,15 +228,7 @@ def convert_perfetto(
                 "format": "perfetto_protobuf",
                 "size_bytes": focused_size,
                 "sha256": focused_sha256,
-                "timestamp_rebased": False,
-                "resource_telemetry_included": bool(focused_plan.counters),
-                "track_count": len(focused_plan.tracks),
-                "slice_count": len(focused_plan.slices),
-                "instant_count": len(focused_plan.instants),
-                "counter_count": len(focused_plan.counters),
-                "flow_count": len(focused_plan.flows),
-                "presentation_policy": _presentation_policy(focused_plan),
-                **_native_request_membership_metadata(native),
+                **_focused_plan_metadata(focused_plan, native),
             }
 
         separate_native_traces: list[dict[str, object]] = []
@@ -521,13 +506,6 @@ def _output_path(
                 "output directory must not overlap an immutable input root"
             )
     return output
-
-
-def _absolute_without_resolving(path: Path) -> Path:
-    value = Path(path).expanduser()
-    if not value.is_absolute():
-        value = Path.cwd() / value
-    return value.absolute()
 
 
 def _input_validation_metadata(loaded: LoadedHybridRun) -> dict[str, Any]:
@@ -1013,6 +991,22 @@ def _timeline_summary_mapping_metadata(
                 else "not_applicable_or_deferred"
             ),
         },
+    }
+
+
+def _focused_plan_metadata(plan: TracePlan, native: Any) -> dict[str, Any]:
+    """Counts and policy shared by the focused plan preview and its manifest."""
+
+    return {
+        "track_count": len(plan.tracks),
+        "slice_count": len(plan.slices),
+        "instant_count": len(plan.instants),
+        "counter_count": len(plan.counters),
+        "flow_count": len(plan.flows),
+        "resource_telemetry_included": bool(plan.counters),
+        "timestamp_rebased": False,
+        "presentation_policy": _presentation_policy(plan),
+        **_native_request_membership_metadata(native),
     }
 
 

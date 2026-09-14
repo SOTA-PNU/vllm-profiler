@@ -34,6 +34,7 @@ from ..schema import (
 )
 from ..support.files import sha256_file
 from .planner import NativeProfileEnvelope
+from .tooling import _absolute_without_resolving, _same_file_state
 
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,191}$")
@@ -195,13 +196,6 @@ def _safe_relative_path(value: object, *, field: str) -> str:
     return normalized
 
 
-def _absolute_without_resolving(path: Path) -> Path:
-    value = Path(path).expanduser()
-    if not value.is_absolute():
-        value = Path.cwd() / value
-    return value.absolute()
-
-
 def _require_real_directory(path: Path, *, description: str) -> Path:
     candidate = _absolute_without_resolving(path)
     try:
@@ -239,11 +233,6 @@ def _checked_file(root: Path, relative_path: object, *, field: str) -> Path:
         elif not stat.S_ISREG(file_stat.st_mode):
             raise PerfettoInputError(f"{field} is not a regular file: {current}")
     return current
-
-
-def _same_file_state(before: Any, after: Any) -> bool:
-    fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")
-    return all(getattr(before, field) == getattr(after, field) for field in fields)
 
 
 def _stable_read(
