@@ -15,8 +15,9 @@ from ..perfetto.artifacts import (
     verify_stored_sidecar,
 )
 from .loader import (
-    FileIdentity,
+    BundleIdentity,
     OverviewInputError,
+    inventory_identity,
     _stable_regular_file,
     read_json_object,
     require_real_directory,
@@ -44,20 +45,8 @@ _OVERVIEW_EXPECTED_FILES = frozenset(
 )
 
 
-@dataclass(frozen=True, slots=True)
-class OverviewBundleIdentity:
-    """Exact five-file path-free identity for Overview mutation checks."""
-
-    files: tuple[FileIdentity, ...]
-    inventory_sha256: str
-
-    @property
-    def metadata(self) -> dict[str, Any]:
-        return {
-            "file_count": len(self.files),
-            "inventory_sha256": self.inventory_sha256,
-            "files": [item.metadata for item in self.files],
-        }
+#: Exact five-file path-free identity; the Perfetto side shares this contract.
+OverviewBundleIdentity = BundleIdentity
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,26 +85,15 @@ def overview_directory_identity(
             f"missing={sorted(expected_files - actual)}, "
             f"unexpected={sorted(actual - expected_files)}"
         )
-    files = tuple(
-        _stable_regular_file(entry, relative_path=entry.name)
-        for entry in entries
-    )
-    payload = json.dumps(
-        [item.metadata for item in files],
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return OverviewBundleIdentity(
-        files=files,
-        inventory_sha256=hashlib.sha256(payload).hexdigest(),
+    return inventory_identity(
+        tuple(
+            _stable_regular_file(entry, relative_path=entry.name)
+            for entry in entries
+        )
     )
 
 
-def overview_bundle_identity(
-    root: str | Path,
-) -> OverviewBundleIdentity:
+def overview_bundle_identity(root: str | Path) -> OverviewBundleIdentity:
     """Snapshot an exact Overview input without trusting stored JSON."""
 
     directory = require_real_directory(root, description="Overview output")

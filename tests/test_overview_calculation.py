@@ -505,6 +505,39 @@ class OverviewCalculationTests(unittest.TestCase):
             union_duration_ns([(False, 1)])
 
 
+class IntervalUnionBoundaryTests(unittest.TestCase):
+    """Pin the exact edge behaviour of the wait-interval union."""
+
+    def test_adjacent_intervals_are_joined_without_double_counting(self) -> None:
+        self.assertEqual(union_duration_ns([(0, 10), (10, 20)]), 20)
+
+    def test_disjoint_intervals_exclude_the_gap(self) -> None:
+        self.assertEqual(union_duration_ns([(0, 10), (30, 40)]), 20)
+
+    def test_fully_contained_interval_does_not_extend_the_union(self) -> None:
+        self.assertEqual(union_duration_ns([(0, 100), (10, 20)]), 100)
+
+    def test_zero_length_interval_contributes_nothing(self) -> None:
+        self.assertEqual(union_duration_ns([(5, 5)]), 0)
+        self.assertEqual(union_duration_ns([(0, 10), (5, 5)]), 10)
+
+    def test_unsorted_input_yields_the_same_union(self) -> None:
+        self.assertEqual(
+            union_duration_ns([(30, 40), (0, 10), (5, 15)]),
+            union_duration_ns([(0, 10), (5, 15), (30, 40)]),
+        )
+
+    def test_bool_endpoints_are_rejected_on_either_side(self) -> None:
+        with self.assertRaisesRegex(OverviewCalculationError, "non-bool"):
+            union_duration_ns([(0, True)])
+        with self.assertRaisesRegex(OverviewCalculationError, "non-bool"):
+            union_duration_ns([(True, 5)])
+
+    def test_float_endpoints_are_rejected(self) -> None:
+        with self.assertRaisesRegex(OverviewCalculationError, "non-bool integer"):
+            union_duration_ns([(0.0, 10.0)])
+
+
 def replace_event_list(
     loaded: SimpleNamespace, events: list[EventRecord]
 ) -> SimpleNamespace:

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from perfetto_hetero_profiler.overview.resources import (
     ResourceCalculationError,
     StageWindow,
+    _union_duration_ns,
     percentile_r7,
     summarize_resources,
 )
@@ -513,6 +514,66 @@ class OverviewResourceTests(unittest.TestCase):
         )
         self.assertEqual(_aggregate(summary, ".mean")["unavailable_reason"],
                          "no verified same-host marker window for resource stream")
+
+
+class StatisticsBoundaryTests(unittest.TestCase):
+    """Pin the exact edge behaviour of the deterministic statistics helpers."""
+
+    def test_percentile_r7_endpoints_are_the_extremes(self) -> None:
+        values = [10, 20, 30, 40]
+        self.assertEqual(percentile_r7(values, 0.0), 10.0)
+        self.assertEqual(percentile_r7(values, 1.0), 40.0)
+
+    def test_percentile_r7_interpolates_between_two_values(self) -> None:
+        self.assertEqual(percentile_r7([0, 10], 0.25), 2.5)
+        self.assertEqual(percentile_r7([0, 10], 0.5), 5.0)
+
+    def test_percentile_r7_ignores_input_order(self) -> None:
+        self.assertEqual(
+            percentile_r7([40, 10, 30, 20], 0.50),
+            percentile_r7([10, 20, 30, 40], 0.50),
+        )
+
+    def test_percentile_r7_rejects_out_of_range_and_bool_probability(self) -> None:
+        for probability in (-0.1, 1.1, float("nan"), True):
+            with self.subTest(probability=probability):
+                with self.assertRaisesRegex(
+                    ResourceCalculationError, r"finite and in \[0, 1\]"
+                ):
+                    percentile_r7([1, 2], probability)
+
+    def test_percentile_r7_rejects_non_finite_values(self) -> None:
+        with self.assertRaisesRegex(ResourceCalculationError, "must be finite"):
+            percentile_r7([1.0, float("inf")], 0.5)
+
+    def test_union_duration_reports_no_overlap_for_adjacent_segments(self) -> None:
+        covered, overlapped = _union_duration_ns([(0, 10), (10, 20)])
+        self.assertEqual(covered, 20)
+        self.assertFalse(overlapped)
+
+    def test_union_duration_reports_no_overlap_for_disjoint_segments(self) -> None:
+        covered, overlapped = _union_duration_ns([(0, 10), (30, 40)])
+        self.assertEqual(covered, 20)
+        self.assertFalse(overlapped)
+
+    def test_union_duration_detects_overlapping_segments(self) -> None:
+        covered, overlapped = _union_duration_ns([(0, 10), (5, 20)])
+        self.assertEqual(covered, 20)
+        self.assertTrue(overlapped)
+
+    def test_union_duration_detects_a_fully_contained_segment(self) -> None:
+        covered, overlapped = _union_duration_ns([(0, 100), (10, 20)])
+        self.assertEqual(covered, 100)
+        self.assertTrue(overlapped)
+
+    def test_union_duration_ignores_input_order(self) -> None:
+        self.assertEqual(
+            _union_duration_ns([(30, 40), (0, 10)]),
+            _union_duration_ns([(0, 10), (30, 40)]),
+        )
+
+    def test_union_duration_of_one_segment_is_its_length(self) -> None:
+        self.assertEqual(_union_duration_ns([(5, 12)]), (7, False))
 
 
 if __name__ == "__main__":

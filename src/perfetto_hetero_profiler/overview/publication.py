@@ -15,6 +15,8 @@ from ..support.files import sha256_file
 from ..support.json_io import pretty_json_bytes
 from ..support.publication import fsync_directory, publish_directory_no_replace
 
+from .loader import _absolute_without_resolving
+
 from ..perfetto.artifacts import (
     ARTIFACT_MANIFEST_NAME,
     ARTIFACT_VALIDATION_NAME,
@@ -37,13 +39,6 @@ def canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
     """Encode deterministic, finite JSON with the repository line policy."""
 
     return pretty_json_bytes(value)
-
-
-def _absolute_without_resolving(path: Path) -> Path:
-    value = Path(path).expanduser()
-    if not value.is_absolute():
-        value = Path.cwd() / value
-    return value.absolute()
 
 
 def _reject_symlink_components(path: Path) -> None:
@@ -139,12 +134,7 @@ def _write_bytes_exclusive(path: Path, data: bytes) -> None:
         raise
 
 
-def _remove_owned_staging(
-    staging: Path,
-    *,
-    parent: Path,
-    output_name: str,
-) -> None:
+def _remove_owned_staging(staging: Path, *, parent: Path, output_name: str) -> None:
     expected_prefix = f".{output_name}.overview-staging-"
     if (
         staging.parent != parent
@@ -174,10 +164,7 @@ def _file_metadata(path: Path) -> dict[str, Any]:
     }
 
 
-def _verify_exact_output(
-    root: Path,
-    payload_names: Sequence[str],
-) -> None:
+def _verify_exact_output(root: Path, payload_names: Sequence[str]) -> None:
     expected = {
         *payload_names,
         ARTIFACT_MANIFEST_NAME,
@@ -205,10 +192,8 @@ def publish_bundle(
 ) -> dict[str, Any]:
     """Write, inventory, validate, and atomically publish an exact bundle.
 
-    ``output`` must already have passed :func:`validate_output_path`.
-    Payloads must contain exactly the semantic JSON, HTML, and validation
-    files.  The detached manifest and sidecar are generated here and are never
-    self-inventoried.
+    ``output`` must already have passed :func:`validate_output_path`, and the
+    detached manifest and sidecar are never self-inventoried.
     """
 
     if len(payloads) != 3:

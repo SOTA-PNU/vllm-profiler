@@ -1,10 +1,9 @@
 """Strict read-only loaders for Overview inputs.
 
-The Overview layer deliberately reuses the normalized-run loader and
-trace planner.  This module adds the missing boundary around a *published*
-Perfetto bundle: exact file layout, detached-manifest freshness, source
-fingerprint matching, trace identity, and a fresh official Trace Processor
-reconciliation.
+The boundary around a *published* Perfetto bundle: symlink-free TOCTOU-checked
+reads, the exact supported file set and its inventory identity, agreement with
+the normalized run, and path-free evidence.  :func:`load_matching_perfetto`
+runs the official Trace Processor and re-verifies identity afterwards.
 """
 
 from __future__ import annotations
@@ -14,8 +13,7 @@ from dataclasses import dataclass, replace
 import hashlib
 import json
 import os
-from pathlib import Path
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 import stat
 from typing import Any, Callable, TypeVar
 
@@ -36,35 +34,27 @@ from ..perfetto.converter import (
     TRACE_VALIDATION_NAME,
 )
 from ..perfetto.loader import LoadedHybridRun
+from ..perfetto.model import base_track_key
 from ..perfetto.native_details import (
     augment_trace_plan,
     build_native_detail_plan,
     native_validation_metadata,
 )
-from ..perfetto.model import base_track_key
 from ..perfetto.planner import PlanBuildResult, build_trace_plan
-from ..perfetto.tooling import ToolchainRuntime, resolve_toolchain
 from ..perfetto.timeline_summary import (
     LEGACY_MAPPING_VERSION,
     TIMELINE_SUMMARY_MAPPING_VERSION,
     build_timeline_summary_context,
 )
+from ..perfetto.tooling import ToolchainRuntime, resolve_toolchain
 from ..perfetto.trace_attributes import TRACE_ATTRIBUTE_NAMESPACE
 from ..perfetto.validation import summarize_trace_validation, validate_trace
 from ..schema.catalog import PHASE_RECONCILIATION_METRICS, STAGE_BY_METRIC
 from ..support.files import sha256_file
 
 
-_EXPECTED_PERFETTO_FILES = frozenset(
-    {
-        ARTIFACT_MANIFEST_NAME,
-        ARTIFACT_VALIDATION_NAME,
-        CONVERSION_MANIFEST_NAME,
-        TRACE_NAME,
-        TRACE_VALIDATION_NAME,
-    }
-)
 _JSON_VALUE = TypeVar("_JSON_VALUE")
+_IDENTITY_FIELDS = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")
 
 
 class OverviewInputError(RuntimeError):
@@ -90,40 +80,6 @@ class FileIdentity:
             "mtime_ns": self.mtime_ns,
             "mode": self.mode,
         }
-
-
-@dataclass(frozen=True, slots=True)
-class PerfettoBundleIdentity:
-    """Path-free identity for one exact supported Perfetto output."""
-
-    files: tuple[FileIdentity, ...]
-    inventory_sha256: str
-
-    @property
-    def metadata(self) -> dict[str, object]:
-        return {
-            "file_count": len(self.files),
-            "inventory_sha256": self.inventory_sha256,
-            "files": [item.metadata for item in self.files],
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class LoadedPerfettoBundle:
-    """A matching Perfetto output, freshly reconciled."""
-
-    root: Path
-    conversion_manifest: dict[str, Any]
-    stored_trace_validation: dict[str, Any]
-    fresh_trace_validation: dict[str, Any]
-    artifact_validation: dict[str, Any]
-    identity: PerfettoBundleIdentity
-    planning: PlanBuildResult
-    toolchain: ToolchainRuntime
-
-    @property
-    def trace_path(self) -> Path:
-        return self.root / TRACE_NAME
 
 
 def _absolute_without_resolving(path: Path) -> Path:
@@ -167,15 +123,12 @@ def require_real_directory(path: str | Path, *, description: str) -> Path:
 
 
 def _same_state(before: os.stat_result, after: os.stat_result) -> bool:
-    fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")
-    return all(getattr(before, name) == getattr(after, name) for name in fields)
+    return all(
+        getattr(before, name) == getattr(after, name) for name in _IDENTITY_FIELDS
+    )
 
 
-def _stable_regular_file(
-    path: Path,
-    *,
-    relative_path: str,
-) -> FileIdentity:
+def _stable_regular_file(path: Path, *, relative_path: str) -> FileIdentity:
     try:
         before = path.lstat()
     except OSError as error:
@@ -242,93 +195,6 @@ def read_json_object(path: Path, *, description: str) -> dict[str, Any]:
     return value
 
 
-def _exact_perfetto_files(root: Path) -> tuple[FileIdentity, ...]:
-    try:
-        entries = sorted(root.iterdir(), key=lambda item: item.name)
-    except OSError as error:
-        raise OverviewInputError("Perfetto directory cannot be enumerated") from error
-    actual_names = {entry.name for entry in entries}
-    expected = set(_EXPECTED_PERFETTO_FILES)
-    optional_groups = (
-        (
-            {RBLN_NATIVE_TRACE_NAME, RBLN_NATIVE_VALIDATION_NAME},
-            "RBLN native trace",
-        ),
-        ({TRACE_ATTRIBUTE_VALIDATION_NAME}, "trace attributes"),
-        (
-            {REQUEST_FOCUSED_TRACE_NAME, REQUEST_FOCUSED_VALIDATION_NAME},
-            "request-focused trace",
-        ),
-    )
-    partial_groups: list[str] = []
-    for names, description in optional_groups:
-        present = names & actual_names
-        if present and present != names:
-            partial_groups.append(description)
-        if present:
-            expected.update(names)
-    if partial_groups or actual_names != expected:
-        missing = sorted(expected - actual_names)
-        unexpected = sorted(actual_names - expected)
-        raise OverviewInputError(
-            "Perfetto directory must match exactly one supported file set; "
-            f"missing={missing}, unexpected={unexpected}, "
-            f"partial_groups={sorted(partial_groups)}"
-        )
-    return tuple(
-        _stable_regular_file(entry, relative_path=entry.name)
-        for entry in entries
-    )
-
-
-def _bundle_identity(root: Path) -> PerfettoBundleIdentity:
-    files = _exact_perfetto_files(root)
-    canonical = json.dumps(
-        [item.metadata for item in files],
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return PerfettoBundleIdentity(
-        files=files,
-        inventory_sha256=hashlib.sha256(canonical).hexdigest(),
-    )
-
-
-def _normalized_input_metadata(loaded: LoadedHybridRun) -> dict[str, Any]:
-    return {
-        "valid": True,
-        "closeout_manifest_sha256": loaded.closeout_manifest_sha256,
-        "closeout_artifact_count": loaded.closeout_artifact_count,
-        "roots": [
-            item.metadata
-            for item in sorted(
-                loaded.root_fingerprints,
-                key=lambda fingerprint: fingerprint.root_id,
-            )
-        ],
-    }
-
-
-def normalized_identity(loaded: LoadedHybridRun) -> tuple[object, ...]:
-    """Return the exact immutable identity used by Perfetto conversion."""
-
-    return (
-        loaded.manifest.run_id,
-        loaded.closeout_manifest_sha256,
-        loaded.closeout_artifact_count,
-        tuple(
-            (
-                item.root_id,
-                item.file_count,
-                item.fingerprint_sha256,
-            )
-            for item in loaded.root_fingerprints
-        ),
-    )
-
-
 def read_validated_source_json(
     loaded: LoadedHybridRun,
     *,
@@ -372,11 +238,192 @@ def read_validated_source_json(
     )
 
 
+_EXPECTED_PERFETTO_FILES = frozenset(
+    {
+        ARTIFACT_MANIFEST_NAME,
+        ARTIFACT_VALIDATION_NAME,
+        CONVERSION_MANIFEST_NAME,
+        TRACE_NAME,
+        TRACE_VALIDATION_NAME,
+    }
+)
+_OPTIONAL_FILE_GROUPS = (
+    (
+        {RBLN_NATIVE_TRACE_NAME, RBLN_NATIVE_VALIDATION_NAME},
+        "RBLN native trace",
+    ),
+    ({TRACE_ATTRIBUTE_VALIDATION_NAME}, "trace attributes"),
+    (
+        {REQUEST_FOCUSED_TRACE_NAME, REQUEST_FOCUSED_VALIDATION_NAME},
+        "request-focused trace",
+    ),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class BundleIdentity:
+    """Exact path-free file-set identity, proven by one inventory hash."""
+
+    files: tuple[FileIdentity, ...]
+    inventory_sha256: str
+
+    @property
+    def metadata(self) -> dict[str, object]:
+        return {
+            "file_count": len(self.files),
+            "inventory_sha256": self.inventory_sha256,
+            "files": [item.metadata for item in self.files],
+        }
+
+
+PerfettoBundleIdentity = BundleIdentity  # historical public name
+
+
+def inventory_identity(files: tuple[FileIdentity, ...]) -> BundleIdentity:
+    """Hash an exact file inventory into a stable, path-free identity."""
+    payload = json.dumps(
+        [item.metadata for item in files],
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return BundleIdentity(
+        files=files,
+        inventory_sha256=hashlib.sha256(payload).hexdigest(),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedPerfettoBundle:
+    """A matching Perfetto output, freshly reconciled."""
+
+    root: Path
+    conversion_manifest: dict[str, Any]
+    stored_trace_validation: dict[str, Any]
+    fresh_trace_validation: dict[str, Any]
+    artifact_validation: dict[str, Any]
+    identity: PerfettoBundleIdentity
+    planning: PlanBuildResult
+    toolchain: ToolchainRuntime
+
+    @property
+    def trace_path(self) -> Path:
+        return self.root / TRACE_NAME
+
+
+def _exact_perfetto_files(root: Path) -> tuple[FileIdentity, ...]:
+    try:
+        entries = sorted(root.iterdir(), key=lambda item: item.name)
+    except OSError as error:
+        raise OverviewInputError("Perfetto directory cannot be enumerated") from error
+    actual_names = {entry.name for entry in entries}
+    expected = set(_EXPECTED_PERFETTO_FILES)
+    partial_groups: list[str] = []
+    for names, description in _OPTIONAL_FILE_GROUPS:
+        present = names & actual_names
+        if present and present != names:
+            partial_groups.append(description)
+        if present:
+            expected.update(names)
+    if partial_groups or actual_names != expected:
+        missing = sorted(expected - actual_names)
+        unexpected = sorted(actual_names - expected)
+        raise OverviewInputError(
+            "Perfetto directory must match exactly one supported file set; "
+            f"missing={missing}, unexpected={unexpected}, "
+            f"partial_groups={sorted(partial_groups)}"
+        )
+    return tuple(
+        _stable_regular_file(entry, relative_path=entry.name)
+        for entry in entries
+    )
+
+
+def _bundle_identity(root: Path) -> BundleIdentity:
+    return inventory_identity(_exact_perfetto_files(root))
+
+
 def perfetto_identity(perfetto_root: str | Path) -> PerfettoBundleIdentity:
     """Snapshot an exact published Perfetto bundle without executing TP."""
 
     root = require_real_directory(perfetto_root, description="Perfetto output")
     return _bundle_identity(root)
+
+
+def assert_perfetto_unchanged(
+    before: LoadedPerfettoBundle,
+    after: LoadedPerfettoBundle,
+) -> None:
+    """Reject mutation of a conversion input during Overview publication."""
+
+    if before.identity != after.identity:
+        raise OverviewInputError(
+            "immutable Perfetto bundle changed during Overview generation"
+        )
+
+
+_REQUIRED_MANIFEST_FIELDS = {
+    "schema_version",
+    "record_type",
+    "status",
+    "run_id",
+    "source_mode",
+    "source_profile_mode",
+    "canonical_clock_domain_id",
+    "input_validation",
+    "trace",
+    "trace_validation",
+    "counts",
+}
+_REQUIRED_QUERY_FIELDS = {
+    "name",
+    "sql",
+    "columns",
+    "row_count",
+    "rows_sha256",
+    "expected_row_count",
+    "expected_rows_sha256",
+    "matched",
+}
+_OPTIONAL_QUERY_FIELDS = {"rows", "rows_sha256_method"}
+_NATIVE_COUNT_FIELDS = (
+    "native_detail_slice_count",
+    "native_detail_instant_count",
+)
+
+
+def normalized_input_metadata(loaded: LoadedHybridRun) -> dict[str, Any]:
+    return {
+        "valid": True,
+        "closeout_manifest_sha256": loaded.closeout_manifest_sha256,
+        "closeout_artifact_count": loaded.closeout_artifact_count,
+        "roots": [
+            item.metadata
+            for item in sorted(
+                loaded.root_fingerprints,
+                key=lambda fingerprint: fingerprint.root_id,
+            )
+        ],
+    }
+
+
+def normalized_identity(loaded: LoadedHybridRun) -> tuple[object, ...]:
+    """Return the exact immutable identity used by Perfetto conversion."""
+
+    return (
+        loaded.manifest.run_id,
+        loaded.closeout_manifest_sha256,
+        loaded.closeout_artifact_count,
+        tuple(
+            (
+                item.root_id,
+                item.file_count,
+                item.fingerprint_sha256,
+            )
+            for item in loaded.root_fingerprints
+        ),
+    )
 
 
 def _assert_no_overlap(loaded: LoadedHybridRun, perfetto_root: Path) -> None:
@@ -393,10 +440,7 @@ def _assert_no_overlap(loaded: LoadedHybridRun, perfetto_root: Path) -> None:
             )
 
 
-def _artifact_roots(
-    loaded: LoadedHybridRun,
-    perfetto_root: Path,
-) -> dict[str, Path]:
+def _artifact_roots(loaded: LoadedHybridRun, perfetto_root: Path) -> dict[str, Path]:
     roots = {
         fingerprint.root_id: fingerprint.root
         for fingerprint in loaded.root_fingerprints
@@ -440,7 +484,7 @@ def _expected_query_count(
     if not isinstance(counts, dict):
         raise OverviewInputError("Perfetto conversion counts are invalid")
     native_count = 0
-    for field in ("native_detail_slice_count", "native_detail_instant_count"):
+    for field in _NATIVE_COUNT_FIELDS:
         value = counts.get(field, 0)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise OverviewInputError(
@@ -453,24 +497,8 @@ def _expected_query_count(
     return base + int(native_count > 0)
 
 
-def _require_manifest_match(
-    loaded: LoadedHybridRun,
-    manifest: dict[str, Any],
-) -> None:
-    required = {
-        "schema_version",
-        "record_type",
-        "status",
-        "run_id",
-        "source_mode",
-        "source_profile_mode",
-        "canonical_clock_domain_id",
-        "input_validation",
-        "trace",
-        "trace_validation",
-        "counts",
-    }
-    missing = sorted(required - set(manifest))
+def _require_manifest_match(loaded: LoadedHybridRun, manifest: dict[str, Any]) -> None:
+    missing = sorted(_REQUIRED_MANIFEST_FIELDS - set(manifest))
     if missing:
         raise OverviewInputError(
             f"Perfetto conversion manifest is missing {missing[0]!r}"
@@ -481,7 +509,7 @@ def _require_manifest_match(
         "source_mode": loaded.manifest.mode.value,
         "source_profile_mode": loaded.manifest.profile_mode.value,
         "canonical_clock_domain_id": loaded.canonical_clock_domain_id,
-        "input_validation": _normalized_input_metadata(loaded),
+        "input_validation": normalized_input_metadata(loaded),
     }
     for field, value in expected.items():
         if manifest.get(field) != value:
@@ -521,10 +549,7 @@ def _require_manifest_match(
         )
 
 
-def _require_trace_identity(
-    root: Path,
-    manifest: dict[str, Any],
-) -> None:
+def _require_trace_identity(root: Path, manifest: dict[str, Any]) -> None:
     trace_identity = _stable_regular_file(
         root / TRACE_NAME,
         relative_path=TRACE_NAME,
@@ -553,26 +578,14 @@ def _require_stored_trace_validation(
         raise OverviewInputError("stored Perfetto clock domain mismatch")
     queries = value.get("queries")
     mapping_version = _mapping_version(manifest)
-    required_query_fields = {
-        "name",
-        "sql",
-        "columns",
-        "row_count",
-        "rows_sha256",
-        "expected_row_count",
-        "expected_rows_sha256",
-        "matched",
-    }
     if (
         not isinstance(queries, list)
         or len(queries) != _expected_query_count(mapping_version, manifest)
         or any(
             not isinstance(query, dict)
             or query.get("matched") is not True
-            or not required_query_fields.issubset(query)
-            or set(query)
-            - required_query_fields
-            - {"rows", "rows_sha256_method"}
+            or not _REQUIRED_QUERY_FIELDS.issubset(query)
+            or set(query) - _REQUIRED_QUERY_FIELDS - _OPTIONAL_QUERY_FIELDS
             for query in queries
         )
     ):
@@ -621,6 +634,187 @@ def _fresh_validation_matches_stored(
     )
 
 
+_PHASE_MAPPING = tuple(
+    (
+        metric_name,
+        STAGE_BY_METRIC[metric_name].track_key,
+        STAGE_BY_METRIC[metric_name].slice_name,
+    )
+    for metric_name in PHASE_RECONCILIATION_METRICS
+)
+_SLICE_IDENTITY_KEYS = ("track_name", "slice_name", "ts", "dur")
+_PHASE_SLICE_BY_TRACK_KEY = {
+    track_key: slice_name for _, track_key, slice_name in _PHASE_MAPPING
+}
+_SAFE_TOOLCHAIN_FIELDS = (
+    "filename",
+    "version",
+    "sha256",
+    "perfetto_package_version",
+    "protobuf_package_version",
+    "trace_processor_rpc_api_version",
+)
+# Keep the external-report schema backward-compatible. New mapping-specific
+# query counts remain available in ``queries``.
+_REPORT_COUNT_NAMES = (
+    "annotations",
+    "counters",
+    "dangling_flows",
+    "flows",
+    "import_errors",
+    "native_policy",
+    "process",
+    "slices",
+    "step_annotations",
+    "tracks",
+)
+
+
+def reconciliation_summary(bundle: LoadedPerfettoBundle) -> dict[str, Any]:
+    """Return deterministic, path-free evidence suitable for Overview JSON."""
+
+    report = bundle.fresh_trace_validation
+    query_summaries = [
+        {
+            "name": query["name"],
+            "row_count": query["row_count"],
+            "rows_sha256": query["rows_sha256"],
+            "expected_row_count": query["expected_row_count"],
+            "expected_rows_sha256": query["expected_rows_sha256"],
+            "matched": query["matched"],
+        }
+        for query in sorted(report["queries"], key=lambda item: item["name"])
+    ]
+    toolchain = report["toolchain"]
+    return {
+        "valid": True,
+        "trace": dict(report["trace"]),
+        "counts": {
+            name: report["counts"][name] for name in _REPORT_COUNT_NAMES
+        },
+        "query_count": len(query_summaries),
+        "queries": query_summaries,
+        "mismatches": [],
+        "flow_endpoint_reconciliation": report[
+            "flow_endpoint_reconciliation"
+        ],
+        "artifact_validation": {
+            "valid": bundle.artifact_validation["valid"],
+            "checked": bundle.artifact_validation["checked"],
+            "mismatches": bundle.artifact_validation["mismatches"],
+            "manifest_sha256": bundle.artifact_validation["manifest_sha256"],
+        },
+        "toolchain": {
+            name: toolchain[name]
+            for name in _SAFE_TOOLCHAIN_FIELDS
+            if name in toolchain
+        },
+    }
+
+
+def phase_duration_reconciliation(bundle: LoadedPerfettoBundle) -> list[dict[str, Any]]:
+    """Reconcile event-planned integer phase durations with TP slice rows."""
+
+    expected: dict[str, list[int]] = {
+        slice_name: [] for _, _, slice_name in _PHASE_MAPPING
+    }
+    for item in bundle.planning.plan.slices:
+        slice_name = _PHASE_SLICE_BY_TRACK_KEY.get(base_track_key(item.track_key))
+        if slice_name is not None:
+            expected[slice_name].append(item.duration_ns)
+    slice_query = next(
+        query
+        for query in bundle.fresh_trace_validation["queries"]
+        if query["name"] == "slices"
+    )
+    # One phase can occupy several concurrent lanes, each with its own track
+    # name, so the map comes from the planned tracks.  Resolved before the
+    # compact-report shortcut so both report shapes fail the same way.
+    detail_track_names = {
+        track.name: _PHASE_SLICE_BY_TRACK_KEY[base_track_key(track.key)]
+        for track in bundle.planning.plan.tracks
+        if base_track_key(track.key) in _PHASE_SLICE_BY_TRACK_KEY
+    }
+    slice_rows = slice_query.get("rows")
+    if not isinstance(slice_rows, list):
+        if slice_query.get("matched") is not True:
+            raise OverviewInputError(
+                "compact Perfetto slice validation did not match its plan"
+            )
+        # Large reports omit inline rows. The fresh validator already compared
+        # every canonical slice row and duplicate multiplicity literally with
+        # this exact plan, so the phase subset is identical without retaining
+        # millions of unrelated native slices.
+        return [
+            {
+                "kpi_name": kpi_name,
+                "slice_name": slice_name,
+                "slice_count": len(expected[slice_name]),
+                "event_duration_ns": sum(expected[slice_name]),
+                "perfetto_duration_ns": sum(expected[slice_name]),
+                "matched": True,
+            }
+            for kpi_name, _, slice_name in _PHASE_MAPPING
+        ]
+    # Timeline-summary rows can restate a canonical slice; on legacy mappings
+    # those restatements are consumed once each so a phase is not double counted.
+    summary_query = next(
+        (
+            query
+            for query in bundle.fresh_trace_validation["queries"]
+            if query["name"] == "timeline_summary_slices"
+        ),
+        None,
+    )
+    duplicated_summary_rows: Counter = Counter()
+    if bundle.planning.plan.mapping_version != TIMELINE_SUMMARY_MAPPING_VERSION:
+        duplicated_summary_rows.update(
+            _slice_identity(row)
+            for row in (
+                summary_query.get("rows", [])
+                if isinstance(summary_query, dict)
+                else []
+            )
+        )
+    actual: dict[str, list[int]] = {
+        slice_name: [] for _, _, slice_name in _PHASE_MAPPING
+    }
+    for row in slice_rows:
+        identity = _slice_identity(row)
+        if duplicated_summary_rows[identity]:
+            duplicated_summary_rows[identity] -= 1
+            continue
+        name = detail_track_names.get(row.get("track_name"))
+        duration = row.get("dur")
+        if (
+            name in actual
+            and isinstance(duration, int)
+            and not isinstance(duration, bool)
+        ):
+            actual[name].append(duration)
+    values: list[dict[str, Any]] = []
+    for kpi_name, _, slice_name in _PHASE_MAPPING:
+        expected_values = sorted(expected[slice_name])
+        actual_values = sorted(actual[slice_name])
+        values.append(
+            {
+                "kpi_name": kpi_name,
+                "slice_name": slice_name,
+                "slice_count": len(expected_values),
+                "event_duration_ns": sum(expected_values),
+                "perfetto_duration_ns": sum(actual_values),
+                "matched": expected_values == actual_values,
+            }
+        )
+    return values
+
+
+def _slice_identity(row: dict[str, Any]) -> tuple[Any, ...]:
+    """Identify one Perfetto slice row; missing columns compare as None."""
+
+    return tuple(row.get(key) for key in _SLICE_IDENTITY_KEYS)
+
+
 def load_matching_perfetto(
     loaded: LoadedHybridRun,
     perfetto_root: str | Path,
@@ -646,15 +840,14 @@ def load_matching_perfetto(
         item.name for item in root.iterdir()
     }
     if has_attribute_validation:
-        attribute_validation = read_json_object(
+        attributes = read_json_object(
             root / TRACE_ATTRIBUTE_VALIDATION_NAME,
             description="stored Perfetto trace attribute validation",
         )
         if (
-            attribute_validation.get("valid") is not True
-            or attribute_validation.get("mismatches") != []
-            or attribute_validation.get("namespace")
-            != TRACE_ATTRIBUTE_NAMESPACE
+            attributes.get("valid") is not True
+            or attributes.get("mismatches") != []
+            or attributes.get("namespace") != TRACE_ATTRIBUTE_NAMESPACE
         ):
             raise OverviewInputError(
                 "stored Perfetto trace attribute validation is invalid"
@@ -672,7 +865,6 @@ def load_matching_perfetto(
         stored_validation,
         manifest=manifest,
     )
-
     try:
         artifact_validation = verify_stored_sidecar(
             root / ARTIFACT_MANIFEST_NAME,
@@ -746,198 +938,6 @@ def load_matching_perfetto(
         planning=planning,
         toolchain=toolchain,
     )
-
-
-def reconciliation_summary(bundle: LoadedPerfettoBundle) -> dict[str, Any]:
-    """Return deterministic, path-free evidence suitable for Overview JSON."""
-
-    report = bundle.fresh_trace_validation
-    queries = report["queries"]
-    query_summaries = [
-        {
-            "name": query["name"],
-            "row_count": query["row_count"],
-            "rows_sha256": query["rows_sha256"],
-            "expected_row_count": query["expected_row_count"],
-            "expected_rows_sha256": query["expected_rows_sha256"],
-            "matched": query["matched"],
-        }
-        for query in sorted(queries, key=lambda item: item["name"])
-    ]
-    toolchain = report["toolchain"]
-    safe_toolchain = {
-        name: toolchain[name]
-        for name in (
-            "filename",
-            "version",
-            "sha256",
-            "perfetto_package_version",
-            "protobuf_package_version",
-            "trace_processor_rpc_api_version",
-        )
-        if name in toolchain
-    }
-    report_count_names = (
-        "annotations",
-        "counters",
-        "dangling_flows",
-        "flows",
-        "import_errors",
-        "native_policy",
-        "process",
-        "slices",
-        "step_annotations",
-        "tracks",
-    )
-    return {
-        "valid": True,
-        "trace": dict(report["trace"]),
-        # Keep the external-report schema backward-compatible. New
-        # mapping-specific query counts remain available in ``queries``.
-        "counts": {
-            name: report["counts"][name] for name in report_count_names
-        },
-        "query_count": len(query_summaries),
-        "queries": query_summaries,
-        "mismatches": [],
-        "flow_endpoint_reconciliation": report[
-            "flow_endpoint_reconciliation"
-        ],
-        "artifact_validation": {
-            "valid": bundle.artifact_validation["valid"],
-            "checked": bundle.artifact_validation["checked"],
-            "mismatches": bundle.artifact_validation["mismatches"],
-            "manifest_sha256": bundle.artifact_validation["manifest_sha256"],
-        },
-        "toolchain": safe_toolchain,
-    }
-
-
-def phase_duration_reconciliation(
-    bundle: LoadedPerfettoBundle,
-) -> list[dict[str, Any]]:
-    """Reconcile event-planned integer phase durations with TP slice rows."""
-
-    mapping = tuple(
-        (
-            metric_name,
-            STAGE_BY_METRIC[metric_name].track_key,
-            STAGE_BY_METRIC[metric_name].slice_name,
-        )
-        for metric_name in PHASE_RECONCILIATION_METRICS
-    )
-    expected: dict[str, list[int]] = {
-        slice_name: [] for _, _, slice_name in mapping
-    }
-    detail_keys = {
-        track_key: slice_name for _, track_key, slice_name in mapping
-    }
-    for item in bundle.planning.plan.slices:
-        slice_name = detail_keys.get(base_track_key(item.track_key))
-        if slice_name is not None:
-            expected[slice_name].append(item.duration_ns)
-    slice_query = next(
-        query
-        for query in bundle.fresh_trace_validation["queries"]
-        if query["name"] == "slices"
-    )
-    detail_track_names = {
-        track.name: detail_keys[base_track_key(track.key)]
-        for track in bundle.planning.plan.tracks
-        if base_track_key(track.key) in detail_keys
-    }
-    actual: dict[str, list[int]] = {
-        slice_name: [] for _, _, slice_name in mapping
-    }
-    slice_rows = slice_query.get("rows")
-    if not isinstance(slice_rows, list):
-        if slice_query.get("matched") is not True:
-            raise OverviewInputError(
-                "compact Perfetto slice validation did not match its plan"
-            )
-        # Large reports omit inline rows. The fresh validator already compared
-        # every canonical slice row and duplicate multiplicity literally with
-        # this exact plan, so the phase subset is identical without retaining
-        # millions of unrelated native slices.
-        return [
-            {
-                "kpi_name": kpi_name,
-                "slice_name": slice_name,
-                "slice_count": len(expected[slice_name]),
-                "event_duration_ns": sum(expected[slice_name]),
-                "perfetto_duration_ns": sum(expected[slice_name]),
-                "matched": True,
-            }
-            for kpi_name, _, slice_name in mapping
-        ]
-    summary_query = next(
-        (
-            query
-            for query in bundle.fresh_trace_validation["queries"]
-            if query["name"] == "timeline_summary_slices"
-        ),
-        None,
-    )
-    duplicated_summary_rows = Counter()
-    if bundle.planning.plan.mapping_version != TIMELINE_SUMMARY_MAPPING_VERSION:
-        duplicated_summary_rows.update(
-            (
-                row.get("track_name"),
-                row.get("slice_name"),
-                row.get("ts"),
-                row.get("dur"),
-            )
-            for row in (
-                summary_query.get("rows", [])
-                if isinstance(summary_query, dict)
-                else []
-            )
-        )
-    for row in slice_rows:
-        identity = (
-            row.get("track_name"),
-            row.get("slice_name"),
-            row.get("ts"),
-            row.get("dur"),
-        )
-        if duplicated_summary_rows[identity]:
-            duplicated_summary_rows[identity] -= 1
-            continue
-        name = detail_track_names.get(row.get("track_name"))
-        duration = row.get("dur")
-        if (
-            name in actual
-            and isinstance(duration, int)
-            and not isinstance(duration, bool)
-        ):
-            actual[name].append(duration)
-    values: list[dict[str, Any]] = []
-    for kpi_name, _, slice_name in mapping:
-        expected_values = sorted(expected[slice_name])
-        actual_values = sorted(actual[slice_name])
-        values.append(
-            {
-                "kpi_name": kpi_name,
-                "slice_name": slice_name,
-                "slice_count": len(expected_values),
-                "event_duration_ns": sum(expected_values),
-                "perfetto_duration_ns": sum(actual_values),
-                "matched": expected_values == actual_values,
-            }
-        )
-    return values
-
-
-def assert_perfetto_unchanged(
-    before: LoadedPerfettoBundle,
-    after: LoadedPerfettoBundle,
-) -> None:
-    """Reject mutation of a conversion input during Overview publication."""
-
-    if before.identity != after.identity:
-        raise OverviewInputError(
-            "immutable Perfetto bundle changed during Overview generation"
-        )
 
 
 __all__ = [

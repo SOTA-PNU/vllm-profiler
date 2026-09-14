@@ -1,15 +1,21 @@
-"""Deterministic, self-contained HTML rendering for Overview data."""
+"""Deterministic, self-contained HTML rendering for Overview data.
+
+:func:`validate_offline_html` re-derives the offline judgement from the finished
+bytes rather than trusting the renderer.  Every value passes through
+:func:`_text`, which redacts external URLs and host paths and escapes the rest.
+Section order is fixed, so a report always renders to the same bytes.
+"""
 
 from __future__ import annotations
 
-import json
-import math
-import re
 from collections.abc import Iterable, Mapping, Sequence
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 from html import escape
 from html.parser import HTMLParser
 from importlib import resources
+import json
+import math
+import re
 from typing import Any
 
 
@@ -52,39 +58,190 @@ _URL_ATTRIBUTES = {
     "xlink:href",
 }
 _NETWORK_SCHEME_RE = re.compile(r"\b(?:https?|ftp|file)\s*:", re.IGNORECASE)
-_URL_TEXT_RE = re.compile(
-    r"\b(?:https?|ftp|file)\s*:[^\s<>\"']*", re.IGNORECASE
-)
-_ABSOLUTE_PATH_RE = re.compile(
-    r"(?<![A-Za-z0-9._~-])/"
-    r"(?:[A-Za-z0-9._~-]+/)*"
-    r"[A-Za-z0-9._~-]+"
-)
-_EXTERNAL_UI_BOUNDARY_LIMITATION = (
-    "this external KPI report is not the Perfetto UI; the matching "
-    "trace.pftrace contains a separate timeline Heterogeneous LLM Processing, "
-    "not the built-in Overview"
-)
-_WINDOWS_PATH_RE = re.compile(
-    r"(?<![A-Za-z0-9])(?:[A-Za-z]:\\|\\\\)[^\s<>\"']+"
-)
 _CSS_NETWORK_RE = re.compile(
     r"(?:url\s*\(|@\s*import\b|\b(?:https?|ftp|file)\s*:|"
     r"expression\s*\(|-moz-binding)",
     re.IGNORECASE,
 )
+_REQUIRED_NONE_DIRECTIVES = (
+    "default-src",
+    "script-src",
+    "connect-src",
+    "img-src",
+    "font-src",
+    "object-src",
+    "base-uri",
+    "form-action",
+)
+
+# What counts as a host path or external URL.  The renderer redacts these and
+# the auditor rejects them, so both sides share one definition.
+URL_TEXT_RE = re.compile(
+    r"\b(?:https?|ftp|file)\s*:[^\s<>\"']*", re.IGNORECASE
+)
+ABSOLUTE_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9._~-])/"
+    r"(?:[A-Za-z0-9._~-]+/)*"
+    r"[A-Za-z0-9._~-]+"
+)
+WINDOWS_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Za-z]:\\|\\\\)[^\s<>\"']+"
+)
+
+
+class _OfflineHTMLScanner(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.issues: list[str] = []
+        self.forbidden_tag_count = 0
+        self.url_attribute_count = 0
+        self.network_reference_count = 0
+        self.absolute_path_count = 0
+        self.event_handler_count = 0
+        self.csp_values: list[str] = []
+        self._style_depth = 0
+
+    def _issue(self, message: str) -> None:
+        self.issues.append(message)
+
+    def _scan_text(self, value: str, *, context: str) -> None:
+        matches = _NETWORK_SCHEME_RE.findall(value)
+        if matches:
+            self.network_reference_count += len(matches)
+            self._issue(f"{context} contains a network or file scheme")
+        paths = ABSOLUTE_PATH_RE.findall(value)
+        windows = WINDOWS_PATH_RE.findall(value)
+        if paths or windows:
+            self.absolute_path_count += len(paths) + len(windows)
+            self._issue(f"{context} contains a raw absolute path")
+
+    def _scan_css(self, value: str) -> None:
+        if _CSS_NETWORK_RE.search(value):
+            self.network_reference_count += 1
+            self._issue("CSS contains a URL, import, or network-capable expression")
+        if "/*" in value or "\\" in value:
+            self._issue("CSS comments or escapes are not allowed by the offline policy")
+        self._scan_text(value, context="CSS")
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        lowered = tag.casefold()
+        if lowered in _FORBIDDEN_TAGS:
+            self.forbidden_tag_count += 1
+            self._issue(f"forbidden HTML tag: {lowered}")
+        if lowered == "style":
+            self._style_depth += 1
+        normalized = {
+            name.casefold(): "" if value is None else value
+            for name, value in attrs
+        }
+        for name, value in normalized.items():
+            if name in _URL_ATTRIBUTES:
+                self.url_attribute_count += 1
+                self._issue(f"URL-bearing attribute is forbidden: {name}")
+            if name.startswith("on"):
+                self.event_handler_count += 1
+                self._issue(f"event-handler attribute is forbidden: {name}")
+            if name == "style":
+                self._scan_css(value)
+            else:
+                self._scan_text(value, context=f"attribute {name}")
+        if (
+            lowered == "meta"
+            and normalized.get("http-equiv", "").casefold()
+            == "content-security-policy"
+        ):
+            self.csp_values.append(normalized.get("content", ""))
+        if (
+            lowered == "meta"
+            and normalized.get("http-equiv", "").casefold() == "refresh"
+        ):
+            self._issue("meta refresh is forbidden")
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        if tag.casefold() == "style":
+            self._style_depth = max(0, self._style_depth - 1)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.casefold() == "style":
+            self._style_depth = max(0, self._style_depth - 1)
+
+    def handle_data(self, data: str) -> None:
+        if self._style_depth:
+            self._scan_css(data)
+        else:
+            self._scan_text(data, context="text")
+
+    def handle_comment(self, data: str) -> None:
+        self._scan_text(data, context="comment")
+
+
+def _validate_csp(value: str) -> list[str]:
+    directives: dict[str, list[str]] = {}
+    for segment in value.split(";"):
+        words = segment.strip().split()
+        if not words:
+            continue
+        name = words[0].casefold()
+        if name in directives:
+            return [f"duplicate CSP directive: {name}"]
+        directives[name] = [word.casefold() for word in words[1:]]
+    issues: list[str] = []
+    for name in _REQUIRED_NONE_DIRECTIVES:
+        if directives.get(name) != ["'none'"]:
+            issues.append(f"CSP {name} must be exactly 'none'")
+    if directives.get("style-src") != ["'unsafe-inline'"]:
+        issues.append("CSP style-src must allow only inline static CSS")
+    return issues
+
+
+def validate_offline_html(html_text: str) -> dict[str, Any]:
+    """Scan HTML for network-capable, active, or path-leaking constructs."""
+
+    if not isinstance(html_text, str):
+        raise TypeError("html_text must be a string")
+    scanner = _OfflineHTMLScanner()
+    try:
+        scanner.feed(html_text)
+        scanner.close()
+    except Exception as exc:
+        scanner._issue(f"HTML parser error: {type(exc).__name__}")
+    if len(scanner.csp_values) != 1:
+        scanner._issue("exactly one Content-Security-Policy meta element is required")
+    else:
+        scanner.issues.extend(_validate_csp(scanner.csp_values[0]))
+    issues = sorted(set(scanner.issues))
+    return {
+        "valid": not issues,
+        "issues": issues,
+        "csp_present": len(scanner.csp_values) == 1,
+        "forbidden_tag_count": scanner.forbidden_tag_count,
+        "url_attribute_count": scanner.url_attribute_count,
+        "event_handler_count": scanner.event_handler_count,
+        "network_reference_count": scanner.network_reference_count,
+        "absolute_path_count": scanner.absolute_path_count,
+    }
+
+
 _CONCLUSION_WORD_RE = re.compile(r"\b(?:winner|fastest|best)\b", re.IGNORECASE)
-_WORKLOAD_DIGEST_FIELDS = frozenset(
-    {"prompt_sha256", "request_body_sha256"}
-)
-_RECORDED_DIGEST_LABEL = (
-    "Recorded (full SHA-256 retained in overview.json)"
-)
-_OVERVIEW_STYLE = (
-    resources.files(__package__)
-    .joinpath("templates/overview.css")
-    .read_text(encoding="utf-8")
-)
+_STATUS_CLASSES = {
+    "available": "ok",
+    "comparable": "ok",
+    "complete": "ok",
+    "fresh": "ok",
+    "matched": "ok",
+    "succeeded": "ok",
+    "valid": "ok",
+    "diagnostic_only": "warn",
+    "not_available": "muted",
+    "not_collected": "muted",
+    "partial": "warn",
+    "unknown": "warn",
+    "error": "bad",
+    "failed": "bad",
+    "invalid": "bad",
+    "not_comparable": "bad",
+}
 
 
 class OverviewRenderError(ValueError):
@@ -103,11 +260,26 @@ def _sequence(value: object) -> Sequence[Any]:
 
 def _sanitize_string(value: str) -> str:
     normalized = value.replace("\r\n", "\n").replace("\r", "\n")
-    normalized = _URL_TEXT_RE.sub("[redacted URL]", normalized)
-    normalized = _WINDOWS_PATH_RE.sub("[redacted absolute path]", normalized)
-    normalized = _ABSOLUTE_PATH_RE.sub("[redacted absolute path]", normalized)
+    normalized = URL_TEXT_RE.sub("[redacted URL]", normalized)
+    normalized = WINDOWS_PATH_RE.sub("[redacted absolute path]", normalized)
+    normalized = ABSOLUTE_PATH_RE.sub("[redacted absolute path]", normalized)
     normalized = _CONCLUSION_WORD_RE.sub("ranking conclusion", normalized)
     return normalized
+
+
+def _sanitized_json(value: object) -> Any:
+    if isinstance(value, str):
+        return _sanitize_string(value)
+    if isinstance(value, Mapping):
+        return {
+            _sanitize_string(str(key)): _sanitized_json(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [_sanitized_json(item) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        raise OverviewRenderError("HTML input must not contain NaN or Infinity")
+    return value
 
 
 def _text(value: object) -> str:
@@ -128,41 +300,9 @@ def _text(value: object) -> str:
     return escape(_sanitize_string(plain), quote=True)
 
 
-def _sanitized_json(value: object) -> Any:
-    if isinstance(value, str):
-        return _sanitize_string(value)
-    if isinstance(value, Mapping):
-        return {
-            _sanitize_string(str(key)): _sanitized_json(item)
-            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-        }
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return [_sanitized_json(item) for item in value]
-    if isinstance(value, float) and not math.isfinite(value):
-        raise OverviewRenderError("HTML input must not contain NaN or Infinity")
-    return value
-
-
 def _status(value: object) -> str:
     word = str(value) if value is not None else "unknown"
-    status_class = {
-        "available": "ok",
-        "comparable": "ok",
-        "complete": "ok",
-        "fresh": "ok",
-        "matched": "ok",
-        "succeeded": "ok",
-        "valid": "ok",
-        "diagnostic_only": "warn",
-        "not_available": "muted",
-        "not_collected": "muted",
-        "partial": "warn",
-        "unknown": "warn",
-        "error": "bad",
-        "failed": "bad",
-        "invalid": "bad",
-        "not_comparable": "bad",
-    }.get(word, "neutral")
+    status_class = _STATUS_CLASSES.get(word, "neutral")
     return (
         f'<span class="status status-{status_class}">'
         f"Status: {_text(word)}</span>"
@@ -199,9 +339,7 @@ def _table(
     )
 
 
-def _flatten(
-    value: object, prefix: str = ""
-) -> list[tuple[str, object]]:
+def _flatten(value: object, prefix: str = "") -> list[tuple[str, object]]:
     if isinstance(value, Mapping):
         result: list[tuple[str, object]] = []
         for key in sorted(value, key=str):
@@ -219,6 +357,31 @@ def _definition_rows(value: object) -> list[tuple[str, str]]:
     return [(_text(key), _text(item)) for key, item in _flatten(value)]
 
 
+_WORKLOAD_DIGEST_FIELDS = frozenset({"prompt_sha256", "request_body_sha256"})
+_RECORDED_DIGEST_LABEL = "Recorded (full SHA-256 retained in overview.json)"
+_STAGE_WINDOWS = {"prefill", "transfer", "decode"}
+_DEFAULT_DISPLAY_RULES: dict[str, tuple[str, int, int, int]] = {
+    "ns": ("ms", 1, 1_000_000, 3),
+    "bytes": ("MiB", 1, 1_048_576, 3),
+    "bytes/s": ("MB/s", 1, 1_000_000, 3),
+    "requests/s": ("requests/s", 1, 1, 3),
+    "tokens/s": ("tokens/s", 1, 1, 3),
+    "percent": ("%", 1, 1, 2),
+    "ratio": ("ratio", 1, 1, 6),
+    "count": ("count", 1, 1, 0),
+    "W": ("W", 1, 1, 3),
+}
+_RESOURCE_HEADERS = (
+    "Metric",
+    "Host / device / window",
+    "Samples",
+    "Coverage",
+    "Aggregation",
+    "Value",
+    "Warning / unavailable reason",
+)
+
+
 def _public_workload(value: object) -> Mapping[str, Any]:
     """Hide stable request digests from the human-facing HTML report."""
 
@@ -234,18 +397,7 @@ def _display_rule(kpi: Mapping[str, Any]) -> Mapping[str, Any]:
     if isinstance(configured, Mapping):
         return configured
     unit = str(kpi.get("canonical_unit", ""))
-    defaults: dict[str, tuple[str, int, int, int]] = {
-        "ns": ("ms", 1, 1_000_000, 3),
-        "bytes": ("MiB", 1, 1_048_576, 3),
-        "bytes/s": ("MB/s", 1, 1_000_000, 3),
-        "requests/s": ("requests/s", 1, 1, 3),
-        "tokens/s": ("tokens/s", 1, 1, 3),
-        "percent": ("%", 1, 1, 2),
-        "ratio": ("ratio", 1, 1, 6),
-        "count": ("count", 1, 1, 0),
-        "W": ("W", 1, 1, 3),
-    }
-    display_unit, numerator, denominator, places = defaults.get(
+    display_unit, numerator, denominator, places = _DEFAULT_DISPLAY_RULES.get(
         unit, (unit, 1, 1, 6)
     )
     return {
@@ -405,7 +557,7 @@ def _resource_rows(
         scope = _mapping(summary.get("scope"))
         scope_window = scope.get("window")
         if window is None:
-            if scope_window in {"prefill", "transfer", "decode"}:
+            if scope_window in _STAGE_WINDOWS:
                 continue
         elif scope_window != window:
             continue
@@ -440,6 +592,7 @@ def _resource_rows(
         for aggregate in aggregates:
             if not isinstance(aggregate, Mapping):
                 raise OverviewRenderError("resource aggregates must be objects")
+            # Prefer explicit stage coverage evidence over the raw stream span.
             coverage = (
                 f"{summary.get('first_timestamp_ns')} … "
                 f"{summary.get('last_timestamp_ns')} "
@@ -478,22 +631,25 @@ def _resource_rows(
     return rows
 
 
-def _provenance_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
-    rows: list[tuple[str, ...]] = []
-    all_kpis: list[Mapping[str, Any]] = [
-        kpi for _, kpi in _iter_kpis(report)
-    ]
+def _all_kpis(report: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Every section KPI plus every resource aggregate, in document order."""
+
+    values: list[Mapping[str, Any]] = [kpi for _, kpi in _iter_kpis(report)]
     for summary in _sequence(report.get("resources", [])):
         if isinstance(summary, Mapping):
-            all_kpis.extend(
+            values.extend(
                 item
                 for item in _sequence(summary.get("aggregates", []))
                 if isinstance(item, Mapping)
             )
-    for kpi in all_kpis:
+    return values
+
+
+def _provenance_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
+    rows: list[tuple[str, ...]] = []
+    for kpi in _all_kpis(report):
         calculation = _mapping(kpi.get("calculation"))
         clock = _mapping(kpi.get("clock"))
-        sources = _sequence(kpi.get("sources", []))
         source_text = [
             {
                 "source_kind": source.get("source_kind"),
@@ -502,7 +658,7 @@ def _provenance_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
                 "root_id": source.get("root_id"),
                 "relative_path": source.get("relative_path"),
             }
-            for source in sources
+            for source in _sequence(kpi.get("sources", []))
             if isinstance(source, Mapping)
         ]
         rows.append(
@@ -519,29 +675,65 @@ def _provenance_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
 
 
 def _unavailable_rows(report: Mapping[str, Any]) -> list[tuple[str, str]]:
-    rows: list[tuple[str, str]] = []
-    for _, kpi in _iter_kpis(report):
-        if kpi.get("availability") != "available":
-            rows.append(
-                (
-                    _text(kpi.get("name")),
-                    _text(kpi.get("unavailable_reason") or "no reason was supplied"),
-                )
-            )
-    for summary in _sequence(report.get("resources", [])):
-        if isinstance(summary, Mapping):
-            for kpi in _sequence(summary.get("aggregates", [])):
-                if isinstance(kpi, Mapping) and kpi.get("availability") != "available":
-                    rows.append(
-                        (
-                            _text(kpi.get("name")),
-                            _text(
-                                kpi.get("unavailable_reason")
-                                or "no reason was supplied"
-                            ),
-                        )
-                    )
+    rows = [
+        (
+            _text(kpi.get("name")),
+            _text(kpi.get("unavailable_reason") or "no reason was supplied"),
+        )
+        for kpi in _all_kpis(report)
+        if kpi.get("availability") != "available"
+    ]
     return sorted(rows)
+
+
+# The stylesheet ships as package data next to this module.
+_OVERVIEW_STYLE = (
+    resources.files(__package__)
+    .joinpath("templates/overview.css")
+    .read_text(encoding="utf-8")
+)
+_EXTERNAL_UI_BOUNDARY_LIMITATION = (
+    "this external KPI report is not the Perfetto UI; the matching "
+    "trace.pftrace contains a separate timeline Heterogeneous LLM Processing, "
+    "not the built-in Overview"
+)
+_KPI_SECTION_SPECS = (
+    (
+        "request-facing-heading",
+        "Request-facing latency",
+        "request_facing_latency",
+        "Request-facing latency KPIs",
+    ),
+    (
+        "pipeline-heading",
+        "Hybrid pipeline phase breakdown",
+        "pipeline_latency",
+        "Canonical pipeline latency KPIs",
+    ),
+    (
+        "throughput-heading",
+        "Throughput and token count",
+        "throughput_and_tokens",
+        "Throughput and token KPIs",
+    ),
+    (
+        "transfer-heading",
+        "Transfer KPIs",
+        "transfer",
+        "Transfer KPIs",
+    ),
+)
+
+
+def _section(heading_id: str, title: str, *body: str) -> str:
+    """Wrap one labelled report section; the heading id is its aria label."""
+
+    return (
+        f'<section aria-labelledby="{heading_id}">'
+        f'<h2 id="{heading_id}">{_text(title)}</h2>'
+        + "".join(body)
+        + "</section>"
+    )
 
 
 def _document(title: str, body: str) -> str:
@@ -594,10 +786,10 @@ def render_overview_html(report: Mapping[str, Any]) -> str:
         "pipeline observations and preserves unavailable values explicitly.</p>"
         "</header>"
     )
-    run_section = (
-        '<section aria-labelledby="run-heading">'
-        '<h2 id="run-heading">Run and workload information</h2>'
-        + _table("Run identity", ("Field", "Value"), _definition_rows(run))
+    run_section = _section(
+        "run-heading",
+        "Run and workload information",
+        _table("Run identity", ("Field", "Value"), _definition_rows(run))
         + _table(
             "Workload configuration",
             ("Field", "Value"),
@@ -620,84 +812,44 @@ def render_overview_html(report: Mapping[str, Any]) -> str:
                 for index, item in enumerate(_report_hardware(report))
             ),
             empty_message="No hardware inventory was supplied.",
-        )
-        + "</section>"
+        ),
     )
-    quality_section = (
-        '<section aria-labelledby="quality-heading">'
-        '<h2 id="quality-heading">Status and data quality</h2>'
-        + _table(
+    quality_section = _section(
+        "quality-heading",
+        "Status and data quality",
+        _table(
             "Data-quality evidence",
             ("Field", "Value"),
             _definition_rows(report.get("data_quality", {})),
             empty_message="No data-quality evidence was supplied.",
-        )
-        + "</section>"
-    )
-
-    section_specs = (
-        (
-            "request-facing-heading",
-            "Request-facing latency",
-            "request_facing_latency",
-            "Request-facing latency KPIs",
-        ),
-        (
-            "pipeline-heading",
-            "Hybrid pipeline phase breakdown",
-            "pipeline_latency",
-            "Canonical pipeline latency KPIs",
-        ),
-        (
-            "throughput-heading",
-            "Throughput and token count",
-            "throughput_and_tokens",
-            "Throughput and token KPIs",
-        ),
-        (
-            "transfer-heading",
-            "Transfer KPIs",
-            "transfer",
-            "Transfer KPIs",
         ),
     )
     kpi_sections = "".join(
-        f'<section aria-labelledby="{heading_id}">'
-        f'<h2 id="{heading_id}">{_text(title)}</h2>'
-        + _kpi_table(caption, kpi_groups.get(category, []))
-        + "</section>"
-        for heading_id, title, category, caption in section_specs
-    )
-    resource_tables = "".join(
-        _table(
-            title,
-            (
-                "Metric",
-                "Host / device / window",
-                "Samples",
-                "Coverage",
-                "Aggregation",
-                "Value",
-                "Warning / unavailable reason",
-            ),
-            _resource_rows(report, window=window),
-            empty_message=f"No {title.lower()} is present for this run.",
+        _section(
+            heading_id, title, _kpi_table(caption, kpi_groups.get(category, []))
         )
-        for title, window in (
-            ("Prefill resource", "prefill"),
-            ("Transfer resource", "transfer"),
-            ("Decode resource", "decode"),
-            ("Capture-wide resource", None),
-        )
+        for heading_id, title, category, caption in _KPI_SECTION_SPECS
     )
-    resource_section = (
-        '<section aria-labelledby="resource-heading">'
-        '<h2 id="resource-heading">CPU, GPU, and NPU resources</h2>'
+    resource_section = _section(
+        "resource-heading",
+        "CPU, GPU, and NPU resources",
         "<p>Stage values use canonical marker windows and remain separated by "
         "host and device. Capture-wide values are shown separately and are never "
-        "copied into a stage. Missing coverage stays unavailable.</p>"
-        + resource_tables
-        + "</section>"
+        "copied into a stage. Missing coverage stays unavailable.</p>",
+        "".join(
+            _table(
+                title,
+                _RESOURCE_HEADERS,
+                _resource_rows(report, window=window),
+                empty_message=f"No {title.lower()} is present for this run.",
+            )
+            for title, window in (
+                ("Prefill resource", "prefill"),
+                ("Transfer resource", "transfer"),
+                ("Decode resource", "decode"),
+                ("Capture-wide resource", None),
+            )
+        ),
     )
     interpretation = report.get("interpretation")
     limitations = (
@@ -717,26 +869,25 @@ def render_overview_html(report: Mapping[str, Any]) -> str:
         and _EXTERNAL_UI_BOUNDARY_LIMITATION in limitations
         else ""
     )
-    perfetto_section = (
-        '<section aria-labelledby="perfetto-heading">'
-        '<h2 id="perfetto-heading">Perfetto trace information</h2>'
-        + perfetto_boundary
-        + _table(
+    perfetto_section = _section(
+        "perfetto-heading",
+        "Perfetto trace information",
+        perfetto_boundary,
+        _table(
             "Perfetto reconciliation evidence",
             ("Field", "Value"),
             _definition_rows(report.get("perfetto", {})),
             empty_message="No matching Perfetto evidence was supplied.",
-        )
-        + "</section>"
+        ),
     )
-    native_section = (
-        '<section aria-labelledby="native-heading">'
-        '<h2 id="native-heading">Native profiler policy</h2>'
+    native_section = _section(
+        "native-heading",
+        "Native profiler policy",
         "<p>Native timestamps remain partial or unaligned unless an explicit "
         "clock transform is present. RBLN Perfetto payloads are validated as "
         "separate native traces and are not merged without a canonical "
-        "anchor.</p>"
-        + _table(
+        "anchor.</p>",
+        _table(
             "Native profiler evidence",
             ("Entry", "Details"),
             (
@@ -746,24 +897,22 @@ def render_overview_html(report: Mapping[str, Any]) -> str:
                 )
             ),
             empty_message="No native profiler capture applies to this run.",
-        )
-        + "</section>"
+        ),
     )
-    unavailable_section = (
-        '<section aria-labelledby="unavailable-heading">'
-        '<h2 id="unavailable-heading">Unavailable values and reasons</h2>'
-        + _table(
+    unavailable_section = _section(
+        "unavailable-heading",
+        "Unavailable values and reasons",
+        _table(
             "Unavailable KPI inventory",
             ("KPI", "Reason"),
             _unavailable_rows(report),
             empty_message="Every reported KPI is available.",
-        )
-        + "</section>"
+        ),
     )
-    provenance_section = (
-        '<section aria-labelledby="provenance-heading">'
-        '<h2 id="provenance-heading">Provenance and calculation methods</h2>'
-        + _table(
+    provenance_section = _section(
+        "provenance-heading",
+        "Provenance and calculation methods",
+        _table(
             "KPI formulas and sources",
             (
                 "KPI",
@@ -775,8 +924,7 @@ def render_overview_html(report: Mapping[str, Any]) -> str:
             ),
             _provenance_rows(report),
             empty_message="No KPI provenance was supplied.",
-        )
-        + "</section>"
+        ),
     )
     interpretation = _mapping(report.get("interpretation"))
     limitations = _sequence(interpretation.get("limitations", []))
@@ -789,18 +937,17 @@ def render_overview_html(report: Mapping[str, Any]) -> str:
     else:
         policies = tuple(str(item) for item in _sequence(raw_policies))
     cautions = sorted({str(item) for item in (*limitations, *policies)})
-    interpretation_section = (
-        '<section aria-labelledby="interpretation-heading">'
-        '<h2 id="interpretation-heading">Interpretation cautions</h2>'
-        f"<p>Comparison scope: {_text(interpretation.get('comparison_scope', 'unspecified'))}</p>"
-        + (
+    interpretation_section = _section(
+        "interpretation-heading",
+        "Interpretation cautions",
+        f"<p>Comparison scope: {_text(interpretation.get('comparison_scope', 'unspecified'))}</p>",
+        (
             "<ul>"
             + "".join(f"<li>{_text(item)}</li>" for item in cautions)
             + "</ul>"
             if cautions
             else '<p class="muted">No additional caution was supplied.</p>'
-        )
-        + "</section>"
+        ),
     )
     return _document(
         f"Overview — {run_id}",
@@ -817,153 +964,6 @@ def render_overview_html(report: Mapping[str, Any]) -> str:
             + interpretation_section
         ),
     )
-
-
-class _OfflineHTMLScanner(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.issues: list[str] = []
-        self.forbidden_tag_count = 0
-        self.url_attribute_count = 0
-        self.network_reference_count = 0
-        self.absolute_path_count = 0
-        self.event_handler_count = 0
-        self.csp_values: list[str] = []
-        self._style_depth = 0
-
-    def _issue(self, message: str) -> None:
-        self.issues.append(message)
-
-    def _scan_text(self, value: str, *, context: str) -> None:
-        matches = _NETWORK_SCHEME_RE.findall(value)
-        if matches:
-            self.network_reference_count += len(matches)
-            self._issue(f"{context} contains a network or file scheme")
-        paths = _ABSOLUTE_PATH_RE.findall(value)
-        windows = _WINDOWS_PATH_RE.findall(value)
-        if paths or windows:
-            self.absolute_path_count += len(paths) + len(windows)
-            self._issue(f"{context} contains a raw absolute path")
-
-    def _scan_css(self, value: str) -> None:
-        if _CSS_NETWORK_RE.search(value):
-            self.network_reference_count += 1
-            self._issue("CSS contains a URL, import, or network-capable expression")
-        if "/*" in value or "\\" in value:
-            self._issue("CSS comments or escapes are not allowed by the offline policy")
-        self._scan_text(value, context="CSS")
-
-    def handle_starttag(
-        self, tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
-        lowered = tag.casefold()
-        if lowered in _FORBIDDEN_TAGS:
-            self.forbidden_tag_count += 1
-            self._issue(f"forbidden HTML tag: {lowered}")
-        if lowered == "style":
-            self._style_depth += 1
-        normalized = {
-            name.casefold(): "" if value is None else value
-            for name, value in attrs
-        }
-        for name, value in normalized.items():
-            if name in _URL_ATTRIBUTES:
-                self.url_attribute_count += 1
-                self._issue(f"URL-bearing attribute is forbidden: {name}")
-            if name.startswith("on"):
-                self.event_handler_count += 1
-                self._issue(f"event-handler attribute is forbidden: {name}")
-            if name == "style":
-                self._scan_css(value)
-            else:
-                self._scan_text(value, context=f"attribute {name}")
-        if (
-            lowered == "meta"
-            and normalized.get("http-equiv", "").casefold()
-            == "content-security-policy"
-        ):
-            self.csp_values.append(normalized.get("content", ""))
-        if (
-            lowered == "meta"
-            and normalized.get("http-equiv", "").casefold() == "refresh"
-        ):
-            self._issue("meta refresh is forbidden")
-
-    def handle_startendtag(
-        self, tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
-        self.handle_starttag(tag, attrs)
-        if tag.casefold() == "style":
-            self._style_depth = max(0, self._style_depth - 1)
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag.casefold() == "style":
-            self._style_depth = max(0, self._style_depth - 1)
-
-    def handle_data(self, data: str) -> None:
-        if self._style_depth:
-            self._scan_css(data)
-        else:
-            self._scan_text(data, context="text")
-
-    def handle_comment(self, data: str) -> None:
-        self._scan_text(data, context="comment")
-
-
-def _validate_csp(value: str) -> list[str]:
-    directives: dict[str, list[str]] = {}
-    for segment in value.split(";"):
-        words = segment.strip().split()
-        if not words:
-            continue
-        name = words[0].casefold()
-        if name in directives:
-            return [f"duplicate CSP directive: {name}"]
-        directives[name] = [word.casefold() for word in words[1:]]
-    issues: list[str] = []
-    for name in (
-        "default-src",
-        "script-src",
-        "connect-src",
-        "img-src",
-        "font-src",
-        "object-src",
-        "base-uri",
-        "form-action",
-    ):
-        if directives.get(name) != ["'none'"]:
-            issues.append(f"CSP {name} must be exactly 'none'")
-    if directives.get("style-src") != ["'unsafe-inline'"]:
-        issues.append("CSP style-src must allow only inline static CSS")
-    return issues
-
-
-def validate_offline_html(html_text: str) -> dict[str, Any]:
-    """Scan HTML for network-capable, active, or path-leaking constructs."""
-
-    if not isinstance(html_text, str):
-        raise TypeError("html_text must be a string")
-    scanner = _OfflineHTMLScanner()
-    try:
-        scanner.feed(html_text)
-        scanner.close()
-    except Exception as exc:
-        scanner._issue(f"HTML parser error: {type(exc).__name__}")
-    if len(scanner.csp_values) != 1:
-        scanner._issue("exactly one Content-Security-Policy meta element is required")
-    else:
-        scanner.issues.extend(_validate_csp(scanner.csp_values[0]))
-    issues = sorted(set(scanner.issues))
-    return {
-        "valid": not issues,
-        "issues": issues,
-        "csp_present": len(scanner.csp_values) == 1,
-        "forbidden_tag_count": scanner.forbidden_tag_count,
-        "url_attribute_count": scanner.url_attribute_count,
-        "event_handler_count": scanner.event_handler_count,
-        "network_reference_count": scanner.network_reference_count,
-        "absolute_path_count": scanner.absolute_path_count,
-    }
 
 
 __all__ = [

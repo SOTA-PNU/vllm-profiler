@@ -1,9 +1,16 @@
-"""Assembly of a path-free single-run Overview report."""
+"""Assembly of a path-free single-run Overview report.
+
+One job: turn validated immutable inputs into the exact published document —
+fail-closed coercion of coordinator provenance, the deterministic ordering that
+makes ``overview.json`` byte-stable, the run inventory, and the data-quality
+block stating what the capture proves and what it does not.
+"""
 
 from __future__ import annotations
 
 from dataclasses import asdict
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
@@ -16,20 +23,39 @@ from .calculation import calculate_overview_kpis
 from .loader import (
     LoadedPerfettoBundle,
     OverviewInputError,
+    normalized_input_metadata,
     read_validated_source_json,
     reconciliation_summary,
 )
 
 
-class OverviewReportError(RuntimeError):
-    """A validated source could not be represented without inventing data."""
-
+OVERVIEW_SCHEMA_VERSION = "1.0.0"
+OVERVIEW_RECORD_TYPE = "overview_report"
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_RBLN_PROFILER = "npu_rbln"
+_SHARED_COMMAND_KEYS = ("prefill_command", "decode_command")
+_KPI_SECTION_NAMES = (
+    "request_facing_latency",
+    "pipeline_latency",
+    "throughput_and_tokens",
+    "transfer",
+)
+_BASE_LIMITATIONS = {
+    "one measured request cannot support a general performance conclusion",
+    "capture modes are diagnostic observations rather than repeated benchmarks",
+}
+_NATIVE_LIMITATION = (
+    "native profiler events remain partial and unaligned internally"
+)
+_RBLN_LIMITATION = (
+    "RBLN Perfetto events require a separate native-relative timeline "
+    "until a canonical clock anchor exists"
+)
 
 
-def _enum_value(value: object) -> object:
-    return getattr(value, "value", value)
+class OverviewReportError(RuntimeError):
+    """A validated source could not be represented without inventing data."""
 
 
 def _canonical_key(value: object) -> bytes:
@@ -42,16 +68,35 @@ def _canonical_key(value: object) -> bytes:
     ).encode("utf-8")
 
 
-def _safe_model_id(value: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise OverviewReportError("model identity must be a non-empty string")
-    if Path(value).is_absolute() or "/" in value or "\\" in value:
-        result = Path(value.replace("\\", "/")).name
-    else:
-        result = value
-    if not result or result in {".", ".."}:
-        raise OverviewReportError("model identity cannot be safely redacted")
-    return result
+
+def _optional_nonnegative_int(value: object, *, field: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise OverviewReportError(f"{field} must be a non-negative integer")
+    return value
+
+
+def _optional_finite_number(value: object, *, field: str) -> int | float | None:
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise OverviewReportError(f"{field} must be a finite non-negative number")
+    return value
+
+
+def _optional_sha(value: object, *, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
+        raise OverviewReportError(f"{field} must be a lowercase SHA-256")
+    return value
+
 
 
 def _sort_sources(kpi: dict[str, Any]) -> None:
@@ -71,44 +116,42 @@ def _sort_sources(kpi: dict[str, Any]) -> None:
         kpi["quality_warnings"] = sorted(set(warnings))
 
 
-def _canonicalize_calculation(
+def _ordered_copies(raw: object, *, error: str, key) -> list[dict[str, Any]]:
+    """Copy a KPI-like array, canonicalize each entry's sources, then sort."""
+
+    if not isinstance(raw, list):
+        raise OverviewReportError(error)
+    values = [dict(item) for item in raw]
+    for item in values:
+        _sort_sources(item)
+    return sorted(values, key=key)
+
+
+def canonicalize_calculation(
     calculated: dict[str, object],
 ) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
-    sections: dict[str, list[dict[str, Any]]] = {}
-    for section_name in (
-        "request_facing_latency",
-        "pipeline_latency",
-        "throughput_and_tokens",
-        "transfer",
-    ):
-        raw = calculated.get(section_name)
-        if not isinstance(raw, list):
-            raise OverviewReportError(f"{section_name} must be a KPI array")
-        values = [dict(item) for item in raw]
-        for item in values:
-            _sort_sources(item)
-        sections[section_name] = sorted(
-            values,
+    """Return the KPI sections and resource streams in publication order."""
+
+    sections = {
+        name: _ordered_copies(
+            calculated.get(name),
+            error=f"{name} must be a KPI array",
             key=lambda item: (
                 str(item.get("name")),
                 _canonical_key(item.get("scope")),
                 str(item.get("aggregation_method")),
             ),
         )
-
+        for name in _KPI_SECTION_NAMES
+    }
     raw_resources = calculated.get("resource_summaries")
     if not isinstance(raw_resources, list):
         raise OverviewReportError("resource_summaries must be an array")
     resources = [dict(item) for item in raw_resources]
     for resource in resources:
-        aggregates = resource.get("aggregates")
-        if not isinstance(aggregates, list):
-            raise OverviewReportError("resource aggregates must be an array")
-        canonical_aggregates = [dict(item) for item in aggregates]
-        for item in canonical_aggregates:
-            _sort_sources(item)
-        resource["aggregates"] = sorted(
-            canonical_aggregates,
+        resource["aggregates"] = _ordered_copies(
+            resource.get("aggregates"),
+            error="resource aggregates must be an array",
             key=lambda item: (
                 str(item.get("aggregation_method")),
                 str(item.get("name")),
@@ -124,6 +167,7 @@ def _canonicalize_calculation(
         )
     )
     return sections, resources
+
 
 
 def _kpi_value(
@@ -169,63 +213,28 @@ def _command_option(command: object, name: str) -> int | None:
     return value
 
 
-def _equal_command_option(
-    provenance: Mapping[str, Any],
-    name: str,
-) -> int | None:
-    values = [
-        _command_option(provenance.get(key), name)
-        for key in ("prefill_command", "decode_command")
+def _equal_command_option(provenance: Mapping[str, Any], name: str) -> int | None:
+    concrete = [
+        value
+        for value in (
+            _command_option(provenance.get(key), name)
+            for key in _SHARED_COMMAND_KEYS
+        )
+        if value is not None
     ]
-    concrete = [value for value in values if value is not None]
     if not concrete:
         return None
     if len(concrete) != 2 or concrete[0] != concrete[1]:
-        raise OverviewReportError(
-            f"prefill/decode command {name} does not match"
-        )
+        raise OverviewReportError(f"prefill/decode command {name} does not match")
     return concrete[0]
 
 
-def _optional_nonnegative_int(value: object, *, field: str) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise OverviewReportError(f"{field} must be a non-negative integer")
-    return value
-
-
-def _optional_finite_number(
-    value: object,
-    *,
-    field: str,
-) -> int | float | None:
-    import math
-
-    if value is None:
-        return None
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(value)
-        or value < 0
-    ):
-        raise OverviewReportError(f"{field} must be a finite non-negative number")
-    return value
-
-
-def _optional_sha(value: object, *, field: str) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
-        raise OverviewReportError(f"{field} must be a lowercase SHA-256")
-    return value
-
-
-def _workload(
+def _build_workload(
     loaded: LoadedHybridRun,
     sections: Mapping[str, Sequence[Mapping[str, Any]]],
 ) -> dict[str, Any]:
+    """Reconcile coordinator provenance with the normalized request KPIs."""
+
     try:
         provenance = read_validated_source_json(
             loaded,
@@ -251,16 +260,16 @@ def _workload(
         raise OverviewReportError(
             "coordinator measured count disagrees with normalized request.count"
         )
-    input_tokens = _kpi_value(sections, "request.input_tokens")
-    output_tokens = _kpi_value(sections, "request.output_tokens")
-    total_tokens = _kpi_value(sections, "request.total_tokens")
+    tokens = {
+        field: _kpi_value(sections, f"request.{field}")
+        for field in ("input_tokens", "output_tokens", "total_tokens")
+    }
     return {
         "request_count": request_count,
-        "input_tokens": int(input_tokens) if isinstance(input_tokens, int) else None,
-        "output_tokens": (
-            int(output_tokens) if isinstance(output_tokens, int) else None
-        ),
-        "total_tokens": int(total_tokens) if isinstance(total_tokens, int) else None,
+        **{
+            field: int(value) if isinstance(value, int) else None
+            for field, value in tokens.items()
+        },
         "concurrency": loaded.manifest.workload.concurrency,
         "request_rate_per_s": loaded.manifest.workload.request_rate_per_s,
         "warmup_requests": _optional_nonnegative_int(
@@ -300,39 +309,69 @@ def _workload(
     }
 
 
-def _models(loaded: LoadedHybridRun) -> list[dict[str, Any]]:
-    values = [
-        {
-            "role": model.role,
-            "model_id": _safe_model_id(model.model_id),
-            "revision": model.revision,
-            "dtype": model.dtype,
-        }
-        for model in loaded.manifest.models
-    ]
+
+def _safe_model_id(value: str) -> str:
+    """Publish only the final path component; the report carries no host path."""
+
+    if not isinstance(value, str) or not value:
+        raise OverviewReportError("model identity must be a non-empty string")
+    if Path(value).is_absolute() or "/" in value or "\\" in value:
+        result = Path(value.replace("\\", "/")).name
+    else:
+        result = value
+    if not result or result in {".", ".."}:
+        raise OverviewReportError("model identity cannot be safely redacted")
+    return result
+
+
+def _build_models(loaded: LoadedHybridRun) -> list[dict[str, Any]]:
+    return sorted(
+        (
+            {
+                "role": model.role,
+                "model_id": _safe_model_id(model.model_id),
+                "revision": model.revision,
+                "dtype": model.dtype,
+            }
+            for model in loaded.manifest.models
+        ),
+        key=_canonical_key,
+    )
+
+
+def _build_hardware(loaded: LoadedHybridRun) -> list[dict[str, Any]]:
+    return sorted(
+        (
+            {
+                "device_type": device.device_type.value,
+                "device_id": device.device_id,
+                "vendor": device.vendor,
+                "model": device.model,
+                "memory_total_bytes": device.memory_total_bytes,
+            }
+            for device in loaded.manifest.devices
+        ),
+        key=_canonical_key,
+    )
+
+
+def _build_native_profiles(loaded: LoadedHybridRun) -> list[dict[str, Any]]:
+    values: list[dict[str, Any]] = []
+    for envelope in loaded.native_envelopes:
+        rbln = envelope.profiler_type == _RBLN_PROFILER
+        value = asdict(envelope)
+        if rbln:
+            value["opaque_rbln_pb"] = False
+        value["native_event_alignment"] = "unaligned"
+        value["structure_analysis"] = (
+            "deferred_to_perfetto_conversion" if rbln else "not_applicable"
+        )
+        values.append(value)
     return sorted(values, key=_canonical_key)
 
 
-def _hardware(loaded: LoadedHybridRun) -> list[dict[str, Any]]:
-    values = [
-        {
-            "device_type": device.device_type.value,
-            "device_id": device.device_id,
-            "vendor": device.vendor,
-            "model": device.model,
-            "memory_total_bytes": device.memory_total_bytes,
-        }
-        for device in loaded.manifest.devices
-    ]
-    return sorted(values, key=_canonical_key)
 
-
-def _metric_integer(
-    loaded: LoadedHybridRun,
-    name: str,
-    *,
-    default: int = 0,
-) -> int:
+def _metric_integer(loaded: LoadedHybridRun, name: str, *, default: int = 0) -> int:
     matches = [metric for metric in loaded.metrics if metric.metric_name == name]
     if len(matches) != 1:
         return default
@@ -346,10 +385,12 @@ def _metric_integer(
     return metric.value
 
 
-def _data_quality(
+def _build_data_quality(
     loaded: LoadedHybridRun,
     perfetto: LoadedPerfettoBundle,
 ) -> dict[str, Any]:
+    """State what the capture proves, and what it explicitly does not."""
+
     marker = validate_marker_groups(loaded.events)
     resource_metrics = [
         metric
@@ -360,19 +401,6 @@ def _data_quality(
         metric.availability is Availability.AVAILABLE
         for metric in resource_metrics
     )
-    pipeline_e2e = [
-        metric
-        for metric in loaded.metrics
-        if metric.metric_name == "latency.e2e"
-        and metric.dimensions.get("hybrid.join_method") == "correlation_id"
-    ]
-    join_methods = sorted(
-        {
-            str(metric.dimensions["hybrid.join_method"])
-            for metric in pipeline_e2e
-        }
-    )
-    join_method = join_methods[0] if len(join_methods) == 1 else "not_available"
     attributes = loaded.manifest.attributes
     profiler_kind = attributes.get(LEGACY_PROFILE_KIND_ATTRIBUTE, "unknown")
     native_alignment = attributes.get(
@@ -383,6 +411,19 @@ def _data_quality(
         raise OverviewReportError("profiler kind is invalid")
     if not isinstance(native_alignment, str) or not native_alignment:
         raise OverviewReportError("native profiler alignment status is invalid")
+    has_rbln = any(
+        envelope.profiler_type == _RBLN_PROFILER
+        for envelope in loaded.native_envelopes
+    )
+    join_methods = sorted(
+        {
+            str(metric.dimensions["hybrid.join_method"])
+            for metric in loaded.metrics
+            if metric.metric_name == "latency.e2e"
+            and metric.dimensions.get("hybrid.join_method") == "correlation_id"
+        }
+    )
+    # Report ``aligned`` only with method, offset and uncertainty all present.
     offset = attributes.get("hybrid.alignment_offset_ns")
     uncertainty = attributes.get("hybrid.alignment_uncertainty_ns")
     if isinstance(offset, bool) or not isinstance(offset, int):
@@ -393,40 +434,25 @@ def _data_quality(
         or uncertainty < 0
     ):
         uncertainty = None
-    alignment_method = loaded.manifest.configuration.get("alignment_method")
-    if not isinstance(alignment_method, str) or not alignment_method:
-        alignment_method = None
-    alignment_status = (
-        "aligned"
-        if alignment_method is not None
-        and offset is not None
-        and uncertainty is not None
-        else "not_available"
-    )
-    roots = [
-        item.metadata
-        for item in sorted(
-            loaded.root_fingerprints,
-            key=lambda fingerprint: fingerprint.root_id,
-        )
-    ]
-    has_rbln = any(
-        envelope.profiler_type == "npu_rbln"
-        for envelope in loaded.native_envelopes
-    )
-    limitations = {
-        "one measured request cannot support a general performance conclusion",
-        "capture modes are diagnostic observations rather than repeated benchmarks",
+    method = loaded.manifest.configuration.get("alignment_method")
+    if not isinstance(method, str) or not method:
+        method = None
+    alignment = {
+        "status": (
+            "aligned"
+            if method is not None and offset is not None and uncertainty is not None
+            else "not_available"
+        ),
+        "method": method,
+        "offset_ns": offset,
+        "uncertainty_ns": uncertainty,
     }
+    limitations = set(_BASE_LIMITATIONS)
     if loaded.native_envelopes:
-        limitations.add(
-            "native profiler events remain partial and unaligned internally"
-        )
+        limitations.add(_NATIVE_LIMITATION)
     if has_rbln:
-        limitations.add(
-            "RBLN Perfetto events require a separate native-relative timeline "
-            "until a canonical clock anchor exists"
-        )
+        limitations.add(_RBLN_LIMITATION)
+    fresh = perfetto.fresh_trace_validation
     return {
         "run_status": loaded.manifest.status.value,
         "canonical_marker_count": len(loaded.events),
@@ -439,18 +465,12 @@ def _data_quality(
         },
         "request_join": {
             "joined_count": _metric_integer(loaded, "hybrid.joined_requests"),
-            "unjoined_count": _metric_integer(
-                loaded,
-                "hybrid.unjoined_requests",
+            "unjoined_count": _metric_integer(loaded, "hybrid.unjoined_requests"),
+            "method": (
+                join_methods[0] if len(join_methods) == 1 else "not_available"
             ),
-            "method": join_method,
         },
-        "alignment": {
-            "status": alignment_status,
-            "method": alignment_method,
-            "offset_ns": offset,
-            "uncertainty_ns": uncertainty,
-        },
+        "alignment": alignment,
         "resource_samples": {
             "total": len(resource_metrics),
             "available": available_resources,
@@ -460,32 +480,23 @@ def _data_quality(
             "kind": profiler_kind,
             "native_alignment_status": native_alignment,
         },
-        "source_artifact_validation": {
-            "valid": True,
-            "closeout_artifact_count": loaded.closeout_artifact_count,
-            "closeout_manifest_sha256": loaded.closeout_manifest_sha256,
-            "roots": roots,
-        },
+        "source_artifact_validation": normalized_input_metadata(loaded),
         "perfetto_sql_validation": {
-            "valid": perfetto.fresh_trace_validation["valid"],
-            "query_count": len(perfetto.fresh_trace_validation["queries"]),
-            "mismatches": list(perfetto.fresh_trace_validation["mismatches"]),
+            "valid": fresh["valid"],
+            "query_count": len(fresh["queries"]),
+            "mismatches": list(fresh["mismatches"]),
         },
-        "trace_sha256": perfetto.fresh_trace_validation["trace"]["sha256"],
+        "trace_sha256": fresh["trace"]["sha256"],
         "per_sample_stream_preserved": (
             attributes.get("hybrid.per_sample_stream_preserved") is True
         ),
         "cleanup_complete": attributes.get("hybrid.cleanup_complete") is True,
         "rbln_pb_policy": {
             "classification": (
-                "perfetto_compatible_rbln_trace"
-                if has_rbln
-                else "not_present"
+                "perfetto_compatible_rbln_trace" if has_rbln else "not_present"
             ),
             "structure_analysis": (
-                "deferred_to_perfetto_conversion"
-                if has_rbln
-                else "not_applicable"
+                "deferred_to_perfetto_conversion" if has_rbln else "not_applicable"
             ),
             "raw_bytes_embedded": False,
         },
@@ -493,23 +504,9 @@ def _data_quality(
     }
 
 
-def _native_profiles(loaded: LoadedHybridRun) -> list[dict[str, Any]]:
-    values: list[dict[str, Any]] = []
-    for envelope in loaded.native_envelopes:
-        value = asdict(envelope)
-        if envelope.profiler_type == "npu_rbln":
-            value["opaque_rbln_pb"] = False
-        value["native_event_alignment"] = "unaligned"
-        value["structure_analysis"] = (
-            "deferred_to_perfetto_conversion"
-            if envelope.profiler_type == "npu_rbln"
-            else "not_applicable"
-        )
-        values.append(value)
-    return sorted(values, key=_canonical_key)
-
-
 def _interpretation() -> dict[str, Any]:
+    """Return the fixed interpretation cautions this product always states."""
+
     return {
         "comparison_scope": "single_request_diagnostic_capture",
         "benchmark_claim_allowed": False,
@@ -545,15 +542,13 @@ def build_overview_report(
 
     if loaded.manifest.run_id != perfetto.conversion_manifest["run_id"]:
         raise OverviewReportError("normalized and Perfetto run IDs differ")
-    calculated = calculate_overview_kpis(loaded)
-    sections, resources = _canonicalize_calculation(calculated)
-    attributes = loaded.manifest.attributes
-    profiler_kind = attributes.get(LEGACY_PROFILE_KIND_ATTRIBUTE)
+    sections, resources = canonicalize_calculation(calculate_overview_kpis(loaded))
+    profiler_kind = loaded.manifest.attributes.get(LEGACY_PROFILE_KIND_ATTRIBUTE)
     if not isinstance(profiler_kind, str) or not profiler_kind:
         profiler_kind = "unknown"
     return {
-        "schema_version": "1.0.0",
-        "record_type": "overview_report",
+        "schema_version": OVERVIEW_SCHEMA_VERSION,
+        "record_type": OVERVIEW_RECORD_TYPE,
         "run": {
             "run_id": loaded.manifest.run_id,
             "mode": loaded.manifest.mode.value,
@@ -562,14 +557,14 @@ def build_overview_report(
             "profiler_kind": profiler_kind,
             "canonical_clock_domain_id": loaded.canonical_clock_domain_id,
         },
-        "workload": _workload(loaded, sections),
-        "models": _models(loaded),
-        "hardware": _hardware(loaded),
+        "workload": _build_workload(loaded, sections),
+        "models": _build_models(loaded),
+        "hardware": _build_hardware(loaded),
         "kpis": sections,
         "resources": resources,
-        "data_quality": _data_quality(loaded, perfetto),
+        "data_quality": _build_data_quality(loaded, perfetto),
         "perfetto": reconciliation_summary(perfetto),
-        "native_profiles": _native_profiles(loaded),
+        "native_profiles": _build_native_profiles(loaded),
         "interpretation": _interpretation(),
     }
 

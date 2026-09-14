@@ -1,33 +1,23 @@
-"""JSON Schema structure and semantic validation for Overview model v1."""
+"""Semantic rules an Overview report must satisfy beyond its JSON structure.
+
+JSON Schema cannot say that a KPI's unit matches the official catalog, that an
+available value carries provenance and a sample, or that ``data_quality``
+agrees with the Perfetto summary.  Those cross-field contracts live here.
+"""
 
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
-from enum import Enum
-from functools import lru_cache
-import hashlib
-from importlib import resources
-import json
 import math
-from pathlib import PurePosixPath, PureWindowsPath
 import re
-from typing import Any, Mapping, TypeVar
+from typing import Any, Mapping
 
-from ..schema import Availability, METRIC_CATALOG
-from ..schema.catalog import (
+from ...schema import METRIC_CATALOG, Availability
+from ...schema.catalog import (
     INTERVAL_RESOURCE_METRICS,
     KPI_SECTION_METRICS,
     RESOURCE_AGGREGATIONS,
 )
-from ..schema.constants import JSON_SCHEMA_DRAFT
-from ..schema.jsonschema_runtime import (
-    JsonSchemaFailure,
-    compile_schema,
-    validate_schema_document,
-)
-from ..support.json_io import compact_json_bytes
-from .model import (
-    OVERVIEW_REPORT_RECORD_TYPE,
+from ..model import (
     DisplayRule,
     KpiCalculation,
     KpiClock,
@@ -38,14 +28,24 @@ from .model import (
     OverviewReport,
     ResourceSummary,
 )
+from .primitives import _validate_report_structure
+from .primitives import (
+    _deterministic_object_tuple,
+    _fail,
+    _integer,
+    _json_object,
+    _json_value,
+    _nonempty,
+    _number,
+    _raw_primitive,
+    _require_type,
+    _safe_relative_path,
+    _sorted_json_array,
+    _sorted_unique_strings,
+)
 
-
-OVERVIEW_REPORT_SCHEMA_NAME = "overview_report.schema.json"
 
 _ROOT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
-_EMBEDDED_POSIX_PATH_RE = re.compile(
-    r"""(?:^|[\s="'(])/(?!/)[A-Za-z0-9._-]"""
-)
 _OBSERVATION_LAYERS = {
     "request_facing_client",
     "hybrid_pipeline",
@@ -105,207 +105,33 @@ _DISPLAY_SCALES: dict[str, dict[str, tuple[int, int]]] = {
         "GiB/s": (1, 1_073_741_824),
     },
 }
-
-_ModelT = TypeVar("_ModelT")
-
-
-class OverviewSchemaError(ValueError):
-    """Stable field-path error for Overview model and JSON validation."""
-
-    def __init__(self, field_path: str, message: str):
-        self.field_path = field_path
-        self.message = message
-        super().__init__(f"{field_path}: {message}")
-
-
-def _fail(path: str, message: str) -> None:
-    raise OverviewSchemaError(path, message)
-
-
-@lru_cache(maxsize=1)
-def _overview_validator():
-    return compile_schema(load_json_schema(OVERVIEW_REPORT_RECORD_TYPE))
-
-
-def _validate_report_structure(value: object) -> None:
-    try:
-        validate_schema_document(
-            value,
-            _overview_validator(),
-            root_path="overview",
-        )
-    except JsonSchemaFailure as error:
-        raise OverviewSchemaError(error.field_path, error.message) from error
+_AGGREGATE_RUN_METHODS = {
+    "arithmetic_mean_across_measured_requests_v1",
+    "not_available_across_measured_requests_v1",
+    "ratio_of_measured_request_means_v1",
+}
+_KPI_SECTION_CONTRACT = (
+    (
+        "request_facing_latency",
+        _REQUEST_FACING_KPIS,
+        {"request_facing_client", "gpu_only", "npu_only"},
+    ),
+    ("pipeline_latency", _PIPELINE_KPIS, {"hybrid_pipeline"}),
+    (
+        "throughput_and_tokens",
+        _THROUGHPUT_TOKEN_KPIS,
+        {"request_facing_client", "gpu_only", "npu_only", "run"},
+    ),
+    ("transfer", _TRANSFER_KPIS, {"hybrid_pipeline"}),
+)
 
 
-def _require_type(value: object, expected: type[_ModelT], path: str) -> _ModelT:
-    if not isinstance(value, expected):
-        _fail(path, f"must be {expected.__name__}")
-    return value
+def _require_sorted_unique(values: object, path: str) -> None:
+    """Require a JSON array that is already sorted and free of duplicates."""
 
-
-def _nonempty(value: object, path: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        _fail(path, "must be a non-empty string")
-    _path_free_string(value, path)
-    return value
-
-
-def _integer(
-    value: object,
-    path: str,
-    *,
-    minimum: int | None = None,
-    nullable: bool = False,
-) -> int | None:
-    if value is None and nullable:
-        return None
-    if not isinstance(value, int) or isinstance(value, bool):
-        _fail(path, "must be an integer, not bool")
-    if minimum is not None and value < minimum:
-        _fail(path, f"must be >= {minimum}")
-    return value
-
-
-def _number(
-    value: object,
-    path: str,
-    *,
-    minimum: float | None = None,
-    maximum: float | None = None,
-    nullable: bool = False,
-) -> int | float | None:
-    if value is None and nullable:
-        return None
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        _fail(path, "must be a finite number, not bool")
-    if not math.isfinite(value):
-        _fail(path, "must be finite; NaN and Infinity are not allowed")
-    if minimum is not None and value < minimum:
-        _fail(path, f"must be >= {minimum}")
-    if maximum is not None and value > maximum:
-        _fail(path, f"must be <= {maximum}")
-    return value
-
-
-def _path_free_string(value: str, path: str) -> None:
-    if (
-        value.startswith("file://")
-        or PurePosixPath(value).is_absolute()
-        or PureWindowsPath(value).is_absolute()
-        or _EMBEDDED_POSIX_PATH_RE.search(value) is not None
-    ):
-        _fail(path, "must not contain a host absolute path")
-
-
-def _json_value(value: object, path: str) -> None:
-    if value is None or isinstance(value, bool):
-        return
-    if isinstance(value, int):
-        return
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            _fail(path, "must not contain NaN or Infinity")
-        return
-    if isinstance(value, str):
-        _path_free_string(value, path)
-        return
-    if isinstance(value, list):
-        for index, item in enumerate(value):
-            _json_value(item, f"{path}[{index}]")
-        return
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if not isinstance(key, str) or not key:
-                _fail(path, "object keys must be non-empty strings")
-            _path_free_string(key, f"{path}.{key}")
-            _json_value(item, f"{path}.{key}")
-        return
-    _fail(path, f"contains non-JSON value {type(value).__name__}")
-
-
-def _json_object(value: object, path: str, *, nonempty: bool = False) -> None:
-    if not isinstance(value, Mapping):
-        _fail(path, "must be an object")
-    copied = dict(value)
-    if nonempty and not copied:
-        _fail(path, "must not be empty")
-    _json_value(copied, path)
-
-
-def _sorted_unique_strings(
-    values: object,
-    path: str,
-    *,
-    allow_empty: bool = True,
-) -> tuple[str, ...]:
-    if not isinstance(values, tuple):
-        _fail(path, "must be an immutable tuple")
-    result = tuple(_nonempty(value, f"{path}[{index}]") for index, value in enumerate(values))
-    if not allow_empty and not result:
-        _fail(path, "must not be empty")
-    if result != tuple(sorted(set(result))):
-        _fail(path, "must be sorted and contain no duplicates")
-    return result
-
-
-def _raw_primitive(value: object) -> object:
-    if isinstance(value, Enum):
-        return value.value
-    if is_dataclass(value):
-        return {
-            item.name: _raw_primitive(getattr(value, item.name))
-            for item in fields(value)
-        }
-    if isinstance(value, Mapping):
-        return {str(key): _raw_primitive(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [_raw_primitive(item) for item in value]
-    if isinstance(value, list):
-        return [_raw_primitive(item) for item in value]
-    return value
-
-
-def _canonical_sort_key(value: object) -> bytes:
-    return json.dumps(
-        _raw_primitive(value),
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-
-
-def _sorted_models(
-    values: object,
-    path: str,
-    *,
-    key,
-    allow_empty: bool = True,
-) -> tuple[Any, ...]:
-    if not isinstance(values, tuple):
-        _fail(path, "must be an immutable tuple")
-    if not allow_empty and not values:
-        _fail(path, "must not be empty")
-    keys = [key(value) for value in values]
-    if keys != sorted(keys) or len(keys) != len(set(keys)):
-        _fail(path, "must be deterministically sorted with unique keys")
-    return values
-
-
-def _safe_relative_path(value: object, path: str) -> str:
-    text = _nonempty(value, path)
-    if "\\" in text:
-        _fail(path, "must use POSIX separators")
-    candidate = PurePosixPath(text)
-    if (
-        candidate.is_absolute()
-        or candidate.as_posix() != text
-        or text == "."
-        or any(part in {"", ".", ".."} for part in candidate.parts)
-    ):
-        _fail(path, "must be a normalized relative path")
-    return text
+    normalized = tuple(values)
+    if normalized != tuple(sorted(set(normalized))):
+        _fail(path, "must be sorted without duplicates")
 
 
 def validate_kpi_source(source: KpiSource, path: str = "kpi.sources[0]") -> None:
@@ -506,12 +332,7 @@ def validate_kpi(kpi: KpiValue, path: str = "kpi") -> None:
     }
     aggregate_run_scope = (
         kpi.scope.scope_type == "run"
-        and kpi.aggregation_method
-        in {
-            "arithmetic_mean_across_measured_requests_v1",
-            "not_available_across_measured_requests_v1",
-            "ratio_of_measured_request_means_v1",
-        }
+        and kpi.aggregation_method in _AGGREGATE_RUN_METHODS
     )
     if not scope_allowed and not aggregate_run_scope:
         _fail(
@@ -549,10 +370,7 @@ def _kpi_key(kpi: KpiValue) -> tuple[str, ...]:
     )
 
 
-def validate_resource_summary(
-    summary: ResourceSummary,
-    path: str = "resource",
-) -> None:
+def validate_resource_summary(summary: ResourceSummary, path: str = "resource") -> None:
     _require_type(summary, ResourceSummary, path)
     definition = METRIC_CATALOG.get(summary.metric_name)
     if definition is None or not summary.metric_name.startswith("resource."):
@@ -682,23 +500,6 @@ def _resource_key(summary: ResourceSummary) -> tuple[str, ...]:
     )
 
 
-def _validate_identity_objects(
-    values: object,
-    path: str,
-    *,
-    allow_empty: bool,
-) -> None:
-    if not isinstance(values, tuple):
-        _fail(path, "must be an immutable tuple")
-    if not allow_empty and not values:
-        _fail(path, "must not be empty")
-    for index, value in enumerate(values):
-        _json_object(value, f"{path}[{index}]", nonempty=True)
-    keys = [_canonical_sort_key(value) for value in values]
-    if keys != sorted(keys) or len(keys) != len(set(keys)):
-        _fail(path, "must be deterministically sorted without duplicates")
-
-
 def _validate_kpi_section(
     values: tuple[KpiValue, ...],
     *,
@@ -736,47 +537,14 @@ def validate_kpi_sections(
     path: str = "overview.kpis",
 ) -> None:
     _require_type(sections, KpiSections, path)
-    _validate_kpi_section(
-        sections.request_facing_latency,
-        path=f"{path}.request_facing_latency",
-        run_id=run_id,
-        allowed_names=_REQUEST_FACING_KPIS,
-        observation_layers={"request_facing_client", "gpu_only", "npu_only"},
-    )
-    _validate_kpi_section(
-        sections.pipeline_latency,
-        path=f"{path}.pipeline_latency",
-        run_id=run_id,
-        allowed_names=_PIPELINE_KPIS,
-        observation_layers={"hybrid_pipeline"},
-    )
-    _validate_kpi_section(
-        sections.throughput_and_tokens,
-        path=f"{path}.throughput_and_tokens",
-        run_id=run_id,
-        allowed_names=_THROUGHPUT_TOKEN_KPIS,
-        observation_layers={"request_facing_client", "gpu_only", "npu_only", "run"},
-    )
-    _validate_kpi_section(
-        sections.transfer,
-        path=f"{path}.transfer",
-        run_id=run_id,
-        allowed_names=_TRANSFER_KPIS,
-        observation_layers={"hybrid_pipeline"},
-    )
-
-
-def _exact_mapping(
-    value: object,
-    *,
-    fields: set[str],
-    path: str,
-) -> dict[str, Any]:
-    _json_object(value, path, nonempty=True)
-    copied = dict(value)
-    if set(copied) != fields:
-        _fail(path, f"must contain exactly {sorted(fields)}")
-    return copied
+    for name, allowed_names, observation_layers in _KPI_SECTION_CONTRACT:
+        _validate_kpi_section(
+            getattr(sections, name),
+            path=f"{path}.{name}",
+            run_id=run_id,
+            allowed_names=allowed_names,
+            observation_layers=observation_layers,
+        )
 
 
 def _validate_data_quality(value: object, path: str) -> None:
@@ -815,16 +583,10 @@ def _validate_data_quality(value: object, path: str) -> None:
 
     perfetto = data["perfetto_sql_validation"]
     assert isinstance(perfetto, Mapping)
-    mismatch_values = tuple(perfetto["mismatches"])
-    if mismatch_values != tuple(sorted(set(mismatch_values))):
-        _fail(
-            f"{path}.perfetto_sql_validation.mismatches",
-            "must be sorted without duplicates",
-        )
-
-    limitation_values = tuple(data["sample_limitations"])
-    if limitation_values != tuple(sorted(set(limitation_values))):
-        _fail(f"{path}.sample_limitations", "must be sorted without duplicates")
+    _require_sorted_unique(
+        perfetto["mismatches"], f"{path}.perfetto_sql_validation.mismatches"
+    )
+    _require_sorted_unique(data["sample_limitations"], f"{path}.sample_limitations")
 
 
 def _validate_workload(value: object, path: str) -> None:
@@ -845,44 +607,10 @@ def _validate_workload(value: object, path: str) -> None:
         )
 
 
-def _validate_models(values: object, path: str) -> None:
-    assert isinstance(values, tuple)
-    keys = [_canonical_sort_key(value) for value in values]
-    if keys != sorted(keys) or len(keys) != len(set(keys)):
-        _fail(path, "must be deterministically sorted without duplicates")
-
-
-def _validate_hardware(values: object, path: str) -> None:
-    assert isinstance(values, tuple)
-    keys = [_canonical_sort_key(value) for value in values]
-    if keys != sorted(keys) or len(keys) != len(set(keys)):
-        _fail(path, "must be deterministically sorted without duplicates")
-
-
-def _validate_native_profiles(values: object, path: str) -> None:
-    assert isinstance(values, tuple)
-    keys = [_canonical_sort_key(value) for value in values]
-    if keys != sorted(keys) or len(keys) != len(set(keys)):
-        _fail(path, "must be deterministically sorted without duplicates")
-
-
 def _validate_interpretation(value: object, path: str) -> None:
     assert isinstance(value, Mapping)
     interpretation = value
-    limitation_values = tuple(interpretation["limitations"])
-    if limitation_values != tuple(sorted(set(limitation_values))):
-        _fail(f"{path}.limitations", "must be sorted without duplicates")
-
-
-def _sorted_json_array(value: object, path: str) -> list[Any]:
-    if not isinstance(value, list):
-        _fail(path, "must be an array")
-    keys = [_canonical_sort_key(item) for item in value]
-    if keys != sorted(keys):
-        _fail(path, "must be deterministically sorted")
-    for index, item in enumerate(value):
-        _json_value(item, f"{path}[{index}]")
-    return value
+    _require_sorted_unique(interpretation["limitations"], f"{path}.limitations")
 
 
 def _validate_perfetto(value: object, path: str) -> None:
@@ -903,8 +631,7 @@ def _validate_perfetto(value: object, path: str) -> None:
         _fail(f"{path}.queries", "must contain unique query names")
 
     mismatch_values = tuple(perfetto["mismatches"])
-    if mismatch_values != tuple(sorted(set(mismatch_values))):
-        _fail(f"{path}.mismatches", "must be sorted without duplicates")
+    _require_sorted_unique(mismatch_values, f"{path}.mismatches")
 
     flow = perfetto["flow_endpoint_reconciliation"]
     assert isinstance(flow, Mapping)
@@ -913,12 +640,9 @@ def _validate_perfetto(value: object, path: str) -> None:
         "source_endpoint_ids",
         "destination_endpoint_ids",
     ):
-        normalized = tuple(flow[name])
-        if normalized != tuple(sorted(set(normalized))):
-            _fail(
-                f"{path}.flow_endpoint_reconciliation.{name}",
-                "must be sorted without duplicates",
-            )
+        _require_sorted_unique(
+            flow[name], f"{path}.flow_endpoint_reconciliation.{name}"
+        )
     artifact = perfetto["artifact_validation"]
     assert isinstance(artifact, Mapping)
     _sorted_json_array(
@@ -941,8 +665,8 @@ def validate_overview_report(report: OverviewReport) -> None:
     _validate_report_structure(primitive)
     run_id = str(report.run["run_id"])
     _validate_workload(report.workload, "overview.workload")
-    _validate_models(report.models, "overview.models")
-    _validate_hardware(report.hardware, "overview.hardware")
+    _deterministic_object_tuple(report.models, "overview.models")
+    _deterministic_object_tuple(report.hardware, "overview.hardware")
     validate_kpi_sections(report.kpis, run_id=run_id)
     for index, summary in enumerate(report.resources):
         validate_resource_summary(
@@ -959,7 +683,9 @@ def validate_overview_report(report: OverviewReport) -> None:
         _fail("overview.resources", "must not contain duplicate resource streams")
     _validate_data_quality(report.data_quality, "overview.data_quality")
     _validate_perfetto(report.perfetto, "overview.perfetto")
-    _validate_native_profiles(report.native_profiles, "overview.native_profiles")
+    _deterministic_object_tuple(
+        report.native_profiles, "overview.native_profiles"
+    )
     _validate_interpretation(report.interpretation, "overview.interpretation")
     if report.data_quality["run_status"] != report.run["status"]:
         _fail("overview.data_quality.run_status", "must match run.status")
@@ -980,310 +706,13 @@ def validate_overview_report(report: OverviewReport) -> None:
         )
 
 
-def overview_to_dict(document: OverviewReport) -> dict[str, Any]:
-    """Return a validated JSON-compatible object with no host paths."""
-
-    validate_overview_report(document)
-    value = _raw_primitive(document)
-    assert isinstance(value, dict)
-    _json_value(value, "overview")
-    return value
-
-
-def canonical_json_bytes(document: OverviewReport) -> bytes:
-    """Serialize a validated document to stable, path-free canonical bytes."""
-
-    value = overview_to_dict(document)
-    try:
-        return compact_json_bytes(value)
-    except (TypeError, ValueError) as error:  # pragma: no cover - guarded above
-        raise OverviewSchemaError(
-            "overview",
-            f"cannot be serialized as finite canonical JSON: {error}",
-        ) from error
-
-
-def canonical_sha256(document: OverviewReport) -> str:
-    """Return the SHA-256 of :func:`canonical_json_bytes`."""
-
-    return hashlib.sha256(canonical_json_bytes(document)).hexdigest()
-
-
-def _strict_object(
-    value: object,
-    cls: type[Any],
-    path: str,
-) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        _fail(path, "must be an object")
-    expected = {item.name for item in fields(cls)}
-    actual = set(value)
-    if actual != expected:
-        missing = sorted(expected - actual)
-        unknown = sorted(actual - expected)
-        detail = (
-            f"missing fields {missing}" if missing else f"unknown fields {unknown}"
-        )
-        _fail(path, detail)
-    return dict(value)
-
-
-def _tuple_of(
-    value: object,
-    parser,
-    path: str,
-) -> tuple[Any, ...]:
-    if not isinstance(value, list):
-        _fail(path, "must be an array")
-    return tuple(parser(item, f"{path}[{index}]") for index, item in enumerate(value))
-
-
-def _string_tuple(value: object, path: str) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        _fail(path, "must be an array")
-    return tuple(value)
-
-
-def _availability(value: object, path: str) -> Availability:
-    try:
-        return Availability(value)
-    except (TypeError, ValueError) as error:
-        _fail(path, "is not a valid availability")
-        raise AssertionError from error
-
-
-def _kpi_source_from_dict(value: object, path: str) -> KpiSource:
-    data = _strict_object(value, KpiSource, path)
-    data["record_ids"] = _string_tuple(data["record_ids"], f"{path}.record_ids")
-    data["metric_names"] = _string_tuple(
-        data["metric_names"],
-        f"{path}.metric_names",
-    )
-    return KpiSource(**data)
-
-
-def _scope_from_dict(value: object, path: str) -> KpiScope:
-    return KpiScope(**_strict_object(value, KpiScope, path))
-
-
-def _calculation_from_dict(value: object, path: str) -> KpiCalculation:
-    return KpiCalculation(**_strict_object(value, KpiCalculation, path))
-
-
-def _clock_from_dict(value: object, path: str) -> KpiClock:
-    data = _strict_object(value, KpiClock, path)
-    data["domain_ids"] = _string_tuple(data["domain_ids"], f"{path}.domain_ids")
-    return KpiClock(**data)
-
-
-def _display_from_dict(value: object, path: str) -> DisplayRule:
-    return DisplayRule(**_strict_object(value, DisplayRule, path))
-
-
-def _kpi_from_dict(value: object, path: str) -> KpiValue:
-    data = _strict_object(value, KpiValue, path)
-    data["availability"] = _availability(
-        data["availability"],
-        f"{path}.availability",
-    )
-    data["sources"] = _tuple_of(
-        data["sources"],
-        _kpi_source_from_dict,
-        f"{path}.sources",
-    )
-    data["scope"] = _scope_from_dict(data["scope"], f"{path}.scope")
-    data["calculation"] = _calculation_from_dict(
-        data["calculation"],
-        f"{path}.calculation",
-    )
-    data["clock"] = _clock_from_dict(data["clock"], f"{path}.clock")
-    data["quality_warnings"] = _string_tuple(
-        data["quality_warnings"],
-        f"{path}.quality_warnings",
-    )
-    data["display"] = _display_from_dict(data["display"], f"{path}.display")
-    return KpiValue(**data)
-
-
-def _resource_from_dict(value: object, path: str) -> ResourceSummary:
-    data = _strict_object(value, ResourceSummary, path)
-    data["scope"] = _scope_from_dict(data["scope"], f"{path}.scope")
-    data["clock"] = _clock_from_dict(data["clock"], f"{path}.clock")
-    data["aggregates"] = _tuple_of(
-        data["aggregates"],
-        _kpi_from_dict,
-        f"{path}.aggregates",
-    )
-    data["quality_warnings"] = _string_tuple(
-        data["quality_warnings"],
-        f"{path}.quality_warnings",
-    )
-    return ResourceSummary(**data)
-
-
-def _kpi_sections_from_dict(value: object, path: str) -> KpiSections:
-    data = _strict_object(value, KpiSections, path)
-    for name in (
-        "request_facing_latency",
-        "pipeline_latency",
-        "throughput_and_tokens",
-        "transfer",
-    ):
-        data[name] = _tuple_of(
-            data[name],
-            _kpi_from_dict,
-            f"{path}.{name}",
-        )
-    return KpiSections(**data)
-
-
-def overview_report_from_dict(value: object) -> OverviewReport:
-    """Parse and semantically validate a strict Overview report object."""
-
-    _json_value(value, "overview")
-    _validate_report_structure(value)
-    data = _strict_object(value, OverviewReport, "overview")
-    data["models"] = _tuple_of(
-        data["models"],
-        lambda item, path: dict(item) if isinstance(item, dict) else _fail(
-            path, "must be an object"
-        ),
-        "overview.models",
-    )
-    data["hardware"] = _tuple_of(
-        data["hardware"],
-        lambda item, path: dict(item) if isinstance(item, dict) else _fail(
-            path, "must be an object"
-        ),
-        "overview.hardware",
-    )
-    data["kpis"] = _kpi_sections_from_dict(data["kpis"], "overview.kpis")
-    data["resources"] = _tuple_of(
-        data["resources"],
-        _resource_from_dict,
-        "overview.resources",
-    )
-    data["native_profiles"] = _tuple_of(
-        data["native_profiles"],
-        lambda item, path: dict(item) if isinstance(item, dict) else _fail(
-            path, "must be an object"
-        ),
-        "overview.native_profiles",
-    )
-    report = OverviewReport(**data)
-    validate_overview_report(report)
-    return report
-
-
-def overview_document_from_dict(value: object) -> OverviewReport:
-    """Parse the installed package's single-run Overview model."""
-
-    if not isinstance(value, dict):
-        _fail("overview", "must be an object")
-    record_type = value.get("record_type")
-    if record_type != OVERVIEW_REPORT_RECORD_TYPE:
-        _fail("overview.record_type", "is not the Overview report record type")
-    return overview_report_from_dict(value)
-
-
-def overview_document_from_json(payload: str | bytes) -> OverviewReport:
-    """Decode strict finite JSON and return a validated Overview report."""
-
-    try:
-        value = json.loads(
-            payload,
-            object_pairs_hook=_reject_duplicate_pairs,
-            parse_constant=lambda token: (_ for _ in ()).throw(
-                ValueError(f"non-finite JSON token {token}")
-            ),
-        )
-    except (TypeError, UnicodeError, ValueError, json.JSONDecodeError) as error:
-        raise OverviewSchemaError("overview", f"invalid JSON: {error}") from error
-    return overview_document_from_dict(value)
-
-
-def _reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate object key {key!r}")
-        result[key] = value
-    return result
-
-
-def load_json_schema(record_type: str) -> dict[str, Any]:
-    """Load one bundled Draft 2020-12 contract by record type."""
-
-    names = {
-        OVERVIEW_REPORT_RECORD_TYPE: OVERVIEW_REPORT_SCHEMA_NAME,
-    }
-    try:
-        name = names[record_type]
-    except KeyError as error:
-        raise OverviewSchemaError(
-            "record_type",
-            f"unsupported schema record type {record_type!r}",
-        ) from error
-    resource = resources.files(__package__) / "json" / "v1" / name
-    try:
-        value = json.loads(resource.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise OverviewSchemaError(
-            "json_schema",
-            f"cannot load {name}: {error}",
-        ) from error
-    if not isinstance(value, dict):
-        _fail("json_schema", "must be an object")
-    return value
-
-
-def validate_json_schema_contract() -> None:
-    """Verify checked-in schema identity and top-level model field parity."""
-
-    contracts = (
-        (
-            OVERVIEW_REPORT_RECORD_TYPE,
-            OverviewReport,
-            OVERVIEW_REPORT_SCHEMA_NAME,
-        ),
-    )
-    for record_type, cls, filename in contracts:
-        schema = load_json_schema(record_type)
-        if schema.get("$schema") != JSON_SCHEMA_DRAFT:
-            _fail(filename, f"$schema must be {JSON_SCHEMA_DRAFT}")
-        if schema.get("type") != "object":
-            _fail(filename, "top-level type must be object")
-        if schema.get("additionalProperties") is not False:
-            _fail(filename, "must reject additional properties")
-        properties = schema.get("properties")
-        required = schema.get("required")
-        expected = {item.name for item in fields(cls)}
-        if not isinstance(properties, dict) or set(properties) != expected:
-            _fail(filename, "top-level properties differ from dataclass fields")
-        if not isinstance(required, list) or set(required) != expected:
-            _fail(filename, "all top-level properties must be required")
-        record_schema = properties.get("record_type")
-        if (
-            not isinstance(record_schema, dict)
-            or record_schema.get("const") != record_type
-        ):
-            _fail(filename, "record_type const differs from model")
-
 
 __all__ = [
-    "OVERVIEW_REPORT_SCHEMA_NAME",
-    "OverviewSchemaError",
-    "canonical_json_bytes",
-    "canonical_sha256",
-    "load_json_schema",
-    "overview_report_from_dict",
-    "overview_to_dict",
     "validate_display_rule",
-    "validate_json_schema_contract",
     "validate_kpi",
     "validate_kpi_clock",
-    "validate_kpi_sections",
     "validate_kpi_scope",
+    "validate_kpi_sections",
     "validate_kpi_source",
     "validate_overview_report",
     "validate_resource_summary",

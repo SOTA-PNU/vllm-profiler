@@ -75,9 +75,7 @@ class _PreparedGeneration:
     validation: dict[str, Any]
 
 
-def _local_trace_processor_path(
-    configured: Path | None,
-) -> Path:
+def _local_trace_processor_path(configured: Path | None) -> Path:
     """Select an existing local binary without invoking a downloader/cache."""
 
     if configured is not None:
@@ -95,16 +93,15 @@ def _local_trace_processor_path(
     return candidate
 
 
-def _prepare_generation(
-    config: OverviewGenerationConfig,
-) -> _PreparedGeneration:
+def _prepare_generation(config: OverviewGenerationConfig) -> _PreparedGeneration:
     if not isinstance(config, OverviewGenerationConfig):
         raise TypeError("config must be OverviewGenerationConfig")
-    run_directory = require_real_directory(
-        config.run_directory,
-        description="normalized run",
+    loaded = load_hybrid_run(
+        require_real_directory(
+            config.run_directory,
+            description="normalized run",
+        )
     )
-    loaded = load_hybrid_run(run_directory)
     perfetto = load_matching_perfetto(
         loaded,
         config.perfetto_directory,
@@ -122,33 +119,26 @@ def _prepare_generation(
         )
     except ValueError as error:
         raise OverviewGenerationError(str(error)) from error
-    requested_output = (
+    output = validate_output_path(
         default_output
         if config.output_directory is None
-        else Path(config.output_directory)
+        else Path(config.output_directory),
+        immutable_roots=[
+            *(item.root for item in loaded.root_fingerprints),
+            perfetto.root,
+        ],
     )
-    immutable_roots = [
-        *(item.root for item in loaded.root_fingerprints),
-        perfetto.root,
-    ]
-    output = validate_output_path(
-        requested_output,
-        immutable_roots=immutable_roots,
-    )
-
-    report_plain = build_overview_report(loaded, perfetto)
-    model = overview_report_from_dict(report_plain)
+    model = overview_report_from_dict(build_overview_report(loaded, perfetto))
     report = overview_to_dict(model)
     report_bytes = canonical_model_json_bytes(model)
     html_text = render_overview_html(report)
     if not html_text.endswith("\n"):
         raise OverviewGenerationError("Overview HTML must end with one newline")
-    html_validation = validate_offline_html(html_text)
     validation = build_overview_validation(
         report,
         loaded=loaded,
         perfetto=perfetto,
-        html_validation=html_validation,
+        html_validation=validate_offline_html(html_text),
     )
     return _PreparedGeneration(
         config=config,
@@ -189,9 +179,7 @@ def _generation_input_check(prepared: _PreparedGeneration) -> None:
         )
 
 
-def plan_overview_generation(
-    config: OverviewGenerationConfig,
-) -> dict[str, Any]:
+def plan_overview_generation(config: OverviewGenerationConfig) -> dict[str, Any]:
     """Perform all read-only calculation and validation without creating files."""
 
     prepared = _prepare_generation(config)
@@ -217,13 +205,14 @@ def plan_overview_generation(
     }
 
 
-def generate_overview(
-    config: OverviewGenerationConfig,
-) -> dict[str, Any]:
+def generate_overview(config: OverviewGenerationConfig) -> dict[str, Any]:
     """Generate, validate, inventory, and atomically publish one Overview."""
 
     prepared = _prepare_generation(config)
+
     def validate_staging(root: Path) -> None:
+        # Staging is checked against both artefacts; the published check below
+        # deliberately re-reads only the report after the atomic rename.
         staged = load_overview_bundle(root)
         if staged.report != prepared.report:
             raise OverviewGenerationError(

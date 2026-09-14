@@ -9,6 +9,7 @@ from ..perfetto.loader import LoadedHybridRun
 from ..perfetto.model import base_track_key
 from .loader import (
     LoadedPerfettoBundle,
+    normalized_input_metadata,
     phase_duration_reconciliation,
     reconciliation_summary,
 )
@@ -148,18 +149,7 @@ def build_overview_validation(
         else:
             mismatches.append("HTML offline validation failed")
 
-    source = {
-        "valid": True,
-        "closeout_manifest_sha256": loaded.closeout_manifest_sha256,
-        "closeout_artifact_count": loaded.closeout_artifact_count,
-        "roots": [
-            item.metadata
-            for item in sorted(
-                loaded.root_fingerprints,
-                key=lambda fingerprint: fingerprint.root_id,
-            )
-        ],
-    }
+    source = normalized_input_metadata(loaded)
     report_run = report.get("run")
     run_id = report_run.get("run_id") if isinstance(report_run, Mapping) else None
     result: dict[str, Any] = {
