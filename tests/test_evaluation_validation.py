@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import copy
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from perfetto_hetero_profiler.support.files import sha256_file
 from tools.evaluation.validation import (

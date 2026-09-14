@@ -1,7 +1,7 @@
 """GPU-only monitor collector and detailed-profile planning."""
 
 from .collector import GpuRunCollector, GpuRunResult, build_gpu_run_plan
-from .config import GpuDeviceInfo, GpuRunConfig, MIN_SAMPLE_INTERVAL_MS
+from .config import MIN_SAMPLE_INTERVAL_MS, GpuDeviceInfo, GpuRunConfig
 from .nvml import (
     NVML_DISTRIBUTION,
     NVML_DISTRIBUTION_VERSION,

@@ -7,9 +7,9 @@ document into canonical bytes and strictly back again.
 
 from __future__ import annotations
 
-from dataclasses import fields
 import hashlib
 import json
+from dataclasses import fields
 from typing import Any
 
 from ...schema import Availability
@@ -19,8 +19,8 @@ from ..model import (
     DisplayRule,
     KpiCalculation,
     KpiClock,
-    KpiSections,
     KpiScope,
+    KpiSections,
     KpiSource,
     KpiValue,
     OverviewReport,

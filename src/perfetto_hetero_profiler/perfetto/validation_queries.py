@@ -8,7 +8,6 @@ from typing import Final
 from .compatibility import LEGACY_TIMELINE_MAPPING_VERSION
 from .trace_attributes import TRACE_ATTRIBUTE_NAMESPACE
 
-
 _NATIVE_POLICY_KEYS: Final = frozenset(
     {
         "hetero.alignment_method",

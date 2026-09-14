@@ -8,13 +8,13 @@ runs the official Trace Processor and re-verifies identity afterwards.
 
 from __future__ import annotations
 
-from collections import Counter
-from dataclasses import dataclass, replace
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
 import stat
+from collections import Counter
+from dataclasses import dataclass, replace
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, TypeVar
 
 from ..perfetto.artifacts import (
@@ -24,14 +24,16 @@ from ..perfetto.artifacts import (
 )
 from ..perfetto.converter import (
     CONVERSION_MANIFEST_NAME,
-    OUTPUT_ROOT_ID as PERFETTO_ROOT_ID,
-    REQUEST_FOCUSED_TRACE_NAME,
-    REQUEST_FOCUSED_VALIDATION_NAME,
     RBLN_NATIVE_TRACE_NAME,
     RBLN_NATIVE_VALIDATION_NAME,
-    TRACE_NAME,
+    REQUEST_FOCUSED_TRACE_NAME,
+    REQUEST_FOCUSED_VALIDATION_NAME,
     TRACE_ATTRIBUTE_VALIDATION_NAME,
+    TRACE_NAME,
     TRACE_VALIDATION_NAME,
+)
+from ..perfetto.converter import (
+    OUTPUT_ROOT_ID as PERFETTO_ROOT_ID,
 )
 from ..perfetto.loader import LoadedHybridRun
 from ..perfetto.model import base_track_key
@@ -51,7 +53,6 @@ from ..perfetto.trace_attributes import TRACE_ATTRIBUTE_NAMESPACE
 from ..perfetto.validation import summarize_trace_validation, validate_trace
 from ..schema.catalog import PHASE_RECONCILIATION_METRICS, STAGE_BY_METRIC
 from ..support.files import sha256_file
-
 
 _JSON_VALUE = TypeVar("_JSON_VALUE")
 _IDENTITY_FIELDS = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")

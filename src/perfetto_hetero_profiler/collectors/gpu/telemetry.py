@@ -5,10 +5,9 @@ from __future__ import annotations
 import time
 from typing import Callable
 
-from ..telemetry import DeviceTelemetryCollector
 from ...schema import Availability, DeviceType, MetricSample
+from ..telemetry import DeviceTelemetryCollector
 from .nvml import NvmlClient, NvmlError, NvmlValue, nvml_error_snapshot
-
 
 _METRICS = (
     ("resource.gpu.utilization", "percent", "utilization_percent"),

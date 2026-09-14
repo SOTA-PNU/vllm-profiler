@@ -8,10 +8,10 @@ processing events.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import math
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 from ..hybrid.join import validate_marker_groups
@@ -27,7 +27,6 @@ from .compatibility import (
 )
 from .model import RequestWindowSpec, TraceAttributeSpec
 from .trace_attributes import _read_source_artifact, build_performance_trace_attributes
-
 
 LEGACY_MAPPING_VERSION = LEGACY_TIMELINE_MAPPING_VERSION
 TIMELINE_SUMMARY_MAPPING_VERSION = "processing-timeline-info-stats-v1"

@@ -10,7 +10,6 @@ from perfetto_hetero_profiler.hybrid.runtime_markers import (
 )
 from perfetto_hetero_profiler.schema import (
     Availability,
-    DeviceType,
     EventRecord,
     EventType,
     MetricSample,

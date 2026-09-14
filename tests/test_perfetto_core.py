@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import json
 import math
 import os
-from pathlib import Path
 import re
 import tempfile
-from types import SimpleNamespace
 import unittest
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from perfetto_hetero_profiler.hybrid.runtime_markers import (
     CANONICAL_MARKER_PHASES,
 )
+from perfetto_hetero_profiler.perfetto import tooling
 from perfetto_hetero_profiler.perfetto.artifacts import (
     ARTIFACT_MANIFEST_NAME,
     ARTIFACT_VALIDATION_NAME,
@@ -26,7 +27,6 @@ from perfetto_hetero_profiler.perfetto.artifacts import (
     write_json_exclusive,
 )
 from perfetto_hetero_profiler.perfetto.model import (
-    CounterSpec,
     TracePlan,
     TrackSpec,
 )
@@ -34,7 +34,6 @@ from perfetto_hetero_profiler.perfetto.planner import (
     PerfettoPlanningError,
     build_trace_plan,
 )
-from perfetto_hetero_profiler.perfetto import tooling
 from perfetto_hetero_profiler.perfetto.validation import (
     _rows_sha256,
     _run_query,
@@ -51,7 +50,6 @@ from perfetto_hetero_profiler.schema import (
     MetricSample,
     MetricScope,
     ModelDescriptor,
-    Phase,
     ProfileMode,
     RunManifest,
     RunMode,
@@ -64,7 +62,6 @@ from tests.support.toolchain import (
     require_trace_processor,
     trace_processor_test_class,
 )
-
 
 try:
     from perfetto_hetero_profiler.perfetto.writer import serialize_trace

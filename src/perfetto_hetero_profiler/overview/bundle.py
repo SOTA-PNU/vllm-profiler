@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
-import json
-from pathlib import Path
 import stat
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from ..perfetto.artifacts import (
@@ -17,8 +16,8 @@ from ..perfetto.artifacts import (
 from .loader import (
     BundleIdentity,
     OverviewInputError,
-    inventory_identity,
     _stable_regular_file,
+    inventory_identity,
     read_json_object,
     require_real_directory,
 )
@@ -29,7 +28,6 @@ from .schema import (
     overview_report_from_dict,
     overview_to_dict,
 )
-
 
 OVERVIEW_JSON_NAME = "overview.json"
 OVERVIEW_HTML_NAME = "overview.html"

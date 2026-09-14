@@ -12,9 +12,11 @@ from .render_support import (
     kpi_value,
     mapping,
     sequence,
-    status as render_status,
     table,
     text,
+)
+from .render_support import (
+    status as render_status,
 )
 
 

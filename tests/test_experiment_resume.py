@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
+from tests.support.experiment import write_config
 from tools.evaluation.checkpoint import (
     AttemptRecord,
     AttemptStatus,
@@ -22,8 +23,6 @@ from tools.evaluation.failure import (
 )
 from tools.evaluation.paths import ExperimentPaths
 from tools.evaluation.schedule import canonical_schedule_bytes
-
-from tests.support.experiment import write_config
 
 
 class ResumeTests(unittest.TestCase):

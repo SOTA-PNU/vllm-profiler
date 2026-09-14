@@ -15,7 +15,6 @@ from .limitations import limitation_inventory
 from .schedule import Condition, ExperimentSchedule, TrialKind, schedule_by_logical_id
 from .statistics import OverheadDirection, paired_overhead, summarize_distribution
 
-
 METRICS = (
     "latency.e2e",
     "latency.ttft",

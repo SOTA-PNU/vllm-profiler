@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import csv
 import json
-from pathlib import Path, PurePosixPath, PureWindowsPath
 import platform
 import re
 import subprocess
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable
 
 from jsonschema import Draft202012Validator
@@ -17,7 +17,6 @@ from perfetto_hetero_profiler.collectors.npu.rbln_smi import (
     parse_rbln_smi_json,
 )
 from perfetto_hetero_profiler.support.files import sha256_file
-
 
 CONDITION_SCHEMA_NAME = "formal_condition_metadata.schema.json"
 _GIT_ID = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")

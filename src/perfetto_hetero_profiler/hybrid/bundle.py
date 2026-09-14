@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
-from pathlib import Path
 import time
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 from typing import Callable
 
+from ..runtime_metadata import (
+    RuntimeMetadataError,
+    merged_runtime_metadata,
+    transfer_dimensions,
+)
 from ..schema import (
     ArtifactKind,
     ArtifactReference,
@@ -53,11 +58,6 @@ from .clock_sync import (
 )
 from .config import AlignmentMethod, HybridMergeConfig
 from .join import JoinResult, join_requests
-from ..runtime_metadata import (
-    RuntimeMetadataError,
-    merged_runtime_metadata,
-    transfer_dimensions,
-)
 from .validation import (
     SourceBundle,
     SourceBundleError,
@@ -65,7 +65,6 @@ from .validation import (
     load_source_bundle,
     validate_hybrid_records,
 )
-
 
 _PHASE_METRICS = {
     stage.metric_name: (stage.start_event, stage.end_event, stage.phase)

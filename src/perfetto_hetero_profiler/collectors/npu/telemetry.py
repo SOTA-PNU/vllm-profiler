@@ -5,8 +5,8 @@ from __future__ import annotations
 import time
 from typing import Callable
 
-from ..telemetry import DeviceTelemetryCollector
 from ...schema import Availability, DeviceType, MetricSample
+from ..telemetry import DeviceTelemetryCollector
 from .rbln_smi import ParsedValue, RblnSmiClient, RblnSmiCommandError
 
 

@@ -11,7 +11,8 @@ from collections.abc import Iterable, Sequence
 
 from ...artifact_compatibility import LEGACY_MEASURED_WINDOW
 from ...schema import Availability
-from ...schema.catalog import METRIC_CATALOG, display_rule
+from ...schema.catalog import display_rule
+from ...schema.metric_catalog import METRIC_CATALOG
 from ...schema.records import EventRecord, MetricSample
 from ..resources import _enum_value
 

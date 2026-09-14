@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import replace
-from decimal import Decimal
 import hashlib
 import io
-from pathlib import Path
-from types import SimpleNamespace
 import tempfile
 import unittest
+from dataclasses import replace
+from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
 
 from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import Trace, TrackEvent
 
@@ -22,21 +22,21 @@ from perfetto_hetero_profiler.perfetto.model import (
     InstantSpec,
     RequestWindowSpec,
     SliceSpec,
-    TrackSpec,
     TracePlan,
+    TrackSpec,
 )
 from perfetto_hetero_profiler.perfetto.native_details import (
-    _ChromeEvent,
+    _NSYS_GLOBAL_PID_MASK,
     NativeDetailError,
     NativeDetailResult,
     NativeDetailSummary,
-    _NSYS_GLOBAL_PID_MASK,
-    _NativeSlice,
     _attach_explicit_flows,
     _chrome_category,
     _chrome_leaf_identity,
     _chrome_leaf_name,
+    _ChromeEvent,
     _microseconds_to_ns,
+    _NativeSlice,
     _nsys_api_category,
     _rbln_native_only_result,
     augment_trace_plan,

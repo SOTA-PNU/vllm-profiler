@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
 import hashlib
 import io
 import json
 import math
 import numbers
 import os
-from pathlib import Path
 import shutil
 import stat
 import tempfile
+from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
+from pathlib import Path
 from typing import Any, Final
 
 from perfetto.trace_processor import (
@@ -33,28 +33,27 @@ from .tooling import (
     resolve_toolchain,
 )
 from .validation_queries import (
-    BASE_VALIDATION_QUERIES,
-    NATIVE_VALIDATION_QUERIES,
-    TIMELINE_VALIDATION_QUERIES,
     _IMPORT_ERROR_SQL,
-    _TP_NATIVE_POLICY_KEYS,
-    _NATIVE_TRACE_SUMMARY_SQL,
+    _LEGACY_MAPPING_VERSION,
+    _NATIVE_TRACE_CATEGORY_SQL,
     _NATIVE_TRACE_FLOW_SQL,
     _NATIVE_TRACE_PARENT_RANGE_SQL,
-    _NATIVE_TRACE_CATEGORY_SQL,
-    _LEGACY_MAPPING_VERSION,
+    _NATIVE_TRACE_SUMMARY_SQL,
+    _REQUEST_RESOURCE_ROOT_KEY,
+    _REQUEST_RESOURCE_ROOT_NAME,
+    _RESOURCE_TELEMETRY_ROOT_KEY,
+    _TIMELINE_SUMMARY_DATA_QUALITY_KEY,
+    _TIMELINE_SUMMARY_KPI_TRACK_PREFIX,
     _TIMELINE_SUMMARY_MAPPING_VERSION,
+    _TIMELINE_SUMMARY_RESOURCE_TRACK_PREFIX,
     _TIMELINE_SUMMARY_ROOT_KEY,
     _TIMELINE_SUMMARY_ROOT_NAME,
     _TIMELINE_SUMMARY_TRACK_PREFIX,
-    _TIMELINE_SUMMARY_KPI_TRACK_PREFIX,
-    _TIMELINE_SUMMARY_DATA_QUALITY_KEY,
-    _TIMELINE_SUMMARY_RESOURCE_TRACK_PREFIX,
-    _RESOURCE_TELEMETRY_ROOT_KEY,
-    _REQUEST_RESOURCE_ROOT_KEY,
-    _REQUEST_RESOURCE_ROOT_NAME,
+    _TP_NATIVE_POLICY_KEYS,
+    BASE_VALIDATION_QUERIES,
+    NATIVE_VALIDATION_QUERIES,
+    TIMELINE_VALIDATION_QUERIES,
 )
-
 
 VALIDATION_RECORD_TYPE: Final = "perfetto_trace_validation"
 _QUERY_PAGE_SIZE: Final = 100_000

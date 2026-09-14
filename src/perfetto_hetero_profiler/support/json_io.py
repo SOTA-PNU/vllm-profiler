@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
 import json
-from pathlib import Path
 import uuid
+from collections.abc import Iterable, Mapping
+from pathlib import Path
 
 
 def compact_json_bytes(value: object, *, trailing_newline: bool = False) -> bytes:

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from perfetto_hetero_profiler.overview.schema import OverviewSchemaError
-from perfetto_hetero_profiler.schema import Availability, METRIC_CATALOG
+from perfetto_hetero_profiler.schema import METRIC_CATALOG, Availability
 from perfetto_hetero_profiler.schema.catalog import KPI_SECTION_METRICS
 from perfetto_hetero_profiler.schema.constants import (
     JSON_SCHEMA_DRAFT,
@@ -32,25 +32,58 @@ from .comparison_model import (
 )
 from .schema_support import (
     ALIGNMENT_STATUSES as _ALIGNMENT_STATUSES,
+)
+from .schema_support import (
     OBSERVATION_LAYERS as _OBSERVATION_LAYERS,
+)
+from .schema_support import (
     PROFILE_MODES as _PROFILE_MODES,
+)
+from .schema_support import (
     RUN_MODES as _RUN_MODES,
+)
+from .schema_support import (
     availability as _availability,
+)
+from .schema_support import (
     fail as _fail,
+)
+from .schema_support import (
     integer as _integer,
+)
+from .schema_support import (
     json_value as _json_value,
+)
+from .schema_support import (
     nonempty as _nonempty,
+)
+from .schema_support import (
     raw_primitive as _raw_primitive,
+)
+from .schema_support import (
     reject_duplicate_pairs as _reject_duplicate_pairs,
+)
+from .schema_support import (
     require_type as _require_type,
+)
+from .schema_support import (
     sorted_models as _sorted_models,
+)
+from .schema_support import (
     sorted_unique_strings as _sorted_unique_strings,
+)
+from .schema_support import (
     strict_object as _strict_object,
+)
+from .schema_support import (
     string_tuple as _string_tuple,
+)
+from .schema_support import (
     tuple_of as _tuple_of,
+)
+from .schema_support import (
     validate_available_scalar as _validate_available_scalar,
 )
-
 
 OVERVIEW_COMPARISON_SCHEMA_NAME = "overview_comparison.schema.json"
 _COMPARISON_SECTION_CONTRACT = {

@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
-from collections import Counter
-from collections.abc import Mapping
 import re
 import sqlite3
+from collections import Counter
+from collections.abc import Mapping
 from typing import Final
 
 from .loader import LoadedHybridRun, SourceRunMetadata
 from .model import SliceSpec, TrackSpec
 from .native_details import (
+    _NSYS_GLOBAL_PID_MASK,
+    _NSYS_REQUIRED_TABLES,
     NativeDetailError,
     NativeDetailResult,
     NativeDetailSummary,
-    _ClockBridge,
-    _NSYS_GLOBAL_PID_MASK,
-    _NSYS_REQUIRED_TABLES,
-    _NativeSlice,
     _artifact_path,
     _attach_explicit_flows,
     _clock_bridge,
+    _ClockBridge,
+    _NativeSlice,
     _non_bool_int_or_none,
     _nsys_annotations,
     _nsys_api_category,
@@ -31,7 +31,6 @@ from .native_details import (
     _stable_uint64,
     _validate_mapped_interval,
 )
-
 
 SUPPORTED_NSYS_EXPORT_SCHEMA_VERSIONS: Final = ("3.16.1",)
 _NSYS_EXPORT_SCHEMA_VERSION_KEY: Final = "EXPORT_SCHEMA_VERSION"

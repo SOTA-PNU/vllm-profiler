@@ -8,7 +8,6 @@ from dataclasses import dataclass
 
 from . import collect, convert, merge, overview, schema
 
-
 CommandHandler = Callable[[argparse.Namespace, argparse.ArgumentParser], int]
 CommandRegistrar = Callable[[argparse._SubParsersAction], None]
 

@@ -8,13 +8,12 @@ rules.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
-from pathlib import Path
 import re
 import stat
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
-
 
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,191}$")
 

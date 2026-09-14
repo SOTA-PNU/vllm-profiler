@@ -7,7 +7,6 @@ CPU tests can still import this package without that optional execution path.
 
 from importlib import import_module
 
-
 __all__ = [
     "OverviewCalculationError",
     "OverviewGenerationConfig",

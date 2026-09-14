@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 import hashlib
 import json
 import math
 import re
-from typing import Iterable, Mapping
+from dataclasses import dataclass, replace
+from typing import Iterable
 
 from ..schema import (
     Availability,
@@ -30,8 +30,8 @@ from .model import (
     FlowSpec,
     InstantSpec,
     SliceSpec,
-    TrackSpec,
     TracePlan,
+    TrackSpec,
     UnclassifiedGapSpec,
     base_track_key,
     lane_track_key,

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import errno as errno_module
 from dataclasses import dataclass, field
 from enum import Enum
-import errno as errno_module
 from typing import Mapping
 
 

@@ -17,7 +17,6 @@ from ..schema import (
 )
 from .openai_client import CompletionObservation
 
-
 HOST_ID = "localhost"
 CLOCK_DOMAIN_ID = "host-monotonic"
 

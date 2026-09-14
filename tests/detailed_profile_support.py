@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import math
+import re
+import statistics
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-import json
-import math
 from pathlib import Path
-import re
-import statistics
 from typing import Any, Literal
 
 from perfetto_hetero_profiler.hybrid.detailed_profile import (
@@ -18,7 +18,6 @@ from perfetto_hetero_profiler.hybrid.detailed_profile import (
 from perfetto_hetero_profiler.hybrid.layout import HybridRunLayout
 from perfetto_hetero_profiler.schema import MetricSample, read_jsonl, write_jsonl
 from perfetto_hetero_profiler.support.json_io import write_jsonl_exclusive
-
 
 HybridProfileKind = Literal[
     "control",

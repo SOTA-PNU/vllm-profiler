@@ -14,30 +14,18 @@ from perfetto_hetero_profiler.overview.calculation import (
     union_duration_ns,
 )
 from perfetto_hetero_profiler.schema import (
-    Availability,
-    DeviceType,
     EventRecord,
-    EventType,
     MetricSample,
-    Phase,
-    RunMode,
-    RunStatus,
-    ValueOrigin,
 )
-from perfetto_hetero_profiler.schema.metric_catalog import METRIC_CATALOG
 from tests.support.overview_calculation import (
     ALIGNMENT,
     CLIENT_REQUEST_ID,
-    CLOCK_ID,
     CORRELATION_ID,
-    RUN_ID,
-    _event,
     _fixture,
     _metric,
     _section_by_name,
     _two_request_fixture,
 )
-
 
 
 class OverviewCalculationTests(unittest.TestCase):

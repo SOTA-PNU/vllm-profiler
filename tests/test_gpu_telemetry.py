@@ -1,17 +1,17 @@
 """NVML adapter and schema-v1 GPU telemetry tests."""
 
-import json
 import importlib
+import json
 import math
 import unittest
 
+import perfetto_hetero_profiler.collectors.gpu as gpu_package
 from perfetto_hetero_profiler.collectors.gpu import (
     GpuTelemetryCollector,
     NvmlClient,
     NvmlError,
 )
 from perfetto_hetero_profiler.schema import Availability, validate_record
-import perfetto_hetero_profiler.collectors.gpu as gpu_package
 from tests.support.gpu_fakes import (
     FakeBinding,
     FakeDriverNotLoaded,

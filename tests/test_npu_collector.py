@@ -4,11 +4,11 @@ import contextlib
 import hashlib
 import io
 import json
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 from perfetto_hetero_profiler.cli import main
 from perfetto_hetero_profiler.collectors.base import CollectorError, CollectorState
@@ -31,7 +31,6 @@ from perfetto_hetero_profiler.schema import (
     read_jsonl,
 )
 from tests.support.paths import RBLN_SMI_FIXTURES
-
 
 FIXTURES = RBLN_SMI_FIXTURES
 ONE_DEVICE = (FIXTURES / "one_device.json").read_text(encoding="utf-8")

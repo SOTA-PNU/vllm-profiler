@@ -2,11 +2,11 @@
 
 import contextlib
 import io
-from importlib import resources
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from importlib import resources
+from pathlib import Path
 
 from perfetto_hetero_profiler.cli import main
 from perfetto_hetero_profiler.hybrid.layout import (
@@ -25,8 +25,6 @@ from perfetto_hetero_profiler.hybrid.runner_config import (
     load_hybrid_runner_config,
     validate_hybrid_invocation,
 )
-
-
 from tests.support.runner_fakes import document
 
 

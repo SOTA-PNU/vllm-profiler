@@ -8,19 +8,19 @@ evidence.
 
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import dataclass
 import hashlib
 import html
 import json
 import math
 import os
-from pathlib import Path
 import shutil
 import statistics
 import subprocess
 import tempfile
 import time
+from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from perfetto_hetero_profiler.hybrid.layout import (
@@ -41,7 +41,6 @@ from perfetto_hetero_profiler.support.json_io import canonical_json_bytes
 from .environment import capture_environment, idle_reasons, wait_for_idle
 from .statistics import OverheadDirection, paired_overhead, summarize_distribution
 from .validation import validate_trial
-
 
 SCHEMA_VERSION = "1.0"
 CONDITIONS = (
@@ -755,7 +754,6 @@ def analyze_sampling_stream(
     ordered.sort()
     missing_sequences = sum(max(0, current[0] - previous[0] - 1) for previous, current in zip(ordered, ordered[1:]))
     monotonic = all(current[1] > previous[1] for previous, current in zip(ordered, ordered[1:]))
-    interval_ns = configured_interval_ms * 1_000_000
     intervals = [
         current[1] - previous[1]
         for previous, current in zip(ordered, ordered[1:])
@@ -2033,7 +2031,6 @@ def build_campaign_report(root: Path) -> dict[str, object]:
     modes: dict[str, object] = {}
     for condition in CONDITIONS[1:]:
         expected = [f"round-{index:02d}-{condition}" for index in range(1, formal_rounds + 1)]
-        references = [f"round-{index:02d}-reference" for index in range(1, formal_rounds + 1)]
         excluded_pairs = [
             {
                 "round": round_index,

@@ -8,7 +8,6 @@ from enum import Enum
 from perfetto_hetero_profiler.schema import Availability
 from perfetto_hetero_profiler.schema.constants import SCHEMA_VERSION
 
-
 OVERVIEW_COMPARISON_RECORD_TYPE = "overview_comparison"
 
 

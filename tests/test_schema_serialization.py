@@ -1,10 +1,9 @@
 """JSON and JSONL round-trip tests."""
 
-import json
 import math
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from perfetto_hetero_profiler.schema import (
     EventRecord,

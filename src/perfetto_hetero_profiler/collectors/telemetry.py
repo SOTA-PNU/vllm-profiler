@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import MutableSequence, Sequence
-from dataclasses import dataclass, replace
 import threading
 import time
+from collections.abc import MutableSequence, Sequence
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Protocol
 
 from ..schema import (

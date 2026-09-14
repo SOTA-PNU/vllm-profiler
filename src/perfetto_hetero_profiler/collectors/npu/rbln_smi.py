@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import re
 import subprocess
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from ...schema import Availability
-
 
 RBLN_SMI_ARGV = ("rbln-smi", "--json")
 _UNAVAILABLE = {"", "n/a", "na", "null", "none", "not supported", "[not supported]"}

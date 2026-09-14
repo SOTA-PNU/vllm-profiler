@@ -5,28 +5,29 @@ import gzip
 import io
 import json
 import os
-from pathlib import Path
-from types import SimpleNamespace
 import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from perfetto_hetero_profiler.cli import main
+from perfetto_hetero_profiler.collectors.gpu import NvmlClient, NvmlError
 from perfetto_hetero_profiler.gpu import vllm_collection as collection_module
+from perfetto_hetero_profiler.gpu.openai_client import CompletionObservation
 from perfetto_hetero_profiler.gpu.vllm_collection import (
     GpuVllmCollectionConfig,
     GpuVllmCollectionRunner,
     build_vllm_collection_plan,
 )
-from perfetto_hetero_profiler.gpu.openai_client import CompletionObservation
-from perfetto_hetero_profiler.collectors.gpu import NvmlClient, NvmlError
 from perfetto_hetero_profiler.schema import (
     ArtifactKind,
+    RunStatus,
     read_json,
     read_jsonl,
-    RunStatus,
 )
-from tests.support.gpu_fakes import FakeBinding, client as FakeGpuClient
+from tests.support.gpu_fakes import FakeBinding
+from tests.support.gpu_fakes import client as FakeGpuClient
 
 
 class CollectionConfigTests(unittest.TestCase):

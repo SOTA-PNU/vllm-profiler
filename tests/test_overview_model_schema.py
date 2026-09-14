@@ -2,65 +2,52 @@
 
 from __future__ import annotations
 
-from dataclasses import fields, replace
 import copy
 import json
 import math
 import unittest
+from dataclasses import fields, replace
 
 from perfetto_hetero_profiler.overview.model import (
     DisplayRule,
-    KpiCalculation,
-    KpiClock,
-    KpiScope,
     KpiSections,
-    KpiSource,
-    KpiValue,
     OverviewReport,
-    ResourceSummary,
 )
 from perfetto_hetero_profiler.overview.schema import (
     OverviewSchemaError,
     canonical_json_bytes,
     canonical_sha256,
     load_json_schema,
-    overview_report_from_dict,
     overview_document_from_json,
+    overview_report_from_dict,
     overview_to_dict,
     validate_json_schema_contract,
     validate_kpi,
     validate_overview_report,
     validate_resource_summary,
 )
-from tools.evaluation.overview import (
-    Comparability,
-    ComparisonDelta,
-    ComparisonKpi,
-    ComparisonMetadata,
-    ComparisonRun,
-    ComparisonValue,
-    DeltaValue,
-    KpiDirection,
-    OverviewComparison,
-    canonical_comparison_json_bytes,
-    comparison_to_dict,
-    load_comparison_schema,
-    overview_document_from_json as comparison_document_from_json,
-    validate_overview_comparison,
-)
 from perfetto_hetero_profiler.schema import Availability
 from perfetto_hetero_profiler.schema.constants import JSON_SCHEMA_DRAFT
 from tests.support.overview_model import (
-    clock,
     comparison,
-    display,
     kpi,
     report,
     resource_summary,
     scope,
     source,
 )
-
+from tools.evaluation.overview import (
+    Comparability,
+    DeltaValue,
+    OverviewComparison,
+    canonical_comparison_json_bytes,
+    comparison_to_dict,
+    load_comparison_schema,
+    validate_overview_comparison,
+)
+from tools.evaluation.overview import (
+    overview_document_from_json as comparison_document_from_json,
+)
 
 
 class OverviewSchemaContractTests(unittest.TestCase):
@@ -338,6 +325,8 @@ class OverviewSchemaContractTests(unittest.TestCase):
         )
         from tests.support.overview_calculation import (
             RUN_ID as CALCULATION_RUN_ID,
+        )
+        from tests.support.overview_calculation import (
             _fixture,
         )
 

@@ -5,11 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import platform
 import subprocess
 import time
-from typing import Any
+from pathlib import Path
 
 from perfetto_hetero_profiler.hybrid.runner_config import HybridRunnerConfig
 from perfetto_hetero_profiler.support.json_io import canonical_json_bytes

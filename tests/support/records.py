@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import hashlib
 import time
+from pathlib import Path
 
 from perfetto_hetero_profiler.hybrid.runtime_markers import (
     CANONICAL_MARKER_PHASES,
@@ -36,7 +36,6 @@ from perfetto_hetero_profiler.schema import (
     write_json,
     write_jsonl,
 )
-
 
 EXPECTED_CANONICAL_MARKER_PHASES = {
     "request_received": Phase.REQUEST,

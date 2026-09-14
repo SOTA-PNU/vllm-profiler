@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, replace
-from enum import Enum
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import stat
 import tempfile
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
+from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from .failure import FailureClass
@@ -27,7 +27,6 @@ from .schedule import (
     validate_attempt_id,
     validate_logical_trial_id,
 )
-
 
 CHECKPOINT_VERSION = "1.0.0"
 PROCESS_EVIDENCE_OWNERSHIP = "evidence_only"

@@ -26,20 +26,15 @@ from .clock_sync import (
 from .config import AlignmentMethod, HybridMergeConfig, build_hybrid_plan
 from .join import (
     ITERATION_MARKERS,
-    JoinResult,
     MARKER_ORDER,
+    JoinResult,
     MarkerValidation,
     OrderingIssue,
     join_requests,
-    validate_marker_order,
     validate_marker_groups,
+    validate_marker_order,
 )
-from .runtime_markers import (
-    CANONICAL_MARKER_PHASES,
-    RuntimeMarkerIngestError,
-    ingest_runtime_marker_files,
-)
-from .runner import HybridRunResult, HybridRunner, build_hybrid_run_plan
+from .runner import HybridRunner, HybridRunResult, build_hybrid_run_plan
 from .runner_config import (
     PROFILE_MODES,
     HybridProfileMode,
@@ -47,6 +42,11 @@ from .runner_config import (
     HybridRunnerConfigError,
     load_hybrid_runner_config,
     validate_hybrid_invocation,
+)
+from .runtime_markers import (
+    CANONICAL_MARKER_PHASES,
+    RuntimeMarkerIngestError,
+    ingest_runtime_marker_files,
 )
 from .validation import (
     SourceBundle,

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import math
+from copy import deepcopy
 
 
 def valid_records() -> dict[str, tuple[dict[str, object], dict[str, object]]]:
@@ -85,35 +85,82 @@ def parity_cases() -> list[tuple[str, bool, dict[str, object]]]:
     for record_type, (minimum, full) in records.items():
         cases.extend(((f"{record_type}:valid_minimum", True, deepcopy(minimum)), (f"{record_type}:valid_full", True, deepcopy(full))))
         required = next(key for key in minimum if key not in {"schema_version", "record_type"})
-        value = deepcopy(minimum); del value[required]; cases.append((f"{record_type}:missing_required", False, value))
-        value = deepcopy(minimum); value["unknown"] = True; cases.append((f"{record_type}:unknown_field", False, value))
-        value = deepcopy(minimum); value[enum_field[record_type]] = "invalid"; cases.append((f"{record_type}:invalid_enum", False, value))
-        value = deepcopy(minimum); value["schema_version"] = "invalid"; cases.append((f"{record_type}:invalid_pattern", False, value))
-        value = deepcopy(minimum); value["attributes"] = {"not_namespaced": True}; cases.append((f"{record_type}:invalid_attributes", False, value))
-        value = deepcopy(minimum); value["attributes"] = {"test.nonfinite": math.inf}; cases.append((f"{record_type}:nonfinite", False, value))
-        field, invalid = semantic[record_type]; value = deepcopy(minimum); value[field] = invalid; cases.append((f"{record_type}:semantic_only", False, value))
+        value = deepcopy(minimum)
+        del value[required]
+        cases.append((f"{record_type}:missing_required", False, value))
+        value = deepcopy(minimum)
+        value["unknown"] = True
+        cases.append((f"{record_type}:unknown_field", False, value))
+        value = deepcopy(minimum)
+        value[enum_field[record_type]] = "invalid"
+        cases.append((f"{record_type}:invalid_enum", False, value))
+        value = deepcopy(minimum)
+        value["schema_version"] = "invalid"
+        cases.append((f"{record_type}:invalid_pattern", False, value))
+        value = deepcopy(minimum)
+        value["attributes"] = {"not_namespaced": True}
+        cases.append((f"{record_type}:invalid_attributes", False, value))
+        value = deepcopy(minimum)
+        value["attributes"] = {"test.nonfinite": math.inf}
+        cases.append((f"{record_type}:nonfinite", False, value))
+        field, invalid = semantic[record_type]
+        value = deepcopy(minimum)
+        value[field] = invalid
+        cases.append((f"{record_type}:semantic_only", False, value))
         if record_type in integer_field:
             field = integer_field[record_type]
-            value = deepcopy(minimum); value[field] = "1"; cases.append((f"{record_type}:wrong_primitive", False, value))
-            value = deepcopy(minimum); value[field] = True; cases.append((f"{record_type}:bool_as_integer", False, value))
+            value = deepcopy(minimum)
+            value[field] = "1"
+            cases.append((f"{record_type}:wrong_primitive", False, value))
+            value = deepcopy(minimum)
+            value[field] = True
+            cases.append((f"{record_type}:bool_as_integer", False, value))
         if record_type == "run_manifest":
-            value = deepcopy(minimum); value["models"][0]["unknown"] = True; cases.append(("run_manifest:nested_unknown", False, value))
-            value = deepcopy(minimum); del value["models"][0]["model_id"]; cases.append(("run_manifest:nested_missing", False, value))
+            value = deepcopy(minimum)
+            value["models"][0]["unknown"] = True
+            cases.append(("run_manifest:nested_unknown", False, value))
+            value = deepcopy(minimum)
+            del value["models"][0]["model_id"]
+            cases.append(("run_manifest:nested_missing", False, value))
         if record_type == "event":
-            value = deepcopy(minimum); value["timestamp_ns"] = -1; cases.append(("event:negative_bound", False, value))
-            value = deepcopy(minimum); value["duration_ns"] = 1; cases.append(("event:cross_field", False, value))
-            value = deepcopy(minimum); value["request_id"] = None; cases.append(("event:nullable", True, value))
+            value = deepcopy(minimum)
+            value["timestamp_ns"] = -1
+            cases.append(("event:negative_bound", False, value))
+            value = deepcopy(minimum)
+            value["duration_ns"] = 1
+            cases.append(("event:cross_field", False, value))
+            value = deepcopy(minimum)
+            value["request_id"] = None
+            cases.append(("event:nullable", True, value))
         elif record_type == "metric":
-            value = deepcopy(minimum); value["timestamp_ns"] = -1; cases.append(("metric:negative_bound", False, value))
-            value = deepcopy(minimum); value.update({"availability": "not_available", "value": None}); cases.append(("metric:cross_field", False, value))
-            value = deepcopy(minimum); value["reason"] = None; cases.append(("metric:nullable", True, value))
+            value = deepcopy(minimum)
+            value["timestamp_ns"] = -1
+            cases.append(("metric:negative_bound", False, value))
+            value = deepcopy(minimum)
+            value.update({"availability": "not_available", "value": None})
+            cases.append(("metric:cross_field", False, value))
+            value = deepcopy(minimum)
+            value["reason"] = None
+            cases.append(("metric:nullable", True, value))
         elif record_type == "artifact":
-            value = deepcopy(minimum); value["created_at_unix_ns"] = -1; cases.append(("artifact:negative_bound", False, value))
-            value = deepcopy(minimum); value["sha256"] = "bad"; cases.append(("artifact:invalid_sha_pattern", False, value))
-            value = deepcopy(minimum); value["host_id"] = None; cases.append(("artifact:nullable", True, value))
+            value = deepcopy(minimum)
+            value["created_at_unix_ns"] = -1
+            cases.append(("artifact:negative_bound", False, value))
+            value = deepcopy(minimum)
+            value["sha256"] = "bad"
+            cases.append(("artifact:invalid_sha_pattern", False, value))
+            value = deepcopy(minimum)
+            value["host_id"] = None
+            cases.append(("artifact:nullable", True, value))
         elif record_type == "sync_point":
-            value = deepcopy(minimum); value["uncertainty_ns"] = -1; cases.append(("sync_point:negative_bound", False, value))
+            value = deepcopy(minimum)
+            value["uncertainty_ns"] = -1
+            cases.append(("sync_point:negative_bound", False, value))
         elif record_type == "clock_transform":
-            value = deepcopy(minimum); value["scale"] = -1; cases.append(("clock_transform:negative_bound", False, value))
-            value = deepcopy(minimum); value.update({"valid_from_source_ns": 2, "valid_to_source_ns": 1}); cases.append(("clock_transform:cross_field", False, value))
+            value = deepcopy(minimum)
+            value["scale"] = -1
+            cases.append(("clock_transform:negative_bound", False, value))
+            value = deepcopy(minimum)
+            value.update({"valid_from_source_ns": 2, "valid_to_source_ns": 1})
+            cases.append(("clock_transform:cross_field", False, value))
     return cases

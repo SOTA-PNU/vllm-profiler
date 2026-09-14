@@ -4,9 +4,9 @@ import contextlib
 import io
 import json
 import os
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from perfetto_hetero_profiler.cli import main
@@ -19,7 +19,6 @@ from perfetto_hetero_profiler.npu.runtime_collection import (
     _replace_jsonl,
     build_runtime_collection_plan,
 )
-from perfetto_hetero_profiler.schema import read_jsonl
 from perfetto_hetero_profiler.npu.workload import (
     NON_TOKEN_REASON,
     measured_window_metrics,
@@ -31,6 +30,7 @@ from perfetto_hetero_profiler.schema import (
     ArtifactKind,
     Availability,
     ProfileMode,
+    read_jsonl,
     validate_record,
 )
 

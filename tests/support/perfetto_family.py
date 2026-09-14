@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import Trace, TrackEvent
@@ -21,17 +21,17 @@ from perfetto_hetero_profiler.hybrid.detailed_profile import (
 from perfetto_hetero_profiler.hybrid.layout import COLLECTION_RESULT_NAME
 from perfetto_hetero_profiler.perfetto.converter import (
     CONVERSION_MANIFEST_NAME,
-    TRACE_NAME,
     TRACE_ATTRIBUTE_VALIDATION_NAME,
+    TRACE_NAME,
     TRACE_VALIDATION_NAME,
 )
 from perfetto_hetero_profiler.schema import (
+    DETACHED_MANIFEST_NAME,
+    DETACHED_VALIDATION_NAME,
     ArtifactKind,
     ArtifactReference,
     Availability,
     ClockType,
-    DETACHED_MANIFEST_NAME,
-    DETACHED_VALIDATION_NAME,
     DeviceType,
     MetricKind,
     MetricSample,
@@ -39,7 +39,6 @@ from perfetto_hetero_profiler.schema import (
     ProfileMode,
     RunStatus,
     ValueOrigin,
-    build_detached_artifact_manifest,
     create_detached_recovery,
     read_json,
     read_jsonl,

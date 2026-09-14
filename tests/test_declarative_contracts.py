@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import MISSING, fields, replace
 import importlib
-from importlib.util import find_spec
 import json
-from pathlib import Path
 import unittest
+from dataclasses import MISSING, fields, replace
+from importlib.util import find_spec
 
+from perfetto_hetero_profiler.overview import bundle, generator, model, render, schema
 from perfetto_hetero_profiler.perfetto.validation_queries import (
     BASE_VALIDATION_QUERIES,
     NATIVE_VALIDATION_QUERIES,
     TIMELINE_VALIDATION_QUERIES,
 )
-from perfetto_hetero_profiler.overview import bundle, generator, model, render, schema
 from perfetto_hetero_profiler.schema.catalog import (
     KPI_PRESENTATION_BY_IDENTITY,
     KPI_SECTION_METRICS,
@@ -45,7 +44,6 @@ from perfetto_hetero_profiler.schema.records import (
     WorkloadDescriptor,
 )
 from tests.support.paths import REPO_ROOT, SRC_ROOT
-
 
 SCHEMA_ROOT = (
     SRC_ROOT

@@ -1,35 +1,35 @@
 """CPU-only failure and interruption tests for hybrid process ownership."""
 
 import json
+import tempfile
+import threading
+import unittest
 from dataclasses import dataclass, replace
 from pathlib import Path
-import threading
-import tempfile
-import unittest
 from unittest import mock
 from urllib.error import URLError
 
-from perfetto_hetero_profiler.hybrid.runner import (
-    HybridRunner,
-    HybridRunnerError,
-    _TelemetryWorker,
-    _profile_call,
-    _shutdown_integrity,
-    _wait_http,
-    _wait_runtime_marker_completion,
+from perfetto_hetero_profiler.gpu.openai_client import CompletionObservation
+from perfetto_hetero_profiler.hybrid import (
+    AlignmentMethod,
+    HybridBundleMerger,
+    HybridMergeConfig,
 )
 from perfetto_hetero_profiler.hybrid.layout import (
     COLLECTION_RESULT_NAME,
     FINAL_RESULT_NAME,
     HybridRunLayout,
 )
-from perfetto_hetero_profiler.hybrid import (
-    AlignmentMethod,
-    HybridBundleMerger,
-    HybridMergeConfig,
+from perfetto_hetero_profiler.hybrid.runner import (
+    HybridRunner,
+    HybridRunnerError,
+    _profile_call,
+    _shutdown_integrity,
+    _TelemetryWorker,
+    _wait_http,
+    _wait_runtime_marker_completion,
 )
 from perfetto_hetero_profiler.hybrid.runner_config import load_hybrid_runner_config
-from perfetto_hetero_profiler.gpu.openai_client import CompletionObservation
 from perfetto_hetero_profiler.perfetto.loader import load_hybrid_run
 from perfetto_hetero_profiler.schema import (
     ArtifactKind,
@@ -39,7 +39,6 @@ from perfetto_hetero_profiler.schema import (
     read_json,
     read_jsonl,
 )
-
 from tests.support.records import GPU_MARKERS, NPU_MARKERS, build_source_bundle
 from tests.support.runner_fakes import document
 

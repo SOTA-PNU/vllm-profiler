@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping, TypeAlias
+from typing import Mapping, TypeAlias
 
 from ..schema import Availability
 from ..schema.constants import SCHEMA_VERSION
-
 
 OVERVIEW_MODEL_VERSION = "1.0.0"
 OVERVIEW_REPORT_RECORD_TYPE = "overview_report"

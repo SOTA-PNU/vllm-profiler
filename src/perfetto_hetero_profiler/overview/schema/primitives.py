@@ -6,14 +6,14 @@ host paths.  The JSON Schema here carries all *structural* validation.
 
 from __future__ import annotations
 
+import json
+import math
+import re
 from dataclasses import fields, is_dataclass
 from enum import Enum
 from functools import lru_cache
 from importlib import resources
-import json
-import math
 from pathlib import PurePosixPath, PureWindowsPath
-import re
 from typing import Any, Mapping, TypeVar
 
 from ...schema.constants import JSON_SCHEMA_DRAFT
@@ -23,7 +23,6 @@ from ...schema.jsonschema_runtime import (
     validate_schema_document,
 )
 from ..model import OVERVIEW_REPORT_RECORD_TYPE, OverviewReport
-
 
 _EMBEDDED_POSIX_PATH_RE = re.compile(
     r"""(?:^|[\s="'(])/(?!/)[A-Za-z0-9._-]"""

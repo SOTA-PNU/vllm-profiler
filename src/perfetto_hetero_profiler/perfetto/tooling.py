@@ -8,18 +8,17 @@ never opts in to the "latest" endpoint.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from importlib import metadata as importlib_metadata
 import os
-from pathlib import Path
 import platform
 import stat
 import subprocess
 import sys
+from dataclasses import dataclass
+from importlib import metadata as importlib_metadata
+from pathlib import Path
 from typing import Any
 
 from ..support.files import sha256_file
-
 
 PERFETTO_PACKAGE_VERSION = "0.57.2"
 PERFETTO_WHEEL_FILENAME = "perfetto-0.57.2-py3-none-any.whl"

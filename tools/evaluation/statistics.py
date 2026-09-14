@@ -8,12 +8,11 @@ pairing and finite, non-boolean numeric inputs.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-import math
 from typing import TypeAlias
-
 
 Number: TypeAlias = int | float
 

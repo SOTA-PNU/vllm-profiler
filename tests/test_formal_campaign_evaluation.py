@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from tools.evaluation.concurrent_wave import BlockSpec
@@ -20,7 +20,6 @@ from tools.evaluation.formal_campaign import (
     run_campaign,
 )
 from tools.evaluation.formal_client import FormalStreamingClient
-
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "tools/evaluation/examples/final_ofat_campaign.json"

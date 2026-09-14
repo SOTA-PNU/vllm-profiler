@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
-from tools.evaluation.checkpoint import AttemptRecord, AttemptStatus, ExperimentCheckpoint
+from tools.evaluation.checkpoint import (
+    AttemptRecord,
+    AttemptStatus,
+    ExperimentCheckpoint,
+)
 from tools.evaluation.report import build_report, canonical_json, render_report_html
 from tools.evaluation.schedule import build_schedule
 

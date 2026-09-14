@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
 import json
 import os
-from pathlib import Path, PurePosixPath
 import re
-from typing import Any
 import uuid
+from collections.abc import Iterable, Mapping
+from pathlib import Path, PurePosixPath
+from typing import Any
 
-from .constants import SCHEMA_VERSION
 from ..support.files import sha256_file
 from ..support.json_io import pretty_json_bytes
-
+from .constants import SCHEMA_VERSION
 
 DETACHED_MANIFEST_NAME = "artifact_manifest.json"
 DETACHED_VALIDATION_NAME = "artifact_manifest_validation.json"

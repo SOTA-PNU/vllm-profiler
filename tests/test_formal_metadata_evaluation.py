@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import json
-from pathlib import Path
 import subprocess
 import tempfile
-from types import SimpleNamespace
 import unittest
+from copy import deepcopy
+from pathlib import Path
+from types import SimpleNamespace
 
 from perfetto_hetero_profiler.support.files import sha256_file
 from perfetto_hetero_profiler.support.json_io import (
@@ -25,7 +25,6 @@ from tools.evaluation.formal_metadata import (
     validate_environment,
     validate_published_block,
 )
-
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "tools/evaluation/examples/final_ofat_campaign.json"
@@ -252,10 +251,11 @@ class PublishedBlockValidationTests(unittest.TestCase):
         })
         if hybrid:
             run_root = evidence / "runner" / f"r{block.round_index:02d}-{block.condition_id}"
-            token = lambda value: {
-                "value": value, "uniform": True, "minimum": value,
-                "maximum": value, "sample_count": block.measured_requests,
-            }
+            def token(value):
+                return {
+                    "value": value, "uniform": True, "minimum": value,
+                    "maximum": value, "sample_count": block.measured_requests,
+                }
             write_pretty_json(run_root / "hybrid" / "manifest.json", {
                 "mode": "hybrid", "status": "succeeded",
                 "workload": {

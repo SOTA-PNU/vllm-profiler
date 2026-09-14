@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import json
-from pathlib import Path
 import platform
 import sys
 import time
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Callable
 
+from ...runtime_metadata import topology_metadata
 from ...schema import (
     ArtifactKind,
     ArtifactReference,
@@ -31,7 +32,6 @@ from ...schema import (
     write_jsonl,
 )
 from ...schema.manifests import publish_run_manifest
-from ...runtime_metadata import topology_metadata
 from ..command import mask_command
 from ..process import ManagedProcess
 from ..run import run_monitored_process
@@ -45,7 +45,6 @@ from .nvml import (
 )
 from .profiling import build_detailed_profile_plan
 from .telemetry import GpuTelemetryCollector
-
 
 HOST_CLOCK_DOMAIN = "host-monotonic"
 

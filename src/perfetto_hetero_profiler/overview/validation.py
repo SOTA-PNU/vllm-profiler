@@ -16,9 +16,10 @@ from .loader import (
 from .publication import canonical_json_bytes
 from .schema import (
     canonical_json_bytes as canonical_model_json_bytes,
+)
+from .schema import (
     overview_report_from_dict,
 )
-
 
 OVERVIEW_VALIDATION_RECORD_TYPE = "overview_validation"
 

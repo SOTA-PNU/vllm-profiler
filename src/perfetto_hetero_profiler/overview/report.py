@@ -8,11 +8,11 @@ block stating what the capture proves and what it does not.
 
 from __future__ import annotations
 
-from dataclasses import asdict
 import json
 import math
-from pathlib import Path
 import re
+from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ..hybrid.join import validate_marker_groups
@@ -27,7 +27,6 @@ from .loader import (
     read_validated_source_json,
     reconciliation_summary,
 )
-
 
 OVERVIEW_SCHEMA_VERSION = "1.0.0"
 OVERVIEW_RECORD_TYPE = "overview_report"

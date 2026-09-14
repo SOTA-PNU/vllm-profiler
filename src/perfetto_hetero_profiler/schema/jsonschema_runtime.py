@@ -10,7 +10,6 @@ from typing import Any, Iterable
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-
 _SCHEMA_PACKAGE = "perfetto_hetero_profiler.schema"
 _SCHEMA_BY_RECORD_TYPE = {
     "run_manifest": ("run_manifest.schema.json", "run_manifest"),

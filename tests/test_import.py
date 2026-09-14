@@ -1,7 +1,7 @@
 """Package import tests."""
 
-from importlib.util import find_spec
 import unittest
+from importlib.util import find_spec
 
 import perfetto_hetero_profiler
 from perfetto_hetero_profiler import gpu, npu

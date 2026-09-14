@@ -1,7 +1,6 @@
 """Tests for the installed rbln-smi 3.0.0 JSON contract."""
 
 import json
-from pathlib import Path
 import subprocess
 import unittest
 
@@ -13,7 +12,6 @@ from perfetto_hetero_profiler.collectors.npu import (
 )
 from perfetto_hetero_profiler.schema import Availability
 from tests.support.paths import RBLN_SMI_FIXTURES
-
 
 FIXTURES = RBLN_SMI_FIXTURES
 

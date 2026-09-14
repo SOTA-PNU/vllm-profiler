@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Final
 
-
 LEGACY_MEASURED_WINDOW: Final = "measured_smoke"
 LEGACY_MEASURED_WINDOW_AGGREGATION: Final = "measured_smoke_window_v1"
 LEGACY_MEASURED_COUNT_AGGREGATION: Final = "measured_smoke_count_v1"

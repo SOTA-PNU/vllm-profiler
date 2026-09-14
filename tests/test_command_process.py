@@ -1,13 +1,11 @@
 """Safe command specification and managed-process tests."""
 
-import os
-from pathlib import Path
-import signal
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
 from perfetto_hetero_profiler.collectors import (
     CommandSpec,

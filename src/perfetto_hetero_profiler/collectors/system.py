@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import math
-from numbers import Real
 import time
+from dataclasses import replace
+from numbers import Real
 from typing import Any, Callable
 
 import psutil
 
-from .base import BaseCollector
 from ..schema import Availability, MetricKind, MetricSample, MetricScope, ValueOrigin
+from .base import BaseCollector
 
 
 class _MetricValueError(ValueError):

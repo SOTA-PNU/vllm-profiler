@@ -5,9 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from perfetto_hetero_profiler.schema import (
     DETACHED_MANIFEST_NAME,

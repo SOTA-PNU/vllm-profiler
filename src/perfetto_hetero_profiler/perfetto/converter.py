@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
 import os
-from pathlib import Path
 import shutil
 import stat
 import tempfile
-from typing import Any, Mapping
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Mapping
 
+from ..hybrid.layout import existing_collection_result_path
+from ..schema import SCHEMA_VERSION
 from ..support.files import sha256_file
 from ..support.publication import publish_directory_no_replace
-
-from ..schema import SCHEMA_VERSION
-from ..hybrid.layout import existing_collection_result_path
 from .artifacts import (
     ARTIFACT_MANIFEST_NAME,
     ARTIFACT_VALIDATION_NAME,
@@ -32,8 +31,8 @@ from .native_details import (
     request_focused_plan,
 )
 from .planner import NativeProfileEnvelope, PlanBuildResult, build_trace_plan
+from .timeline_summary import build_timeline_summary_context
 from .tooling import (
-    _absolute_without_resolving,
     PERFETTO_PACKAGE_VERSION,
     PERFETTO_UPSTREAM_REVISION,
     PERFETTO_WHEEL_FILENAME,
@@ -47,16 +46,19 @@ from .tooling import (
     TRACE_PROCESSOR_SIZE_BYTES,
     TRACE_PROCESSOR_SOURCE,
     ToolchainRuntime,
+    _absolute_without_resolving,
     resolve_toolchain,
 )
+from .trace_attributes import trace_attribute_validation_report
 from .validation import (
     summarize_trace_validation,
     validate_native_perfetto_trace,
     validate_trace,
 )
 from .writer import write_trace
-from .timeline_summary import build_timeline_summary_context
-from .trace_attributes import trace_attribute_validation_report
+
+if TYPE_CHECKING:
+    from .model import TracePlan
 
 
 TRACE_NAME = "trace.pftrace"

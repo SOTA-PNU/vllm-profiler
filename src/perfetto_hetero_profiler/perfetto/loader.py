@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path, PurePosixPath
 import re
 import stat
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 from typing import Any, TypeVar
 
 from ..hybrid.join import validate_marker_groups
 from ..hybrid.layout import related_run_root
 from ..schema import (
+    SCHEMA_VERSION,
     ArtifactIntegrityError,
     ArtifactKind,
     ArtifactReference,
@@ -26,7 +27,6 @@ from ..schema import (
     RunManifest,
     RunMode,
     RunStatus,
-    SCHEMA_VERSION,
     read_json,
     read_jsonl,
     record_from_dict,
@@ -35,7 +35,6 @@ from ..schema import (
 from ..support.files import sha256_file
 from .planner import NativeProfileEnvelope
 from .tooling import _absolute_without_resolving, _same_file_state
-
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,191}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")

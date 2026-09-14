@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import gzip
 import json
-from pathlib import Path
 import platform
 import threading
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Literal
 
 from ..artifact_compatibility import (
@@ -23,10 +23,11 @@ from ..collectors.gpu import (
     NvmlClient,
 )
 from ..collectors.system import SystemTelemetryCollector
+from ..runtime_metadata import topology_metadata
 from ..schema import (
-    Availability,
     ArtifactKind,
     ArtifactReference,
+    Availability,
     ClockDomain,
     ClockType,
     DeviceDescriptor,
@@ -44,7 +45,6 @@ from ..schema import (
     write_jsonl,
 )
 from ..schema.manifests import publish_run_manifest
-from ..runtime_metadata import topology_metadata
 from ..support.files import sha256_file
 from ..support.json_io import replace_pretty_json
 from .openai_client import CompletionObservation, OpenAICompletionClient
@@ -61,7 +61,6 @@ from .workload import (
     observation_events,
     observation_metrics,
 )
-
 
 ProfileKind = Literal["monitor", "torch", "nsys"]
 PROMPT = "Explain a computer cache in one short sentence."

@@ -7,7 +7,6 @@ from typing import TypeAlias
 
 from .compatibility import LEGACY_TIMELINE_MAPPING_VERSION
 
-
 AnnotationValue: TypeAlias = bool | int | float | str
 TraceAttributeValue: TypeAlias = int | str
 _TRACK_LANE_SEPARATOR = ":lane:"

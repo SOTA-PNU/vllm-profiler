@@ -10,9 +10,9 @@ access here; it re-verifies size and SHA-256 before parsing.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
 import hashlib
 import json
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 from ...schema import Availability
@@ -35,7 +35,6 @@ from .kpi_records import (
     _source_metric,
     _unknown_clock,
 )
-
 
 _MEASURED_REQUESTS_PATH = "raw/client/measured_requests.jsonl"
 

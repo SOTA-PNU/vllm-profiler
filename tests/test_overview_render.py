@@ -5,14 +5,13 @@ from __future__ import annotations
 import copy
 import unittest
 
-from tools.evaluation.overview import build_comparison, render_comparison_html
 from perfetto_hetero_profiler.overview.render import (
     OverviewRenderError,
     render_overview_html,
     validate_offline_html,
 )
 from tests.support.comparison import kpi, report
-
+from tools.evaluation.overview import build_comparison, render_comparison_html
 
 _TEST_CSP = (
     "default-src 'none'; "

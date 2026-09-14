@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
-import re
 from typing import Any
 
 from google.protobuf.message import DecodeError

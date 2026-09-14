@@ -8,7 +8,6 @@ from pathlib import Path
 from ...schema import ProfileMode, RunPaths
 from ..command import CommandSpec
 
-
 MIN_SAMPLE_INTERVAL_MS = 100
 DEFAULT_SAMPLE_INTERVAL_MS = 1000
 

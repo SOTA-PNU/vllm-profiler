@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
 import hashlib
 import json
 import re
+from dataclasses import dataclass
+from enum import Enum
 from typing import Collection, Iterable
-
 
 SCHEDULE_VERSION = "1.0.0"
 SCHEDULE_SEED_DOMAIN = "profiler-experiment"

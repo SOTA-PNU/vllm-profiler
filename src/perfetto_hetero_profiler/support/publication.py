@@ -7,7 +7,6 @@ import errno
 import os
 from pathlib import Path
 
-
 _RENAME_NOREPLACE = 1
 _AT_FDCWD = -100
 

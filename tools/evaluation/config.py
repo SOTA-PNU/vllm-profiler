@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
 import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from perfetto_hetero_profiler.hybrid.runner_config import HybridRunnerConfig, load_hybrid_runner_config
+from perfetto_hetero_profiler.hybrid.runner_config import (
+    HybridRunnerConfig,
+    load_hybrid_runner_config,
+)
 from perfetto_hetero_profiler.support.files import sha256_file as _sha256_file
-from .paths import validate_existing_real_path, validate_safe_name
+
 from .compatibility import LEGACY_SCHEDULE_SEED_DOMAIN
+from .paths import validate_existing_real_path, validate_safe_name
 from .schedule import (
     MAX_HARDWARE_ATTEMPTS,
     SCHEDULE_SEED_DOMAIN,
@@ -20,7 +24,6 @@ from .schedule import (
     build_schedule,
     canonical_schedule_bytes,
 )
-
 
 CONFIG_VERSION = "1.0"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")

@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, replace
 import gc
 import hashlib
 import json
 import mimetypes
 import os
-from pathlib import Path
 import sys
 import time
-from typing import Sequence
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Any, Sequence
 
 from ..artifact_compatibility import LEGACY_NPU_COLLECTION_PRODUCER
 from ..collectors.npu import NpuRunCollector, NpuRunConfig
@@ -346,11 +346,11 @@ def _run_child(args: argparse.Namespace) -> int:
         measured: list[dict[str, object]] = []
         window_start_ns = time.monotonic_ns()
 
-        def run_measured() -> None:
+        def run_measured(active_runtime: Any) -> None:
             nonlocal output
             index = len(measured)
             started_ns = time.monotonic_ns()
-            output = runtime.run(input_array)
+            output = active_runtime.run(input_array)
             ended_ns = time.monotonic_ns()
             measured.append(
                 {
@@ -388,7 +388,7 @@ def _run_child(args: argparse.Namespace) -> int:
                     or (time.monotonic_ns() - window_start_ns) / 1e9
                     < args.min_measured_seconds
                 ):
-                    run_measured()
+                    run_measured(runtime)
             summary["profiler"]["call_sequence"].append("profile.__exit__")
             _relocate_vendor_sidecars(
                 Path.cwd(), profile_output, sidecars_before
@@ -401,7 +401,7 @@ def _run_child(args: argparse.Namespace) -> int:
                 or (time.monotonic_ns() - window_start_ns) / 1e9
                 < args.min_measured_seconds
             ):
-                run_measured()
+                run_measured(runtime)
 
         first_output = output[0] if isinstance(output, (list, tuple)) else output
         summary["measured"] = measured

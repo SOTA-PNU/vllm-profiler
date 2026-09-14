@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import importlib.util
 import os
-from pathlib import Path
 import socket
 import sys
-from typing import TypeVar
 import unittest
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TypeVar
 
 from perfetto_hetero_profiler.perfetto.tooling import (
     TRACE_PROCESSOR_FILENAME,
     TRACE_PROCESSOR_RELEASE,
 )
-
 
 REQUIRE_TRACE_PROCESSOR_ENV = "HETERO_TESTS_REQUIRE_TRACE_PROCESSOR"
 _TestClass = TypeVar("_TestClass", bound=type[unittest.TestCase])

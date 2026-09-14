@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 from ..collectors.gpu import GpuRunCollector, GpuRunConfig, build_gpu_run_plan
 from ..collectors.npu import NpuRunCollector, NpuRunConfig, build_npu_run_plan

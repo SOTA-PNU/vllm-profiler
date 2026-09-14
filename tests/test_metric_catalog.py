@@ -1,7 +1,7 @@
 """Official metric catalog tests."""
 
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from perfetto_hetero_profiler.schema import METRIC_CATALOG, MetricKind, MetricScope
 

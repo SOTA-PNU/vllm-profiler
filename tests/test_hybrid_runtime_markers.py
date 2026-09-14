@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from perfetto_hetero_profiler.hybrid import (
-    AlignmentMethod,
     CANONICAL_MARKER_PHASES,
+    AlignmentMethod,
     HybridBundleMerger,
     HybridMergeConfig,
     RuntimeMarkerIngestError,
@@ -23,14 +23,12 @@ from perfetto_hetero_profiler.schema import (
     validate_record,
     write_jsonl,
 )
-
 from tests.support.records import (
     EXPECTED_CANONICAL_MARKER_PHASES,
     GPU_MARKERS,
     NPU_MARKERS,
     build_source_bundle,
 )
-
 
 HOST_ID = "host-0"
 CLOCK_DOMAIN_ID = "host-monotonic"

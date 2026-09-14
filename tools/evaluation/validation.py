@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import math
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import Any
 
 from perfetto_hetero_profiler.hybrid.layout import (
@@ -15,7 +15,11 @@ from perfetto_hetero_profiler.hybrid.layout import (
 )
 from perfetto_hetero_profiler.support.files import sha256_file
 
-from .accuracy import client_latency_accuracy, exact_count_accuracy, exact_marker_accuracy
+from .accuracy import (
+    client_latency_accuracy,
+    exact_count_accuracy,
+    exact_marker_accuracy,
+)
 
 
 class TrialValidationError(RuntimeError):

@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
-from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
-from html import escape
-from importlib import resources
 import json
 import math
 import re
+from collections.abc import Iterable, Mapping, Sequence
+from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
+from html import escape
+from importlib import resources
 from typing import Any
 
 from perfetto_hetero_profiler.overview.render import (
     OverviewRenderError,
     validate_offline_html,
 )
-
 
 _CSP = (
     "default-src 'none'; style-src 'unsafe-inline'; script-src 'none'; "

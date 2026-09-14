@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import replace
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 
 from perfetto_hetero_profiler.overview.calculation import calculate_overview_kpis
 from perfetto_hetero_profiler.perfetto.loader import load_hybrid_run
@@ -27,7 +27,6 @@ from perfetto_hetero_profiler.perfetto.trace_attributes import (
 )
 from perfetto_hetero_profiler.perfetto.writer import build_trace, serialize_trace
 from perfetto_hetero_profiler.schema import DeviceType
-
 from tests.support.perfetto_family import _build_monitor_family
 
 

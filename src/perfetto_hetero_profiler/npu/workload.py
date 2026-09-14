@@ -16,7 +16,6 @@ from ..schema import (
     ValueOrigin,
 )
 
-
 HOST_ID = "host-0"
 CLOCK_DOMAIN_ID = "host-monotonic"
 NON_TOKEN_REASON = (

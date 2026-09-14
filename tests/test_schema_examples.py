@@ -1,9 +1,9 @@
 """Validation tests for checked-in schema examples and JSON Schema docs."""
 
-from dataclasses import fields
 import json
-from pathlib import Path
 import unittest
+from dataclasses import fields
+from pathlib import Path
 
 from perfetto_hetero_profiler.schema import (
     ArtifactReference,
@@ -19,7 +19,6 @@ from perfetto_hetero_profiler.schema import (
     read_json,
     read_jsonl,
 )
-
 
 EXAMPLES = Path("examples/schema_v1")
 SCHEMAS = Path("src/perfetto_hetero_profiler/schema/json/v1")

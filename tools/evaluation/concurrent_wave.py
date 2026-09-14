@@ -2,22 +2,27 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
-from perfetto_hetero_profiler.gpu.openai_client import CompletionObservation, OpenAICompletionClient
+from perfetto_hetero_profiler.gpu.openai_client import (
+    CompletionObservation,
+    OpenAICompletionClient,
+)
 from perfetto_hetero_profiler.hybrid.runner import HybridRunner
 from perfetto_hetero_profiler.hybrid.runner_config import load_hybrid_runner_config
 from perfetto_hetero_profiler.schema.records import RunStatus
 from perfetto_hetero_profiler.support.files import sha256_file
-from perfetto_hetero_profiler.support.json_io import write_jsonl_exclusive, write_pretty_json
-
+from perfetto_hetero_profiler.support.json_io import (
+    write_jsonl_exclusive,
+    write_pretty_json,
+)
 
 SUPPORTED_CONCURRENCY = frozenset({1, 2, 4})
 _REQUEST_ID = re.compile(r"^(?P<prefix>.+)-(?P<phase>warmup|measured)-(?P<index>\d+)$")

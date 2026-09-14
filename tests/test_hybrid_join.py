@@ -10,7 +10,6 @@ from perfetto_hetero_profiler.hybrid.join import (
     validate_marker_order,
 )
 from perfetto_hetero_profiler.schema import DeviceType
-
 from tests.support.records import EXPECTED_MARKER_ORDER, event
 
 

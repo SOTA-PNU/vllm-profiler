@@ -1,16 +1,20 @@
 """Unit tests for the dependency-free hybrid proxy primitives."""
 
 import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 import tempfile
 import threading
 import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
-from perfetto_hetero_profiler.hybrid.proxy import MarkerWriter, _block_count
-from perfetto_hetero_profiler.hybrid.proxy import HybridProxyHandler, ProxyState
 from perfetto_hetero_profiler.gpu.openai_client import OpenAICompletionClient
+from perfetto_hetero_profiler.hybrid.proxy import (
+    HybridProxyHandler,
+    MarkerWriter,
+    ProxyState,
+    _block_count,
+)
 
 
 class _BackendHandler(BaseHTTPRequestHandler):

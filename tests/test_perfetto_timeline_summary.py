@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 from unittest import mock
 
 from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import TrackDescriptor
@@ -21,8 +21,8 @@ from perfetto_hetero_profiler.perfetto.planner import (
 from perfetto_hetero_profiler.perfetto.timeline_summary import (
     TIMELINE_SUMMARY_MAPPING_VERSION,
     TIMELINE_SUMMARY_ROOT_NAME,
-    build_timeline_summary_context,
     TimelineSummaryInputError,
+    build_timeline_summary_context,
 )
 from perfetto_hetero_profiler.perfetto.writer import build_trace, serialize_trace
 from perfetto_hetero_profiler.schema import Availability, ClockType, MetricScope

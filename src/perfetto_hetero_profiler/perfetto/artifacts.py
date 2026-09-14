@@ -13,20 +13,19 @@ directory, write the returned validation report once with
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
 import re
 import stat
-from typing import Any
 import uuid
+from collections.abc import Iterable, Mapping
+from pathlib import Path, PurePosixPath
+from typing import Any
 
 from ..schema.constants import SCHEMA_VERSION
 from ..support.files import sha256_file
 from ..support.json_io import pretty_json_bytes
-
 
 ARTIFACT_MANIFEST_NAME = "artifact_manifest.json"
 ARTIFACT_VALIDATION_NAME = "artifact_manifest_validation.json"

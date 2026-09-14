@@ -1,7 +1,7 @@
 """Canonical timestamp conversion tests."""
 
-from dataclasses import replace
 import unittest
+from dataclasses import replace
 
 from perfetto_hetero_profiler.hybrid.alignment import (
     AlignmentError,
@@ -21,7 +21,6 @@ from perfetto_hetero_profiler.schema import (
     ValueOrigin,
     validate_record,
 )
-
 from tests.support.records import event
 
 

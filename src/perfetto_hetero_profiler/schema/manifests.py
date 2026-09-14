@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import uuid
+from pathlib import Path
 
 from .records import RunManifest
 from .serialization import write_json

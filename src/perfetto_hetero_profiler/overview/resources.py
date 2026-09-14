@@ -8,23 +8,22 @@ unavailable with an explicit reason.
 
 from __future__ import annotations
 
+import json
+import math
+import stat
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-import json
-import math
 from pathlib import Path
-import stat
 
 from ..schema import Availability
 from ..schema.catalog import (
     INTERVAL_RESOURCE_METRICS,
-    METRIC_CATALOG,
     display_rule,
 )
+from ..schema.metric_catalog import METRIC_CATALOG
 from ..schema.records import MetricSample
 from ..support.files import sha256_file
-
 
 _METRIC_STREAM_PATH = "metrics/metrics.jsonl"
 _IDENTITY_FIELDS = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")

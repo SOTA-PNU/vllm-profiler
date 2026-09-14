@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 import csv
 import gzip
 import hashlib
 import json
 import math
-from pathlib import Path
 import re
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any, Literal
 
 from ..schema import (

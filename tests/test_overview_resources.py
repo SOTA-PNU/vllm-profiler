@@ -19,7 +19,6 @@ from perfetto_hetero_profiler.schema import (
 )
 from perfetto_hetero_profiler.schema.metric_catalog import METRIC_CATALOG
 
-
 RUN_ID = "resource-fixture"
 CLOCK_ID = "canonical"
 ALIGNMENT = {

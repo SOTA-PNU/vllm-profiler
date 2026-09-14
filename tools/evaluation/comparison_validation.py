@@ -13,7 +13,6 @@ from .comparison_schema import (
     overview_comparison_from_dict,
 )
 
-
 COMPARISON_VALIDATION_RECORD_TYPE = "overview_comparison_validation"
 
 

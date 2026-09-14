@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
+import math
+import re
 from dataclasses import fields, is_dataclass
 from enum import Enum
-import math
 from pathlib import PurePosixPath, PureWindowsPath
-import re
 from typing import Any, Mapping, TypeVar
 
 from perfetto_hetero_profiler.overview.schema import OverviewSchemaError
 from perfetto_hetero_profiler.schema import Availability
-
 
 ALIGNMENT_STATUSES = {
     "canonical", "aligned", "partial", "unaligned", "not_applicable",

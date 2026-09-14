@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 def kpi(
     name: str,
     value: int | float | None,

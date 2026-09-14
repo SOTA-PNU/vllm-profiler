@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any, Mapping
+from typing import Mapping
 
 from ...schema import METRIC_CATALOG, Availability
 from ...schema.catalog import (
@@ -21,14 +21,13 @@ from ..model import (
     DisplayRule,
     KpiCalculation,
     KpiClock,
-    KpiSections,
     KpiScope,
+    KpiSections,
     KpiSource,
     KpiValue,
     OverviewReport,
     ResourceSummary,
 )
-from .primitives import _validate_report_structure
 from .primitives import (
     _deterministic_object_tuple,
     _fail,
@@ -42,8 +41,8 @@ from .primitives import (
     _safe_relative_path,
     _sorted_json_array,
     _sorted_unique_strings,
+    _validate_report_structure,
 )
-
 
 _ROOT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _OBSERVATION_LAYERS = {

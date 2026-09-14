@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-
 COLLECTION_RESULT_NAME = "collection_result.json"
 FINAL_RESULT_NAME = "final_result.json"
 LEGACY_RESULT_NAME = "result.json"

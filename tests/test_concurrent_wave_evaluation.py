@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 
 from perfetto_hetero_profiler.gpu.openai_client import CompletionObservation
 from tools.evaluation.concurrent_wave import (

@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import socket
 import subprocess
 import threading
-import time
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
+from perfetto_hetero_profiler.collectors.command import CommandSpec
 from perfetto_hetero_profiler.collectors.gpu import GpuTelemetryCollector
 from perfetto_hetero_profiler.collectors.npu import NpuTelemetryCollector
 from perfetto_hetero_profiler.collectors.process import ManagedProcess
-from perfetto_hetero_profiler.collectors.command import CommandSpec
 from perfetto_hetero_profiler.collectors.system import SystemTelemetryCollector
 from perfetto_hetero_profiler.hybrid.runner import HybridRunner, _wait_http
 from perfetto_hetero_profiler.hybrid.runner_config import (
@@ -33,7 +32,6 @@ from perfetto_hetero_profiler.support.json_io import write_pretty_json
 from .concurrent_wave import (
     BlockSpec,
     ConcurrentWaveClient,
-    ConcurrentWaveError,
     load_matrix_blocks,
     run_block,
     write_block_artifacts,
@@ -46,7 +44,6 @@ from .formal_metadata import (
     validate_environment,
     validate_published_block,
 )
-
 
 PROMPT_SHA256 = "928a5d427df9460d7b5f69178206f8d7bfd79c56cb4e54f21976456844a80c1f"
 PROFILER_BASE_HEAD = "9e94b0d036c6df8496f859c4fdd44731e8c45f43"
@@ -544,7 +541,8 @@ class _Telemetry:
     def start(self) -> None:
         try:
             for collector in self.collectors:
-                collector.prepare(); collector.start()
+                collector.prepare()
+                collector.start()
                 self.started_collectors += 1
             self.started = True
             self.sample("baseline")
@@ -574,7 +572,8 @@ class _Telemetry:
                 self.errors.append(f"final telemetry: {type(error).__name__}")
         for collector in reversed(self.collectors[:self.started_collectors]):
             try:
-                collector.stop(); collector.finalize()
+                collector.stop()
+                collector.finalize()
             except Exception as error:
                 self.errors.append(f"telemetry cleanup: {type(error).__name__}")
         self.started = False
@@ -619,7 +618,8 @@ def _server_args(config: CampaignConfig, block: BlockSpec, topology: str) -> tup
 def _standalone_block(config: CampaignConfig, block: BlockSpec, output: Path) -> dict[str, object]:
     model, cache = _model_cache(config, block)
     output.mkdir(parents=True)
-    raw = output / "raw"; raw.mkdir()
+    raw = output / "raw"
+    raw.mkdir()
     env = {
         "PYTHONPATH": str(config.vllm_rbln_root), "TOKENIZERS_PARALLELISM": "false",
         "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
@@ -676,14 +676,17 @@ def _standalone_block(config: CampaignConfig, block: BlockSpec, output: Path) ->
         errors.append(f"{type(error).__name__}: {error}")
     finally:
         if client is not None:
-            try: client.close()
-            except Exception as error: errors.append(f"client cleanup: {type(error).__name__}")
+            try:
+                client.close()
+            except Exception as error:
+                errors.append(f"client cleanup: {type(error).__name__}")
         telemetry.stop()
         errors.extend(telemetry.errors)
         if process.process is not None:
             stopped = process.stop_leader_first()
             shutdown = {"return_code": stopped.return_code, "killed": stopped.killed}
-            if stopped.killed: errors.append("server required SIGKILL")
+            if stopped.killed:
+                errors.append("server required SIGKILL")
     write_jsonl(output / "telemetry.jsonl", telemetry.rows)
     write_pretty_json(output / "shutdown.json", shutdown)
     if _process_group_alive(process.process_group_id):

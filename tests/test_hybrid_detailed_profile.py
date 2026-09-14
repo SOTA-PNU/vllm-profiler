@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import gzip
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from perfetto_hetero_profiler.hybrid.detailed_profile import (
     DetailedProfileValidationError,
@@ -17,14 +17,6 @@ from perfetto_hetero_profiler.hybrid.detailed_profile import (
     validate_rbln_reports,
     validate_torch_traces,
 )
-from tests.detailed_profile_support import (
-    HybridDetailedProfileConfig,
-    compare_overhead,
-    persist_per_sample_streams,
-    select_profile_kind,
-    validate_owned_wrapper_child_leader,
-    validate_proxy_marker_stats,
-)
 from perfetto_hetero_profiler.schema import (
     Availability,
     ClockType,
@@ -32,6 +24,14 @@ from perfetto_hetero_profiler.schema import (
     MetricSample,
     MetricScope,
     ValueOrigin,
+)
+from tests.detailed_profile_support import (
+    HybridDetailedProfileConfig,
+    compare_overhead,
+    persist_per_sample_streams,
+    select_profile_kind,
+    validate_owned_wrapper_child_leader,
+    validate_proxy_marker_stats,
 )
 
 

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +32,6 @@ from .comparison_schema import (
     comparison_to_dict,
     overview_comparison_from_dict,
 )
-
 
 COMPARISON_JSON_NAME = "comparison.json"
 COMPARISON_HTML_NAME = "comparison.html"

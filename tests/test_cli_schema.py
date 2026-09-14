@@ -2,9 +2,9 @@
 
 import contextlib
 import io
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from perfetto_hetero_profiler.cli import main
 

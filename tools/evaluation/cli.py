@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
 import json
-from pathlib import Path
 import sys
+from collections.abc import Sequence
+from pathlib import Path
 
 from . import (
     experiment_status,

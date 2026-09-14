@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
 import os
-from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
 import tempfile
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path, PurePosixPath
 from typing import Any
-
-from ..support.files import sha256_file
-from ..support.json_io import pretty_json_bytes
-from ..support.publication import fsync_directory, publish_directory_no_replace
-
-from .loader import _absolute_without_resolving
 
 from ..perfetto.artifacts import (
     ARTIFACT_MANIFEST_NAME,
@@ -25,7 +19,10 @@ from ..perfetto.artifacts import (
     verify_stored_sidecar,
     write_json_exclusive,
 )
-
+from ..support.files import sha256_file
+from ..support.json_io import pretty_json_bytes
+from ..support.publication import fsync_directory, publish_directory_no_replace
+from .loader import _absolute_without_resolving
 
 OVERVIEW_OUTPUT_ROOT_ID = "overview"
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,191}$")

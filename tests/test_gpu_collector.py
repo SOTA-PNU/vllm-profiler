@@ -3,10 +3,10 @@
 import contextlib
 import io
 import json
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 from perfetto_hetero_profiler.cli import main
 from perfetto_hetero_profiler.collectors.gpu import (
@@ -29,6 +29,8 @@ from perfetto_hetero_profiler.schema import (
 from tests.support.gpu_fakes import (
     FakeBinding,
     FakeDriverNotLoaded,
+)
+from tests.support.gpu_fakes import (
     client as fake_gpu_client,
 )
 

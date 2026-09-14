@@ -1,8 +1,8 @@
 """Run layout and artifact path safety tests."""
 
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from perfetto_hetero_profiler.schema import (
     ArtifactKind,

@@ -8,15 +8,15 @@ the overlapping observability intervals each carry a warning against summing.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import math
+from collections.abc import Sequence
 
 from ...artifact_compatibility import (
     LEGACY_MEASURED_COUNT_AGGREGATION,
     LEGACY_MEASURED_WINDOW,
     LEGACY_MEASURED_WINDOW_AGGREGATION,
 )
-from ...schema.catalog import METRIC_CATALOG
+from ...schema.metric_catalog import METRIC_CATALOG
 from ...schema.records import EventRecord, MetricSample
 from .kpi_records import (
     OverviewCalculationError,
@@ -31,7 +31,6 @@ from .kpi_records import (
     _source_metric,
 )
 from .latency import _correlation_id
-
 
 _COUNT_NAMES = (
     "request.count",

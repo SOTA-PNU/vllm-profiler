@@ -3,38 +3,26 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import replace
-import hashlib
 import io
 import json
 import os
-from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 from unittest import mock
 
-from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import Trace, TrackEvent
-
 from perfetto_hetero_profiler.cli import main
-from perfetto_hetero_profiler.hybrid import (
-    AlignmentMethod,
-    HybridBundleMerger,
-    HybridMergeConfig,
-)
-from perfetto_hetero_profiler.hybrid.detailed_profile import (
-    build_profiler_alignment,
-    build_profiler_clock_domain,
-)
 from perfetto_hetero_profiler.perfetto.converter import (
     CONVERSION_MANIFEST_NAME,
     RBLN_NATIVE_TRACE_NAME,
     RBLN_NATIVE_VALIDATION_NAME,
-    TRACE_NAME,
-    TRACE_ATTRIBUTE_VALIDATION_NAME,
-    TRACE_VALIDATION_NAME,
     REQUEST_FOCUSED_TRACE_NAME,
     REQUEST_FOCUSED_VALIDATION_NAME,
+    TRACE_ATTRIBUTE_VALIDATION_NAME,
+    TRACE_NAME,
+    TRACE_VALIDATION_NAME,
     PerfettoConversionConfig,
     convert_perfetto,
     plan_perfetto_conversion,
@@ -48,53 +36,21 @@ from perfetto_hetero_profiler.perfetto.native_nsys import (
     _validate_nsys_sqlite_preamble,
 )
 from perfetto_hetero_profiler.schema import (
-    ArtifactKind,
-    ArtifactReference,
-    Availability,
-    ClockType,
     DETACHED_MANIFEST_NAME,
-    DETACHED_VALIDATION_NAME,
-    DeviceType,
-    MetricKind,
-    MetricSample,
-    MetricScope,
-    ProfileMode,
-    RunStatus,
-    ValueOrigin,
     build_detached_artifact_manifest,
-    create_detached_recovery,
-    read_json,
-    read_jsonl,
-    write_json,
-    write_jsonl,
-)
-
-from tests.support.records import (
-    GPU_MARKERS,
-    NPU_MARKERS,
-    build_source_bundle,
 )
 from tests.support.perfetto_family import (
-    CANONICAL_CLOCK_ID,
-    CLOCK_ID,
-    CORRELATION_ID,
-    GPU_RUN_ID,
-    NATIVE_CLOCK_ID,
-    NPU_RUN_ID,
-    REMOTE_SUFFIX,
-    RUN_ID,
     _CLOSEOUT_REQUIRED,
     _OUTPUT_NAMES,
-    _add_overview_metrics,
-    _add_rbln_profile,
-    _artifact,
+    RUN_ID,
     _build_monitor_family,
     _sha256,
     _tree_state,
-    _write_closeout,
 )
 from tests.support.toolchain import (
     trace_processor_path as _trace_processor_path,
+)
+from tests.support.toolchain import (
     trace_processor_test_class,
 )
 

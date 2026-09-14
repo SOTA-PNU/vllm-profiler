@@ -15,23 +15,23 @@ reported as exactly aligned.
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
-from decimal import Decimal, InvalidOperation
 import gzip
 import hashlib
 import json
 import math
-from pathlib import Path, PurePosixPath
 import re
 import sqlite3
 import stat
+from collections import Counter, defaultdict
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
+from decimal import Decimal, InvalidOperation
+from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
 from ..support.files import sha256_file
 from .loader import LoadedHybridRun, SourceRunMetadata
-from .model import CounterSpec, FlowSpec, InstantSpec, SliceSpec, TrackSpec, TracePlan
+from .model import CounterSpec, FlowSpec, InstantSpec, SliceSpec, TracePlan, TrackSpec
 from .planner import _stable_uint64
 
 

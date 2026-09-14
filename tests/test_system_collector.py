@@ -1,8 +1,8 @@
 """psutil-backed system telemetry tests."""
 
-from collections import namedtuple
 import math
 import unittest
+from collections import namedtuple
 
 import perfetto_hetero_profiler.collectors as collector_package
 from perfetto_hetero_profiler.collectors import SystemTelemetryCollector
@@ -13,7 +13,6 @@ from perfetto_hetero_profiler.schema import (
     ValueOrigin,
     validate_record,
 )
-
 
 Cpu = namedtuple(
     "Cpu",

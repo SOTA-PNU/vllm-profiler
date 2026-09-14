@@ -7,8 +7,7 @@ from pathlib import Path
 from typing import Mapping
 
 from ...schema import ProfileMode, RunPaths
-from ..command import CommandSpec, DEFAULT_ENV_ALLOWLIST
-
+from ..command import DEFAULT_ENV_ALLOWLIST, CommandSpec
 
 MIN_SAMPLE_INTERVAL_MS = 100
 DEFAULT_SAMPLE_INTERVAL_MS = 1000

@@ -1,14 +1,14 @@
 """Enum, envelope, ID, and event record tests."""
 
-from dataclasses import replace
 import unittest
+from dataclasses import replace
 
 from perfetto_hetero_profiler.schema import (
+    SCHEMA_VERSION,
     EventRecord,
     EventType,
     Phase,
     RecordType,
-    SCHEMA_VERSION,
     SchemaValidationError,
     record_to_dict,
     validate_record,

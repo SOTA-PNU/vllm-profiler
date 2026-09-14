@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 from os import PathLike
-from pathlib import Path
-from pathlib import PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Final
 
 from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import (
@@ -20,7 +19,6 @@ from perfetto.trace_builder.proto_builder import TraceProtoBuilder
 
 from .model import AnnotationValue, TracePlan, TrackSpec
 from .trace_attributes import TRACE_ATTRIBUTE_NAMESPACE
-
 
 _INT32_MIN: Final = -(2**31)
 _INT32_MAX: Final = 2**31 - 1

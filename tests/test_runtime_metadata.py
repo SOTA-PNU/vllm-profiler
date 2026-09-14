@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import json
-from pathlib import Path
-from types import SimpleNamespace
 import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
 
 from perfetto_hetero_profiler.gpu.openai_client import CompletionObservation
 from perfetto_hetero_profiler.hybrid.runner import HybridRunner
@@ -39,7 +39,6 @@ from perfetto_hetero_profiler.schema import (
     WorkloadDescriptor,
     validate_record,
 )
-
 from tests.support.runner_fakes import document
 
 

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import os
-from pathlib import Path
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from ..hybrid.layout import related_run_root
@@ -37,11 +37,12 @@ from .render import render_overview_html, validate_offline_html
 from .report import build_overview_report
 from .schema import (
     canonical_json_bytes as canonical_model_json_bytes,
+)
+from .schema import (
     overview_report_from_dict,
     overview_to_dict,
 )
 from .validation import build_overview_validation
-
 
 OVERVIEW_JSON_NAME = "overview.json"
 OVERVIEW_HTML_NAME = "overview.html"

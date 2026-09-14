@@ -8,10 +8,10 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from perfetto_hetero_profiler.cli import main
@@ -37,10 +37,33 @@ from perfetto_hetero_profiler.overview.render import (
 )
 from perfetto_hetero_profiler.overview.schema import (
     canonical_json_bytes as canonical_model_json_bytes,
+)
+from perfetto_hetero_profiler.overview.schema import (
     overview_report_from_dict,
     overview_to_dict,
 )
 from perfetto_hetero_profiler.overview.validation import OverviewValidationError
+from perfetto_hetero_profiler.perfetto.artifacts import verify_stored_sidecar
+from perfetto_hetero_profiler.perfetto.converter import (
+    PerfettoConversionConfig,
+    convert_perfetto,
+)
+from perfetto_hetero_profiler.schema import (
+    DETACHED_MANIFEST_NAME,
+    DETACHED_VALIDATION_NAME,
+)
+from tests.support.overview_model import report as schema_valid_report
+from tests.support.perfetto_family import (
+    _build_monitor_family,
+    _tree_state,
+)
+from tests.support.toolchain import (
+    trace_processor_path as _trace_processor_path,
+)
+from tests.support.toolchain import (
+    trace_processor_test_class,
+)
+from tools.evaluation.cli import main as evaluation_main
 from tools.evaluation.overview import (
     COMPARISON_HTML_NAME,
     COMPARISON_JSON_NAME,
@@ -54,27 +77,6 @@ from tools.evaluation.overview import (
     plan_overview_comparison,
     render_comparison_html,
 )
-from tools.evaluation.cli import main as evaluation_main
-from perfetto_hetero_profiler.perfetto.artifacts import verify_stored_sidecar
-from perfetto_hetero_profiler.perfetto.converter import (
-    PerfettoConversionConfig,
-    convert_perfetto,
-)
-from perfetto_hetero_profiler.schema import (
-    DETACHED_MANIFEST_NAME,
-    DETACHED_VALIDATION_NAME,
-)
-
-from tests.support.perfetto_family import (
-    _build_monitor_family,
-    _tree_state,
-)
-from tests.support.overview_model import report as schema_valid_report
-from tests.support.toolchain import (
-    trace_processor_path as _trace_processor_path,
-    trace_processor_test_class,
-)
-
 
 _OVERVIEW_NAMES = {
     OVERVIEW_JSON_NAME,

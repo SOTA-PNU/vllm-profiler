@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import unittest
 
-from perfetto_hetero_profiler.schema import SchemaValidationError, record_from_dict
-from perfetto_hetero_profiler.schema import jsonschema_runtime
-
+from perfetto_hetero_profiler.schema import (
+    SchemaValidationError,
+    jsonschema_runtime,
+    record_from_dict,
+)
 from tests.support.schema_corpus import parity_cases, valid_records
 
 

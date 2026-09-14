@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import platform
-import signal
 import shutil
+import signal
 import subprocess
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -26,8 +26,17 @@ from ..collectors.npu import NpuTelemetryCollector
 from ..collectors.npu.rbln_smi import RblnSmiClient
 from ..collectors.process import ManagedProcess
 from ..collectors.system import SystemTelemetryCollector
+from ..collectors.telemetry import CollectorGroup, TelemetryWorker
 from ..gpu.openai_client import CompletionObservation, OpenAICompletionClient
 from ..gpu.workload import measured_window_metrics, observation_metrics
+from ..runtime_metadata import (
+    RuntimeMetadataError,
+    lifecycle_metadata,
+    measured_request_concurrency,
+    measured_token_metadata,
+    model_identity_metadata,
+    topology_metadata,
+)
 from ..schema import (
     ArtifactKind,
     ArtifactReference,
@@ -44,15 +53,14 @@ from ..schema import (
     RunStatus,
     SoftwareDescriptor,
     WorkloadDescriptor,
+    create_detached_recovery,
     read_jsonl,
     write_json,
     write_jsonl,
-    create_detached_recovery,
 )
 from ..support.files import fingerprint_tree, sha256_file
 from ..support.json_io import write_jsonl_exclusive, write_pretty_json
 from ..support.network import port_available
-from ..collectors.telemetry import CollectorGroup, TelemetryWorker
 from .bundle import HybridBundleMerger
 from .config import AlignmentMethod, HybridMergeConfig
 from .detailed_profile import (
@@ -63,18 +71,9 @@ from .detailed_profile import (
     validate_torch_traces,
 )
 from .join import validate_marker_order
-from .runner_config import HybridProfileMode, HybridRunnerConfig
 from .layout import COLLECTION_RESULT_NAME, FINAL_RESULT_NAME, HybridRunLayout
+from .runner_config import HybridProfileMode, HybridRunnerConfig
 from .runtime_markers import ingest_runtime_marker_files
-from ..runtime_metadata import (
-    RuntimeMetadataError,
-    lifecycle_metadata,
-    measured_request_concurrency,
-    measured_token_metadata,
-    model_identity_metadata,
-    topology_metadata,
-)
-
 
 HOST_ID = "localhost"
 CLOCK_DOMAIN_ID = "host-monotonic"

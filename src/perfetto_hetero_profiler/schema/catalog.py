@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .enums import Phase
-from .metric_catalog import METRIC_CATALOG, METRIC_DEFINITIONS, MetricDefinition
+from .metric_catalog import METRIC_DEFINITIONS, MetricDefinition
 
 
 @dataclass(frozen=True, slots=True)

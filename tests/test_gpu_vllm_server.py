@@ -1,8 +1,8 @@
 """Unit tests for vLLM server planning and safety constraints."""
 
 import os
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from perfetto_hetero_profiler.gpu.vllm_server import (
     VllmServerConfig,

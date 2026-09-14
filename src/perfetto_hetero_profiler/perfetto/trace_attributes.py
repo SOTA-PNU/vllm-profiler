@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 import hashlib
 import json
 import math
-from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
+from collections.abc import Mapping, Sequence
+from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Final
 
 from ..artifact_compatibility import (
@@ -22,7 +22,6 @@ from ..schema import Availability
 from ..schema.catalog import TRACE_ATTRIBUTE_PRESENTATIONS
 from ..schema.metric_catalog import METRIC_CATALOG
 from .model import TraceAttributeSpec
-
 
 TRACE_ATTRIBUTE_NAMESPACE: Final = "vllm_profiler."
 LEGACY_TRACE_ATTRIBUTE_NAMESPACE: Final = "kr.ac.pusan.sota.vllm_profiler."

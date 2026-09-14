@@ -1,12 +1,12 @@
 """Fake end-to-end hybrid bundle and CLI tests."""
 
 import contextlib
-from dataclasses import replace
 import io
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 
 from perfetto_hetero_profiler.cli import main
 from perfetto_hetero_profiler.hybrid import (
@@ -28,12 +28,10 @@ from perfetto_hetero_profiler.schema import (
     validate_record,
     write_jsonl,
 )
-
 from tests.support.records import (
     GPU_MARKERS,
     NPU_MARKERS,
     build_source_bundle,
-    event,
 )
 
 

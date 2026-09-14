@@ -5,10 +5,10 @@ from __future__ import annotations
 import copy
 import json
 import os
-from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from perfetto_hetero_profiler.overview.loader import (
@@ -29,31 +29,31 @@ from perfetto_hetero_profiler.perfetto.artifacts import (
 )
 from perfetto_hetero_profiler.perfetto.converter import (
     CONVERSION_MANIFEST_NAME,
-    TRACE_NAME,
-    TRACE_ATTRIBUTE_VALIDATION_NAME,
-    TRACE_VALIDATION_NAME,
     REQUEST_FOCUSED_TRACE_NAME,
     REQUEST_FOCUSED_VALIDATION_NAME,
+    TRACE_ATTRIBUTE_VALIDATION_NAME,
+    TRACE_NAME,
+    TRACE_VALIDATION_NAME,
     PerfettoConversionConfig,
     convert_perfetto,
 )
 from perfetto_hetero_profiler.perfetto.loader import load_hybrid_run
-from perfetto_hetero_profiler.perfetto.validation import (
-    summarize_trace_validation,
-)
 from perfetto_hetero_profiler.perfetto.timeline_summary import (
     TIMELINE_SUMMARY_MAPPING_VERSION,
 )
-
+from perfetto_hetero_profiler.perfetto.validation import (
+    summarize_trace_validation,
+)
 from tests.support.perfetto_family import (
     _build_monitor_family,
     _tree_state,
 )
 from tests.support.toolchain import (
     trace_processor_path as _trace_processor_path,
+)
+from tests.support.toolchain import (
     trace_processor_test_class,
 )
-
 
 _PERFETTO_FILES = {
     ARTIFACT_MANIFEST_NAME,

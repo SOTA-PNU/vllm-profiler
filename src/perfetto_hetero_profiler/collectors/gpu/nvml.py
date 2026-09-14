@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import importlib
 import json
 import math
+from dataclasses import dataclass
 from numbers import Real
 from typing import Any, Callable, Final
 
 from ...schema import Availability
-
 
 NVML_DISTRIBUTION: Final = "nvidia-ml-py"
 NVML_DISTRIBUTION_VERSION: Final = "13.610.43"

@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 import hashlib
 import json
 import os
-from pathlib import Path
 import tempfile
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
-from perfetto_hetero_profiler.hybrid.runner import HybridRunner
 from perfetto_hetero_profiler.hybrid.layout import HybridRunLayout
+from perfetto_hetero_profiler.hybrid.runner import HybridRunner
 from perfetto_hetero_profiler.hybrid.runner_config import validate_hybrid_invocation
 from perfetto_hetero_profiler.schema.records import RunStatus
+
 from .checkpoint import (
     AttemptRecord,
     AttemptStatus,
@@ -21,7 +22,12 @@ from .checkpoint import (
     CheckpointStore,
     ExperimentCheckpoint,
 )
-from .config import ExperimentConfig, canonical_config_bytes, load_experiment_config, sha256_file
+from .config import (
+    ExperimentConfig,
+    canonical_config_bytes,
+    load_experiment_config,
+    sha256_file,
+)
 from .environment import (
     EnvironmentNotIdleError,
     canonical_bytes,
@@ -32,9 +38,13 @@ from .environment import (
 from .failure import FailureClass
 from .paths import ExperimentPaths, validate_new_output_directory
 from .report import build_report, canonical_json, render_report_html
-from .schedule import Condition, TrialKind, canonical_schedule_bytes, schedule_by_logical_id
+from .schedule import (
+    Condition,
+    TrialKind,
+    canonical_schedule_bytes,
+    schedule_by_logical_id,
+)
 from .validation import TrialValidationError, validate_trial
-
 
 CONDITION_MODE = {
     Condition.REFERENCE: ("monitor", False),

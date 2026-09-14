@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
 import hashlib
 import json
-from pathlib import Path
 import re
+from collections.abc import Iterable, Mapping
+from pathlib import Path
 from typing import Any
 
 from ..schema import (
@@ -19,7 +19,6 @@ from ..schema import (
     SchemaValidationError,
     validate_record,
 )
-
 
 CANONICAL_MARKER_PHASES = {
     "request_received": Phase.REQUEST,

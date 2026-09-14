@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from importlib import metadata
 import json
-from pathlib import Path
 import platform
 import shutil
 import sys
 import time
+from dataclasses import asdict, dataclass
+from importlib import metadata
+from pathlib import Path
 from typing import Callable
 
+from ...runtime_metadata import topology_metadata
 from ...schema import (
     ArtifactKind,
     ArtifactReference,
@@ -33,7 +34,6 @@ from ...schema import (
     write_jsonl,
 )
 from ...schema.manifests import publish_run_manifest
-from ...runtime_metadata import topology_metadata
 from ...support.files import sha256_file
 from ..command import mask_command
 from ..process import ManagedProcess
@@ -43,7 +43,6 @@ from .config import NpuDeviceInfo, NpuRunConfig
 from .profiling import build_rbln_profile_plan
 from .rbln_smi import RblnSmiClient, RblnSmiCommandError
 from .telemetry import NpuTelemetryCollector
-
 
 HOST_CLOCK_DOMAIN = "host-monotonic"
 _PACKAGE_NAMES = ("rebel-compiler", "optimum-rbln", "vllm-rbln")

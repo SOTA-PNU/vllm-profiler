@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import json
+import tempfile
+import unittest
 from dataclasses import replace
 from importlib import resources
-import json
 from pathlib import Path
-import tempfile
 from types import SimpleNamespace
-import unittest
 from unittest import mock
 
 from perfetto_hetero_profiler.schema.records import RunStatus
+from tests.support.experiment import write_config
+from tests.support.paths import REPO_ROOT
 from tools.evaluation.checkpoint import (
     AttemptRecord,
     AttemptStatus,
@@ -17,12 +19,12 @@ from tools.evaluation.checkpoint import (
     CheckpointStore,
     ExperimentCheckpoint,
 )
+from tools.evaluation.compatibility import (
+    LEGACY_SCHEDULE_SEED_DOMAIN,
+)
 from tools.evaluation.config import (
     ExperimentConfigError,
     load_experiment_config,
-)
-from tools.evaluation.compatibility import (
-    LEGACY_SCHEDULE_SEED_DOMAIN,
 )
 from tools.evaluation.experiment import (
     CONDITION_MODE,
@@ -33,17 +35,12 @@ from tools.evaluation.experiment import (
 )
 from tools.evaluation.failure import FailureClass
 from tools.evaluation.limitations import limitation_inventory
-from tools.evaluation.paths import ExperimentPaths, ExperimentPathError
+from tools.evaluation.paths import ExperimentPathError, ExperimentPaths
 from tools.evaluation.schedule import (
     Condition,
-    TrialKind,
     build_schedule,
     canonical_schedule_bytes,
 )
-
-
-from tests.support.experiment import hybrid_document, write_config
-from tests.support.paths import REPO_ROOT
 
 
 class ScheduleTests(unittest.TestCase):

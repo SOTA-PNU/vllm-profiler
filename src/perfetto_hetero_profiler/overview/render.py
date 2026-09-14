@@ -8,16 +8,15 @@ Section order is fixed, so a report always renders to the same bytes.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
-from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
-from html import escape
-from html.parser import HTMLParser
-from importlib import resources
 import json
 import math
 import re
+from collections.abc import Iterable, Mapping, Sequence
+from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
+from html import escape
+from html.parser import HTMLParser
+from importlib import resources
 from typing import Any
-
 
 _CSP = (
     "default-src 'none'; "

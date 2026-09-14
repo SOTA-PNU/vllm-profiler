@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from collections import Counter
-from types import SimpleNamespace
 import re
 import sqlite3
 import unittest
+from collections import Counter
+from types import SimpleNamespace
 from unittest import mock
 
 from perfetto_hetero_profiler.perfetto.native_details import (
     NativeDetailError,
-    _ClockBridge,
     _attach_explicit_flows,
+    _ClockBridge,
 )
 from perfetto_hetero_profiler.perfetto.native_nsys import (
     SUPPORTED_NSYS_EXPORT_SCHEMA_VERSIONS,
@@ -20,7 +20,6 @@ from perfetto_hetero_profiler.perfetto.native_nsys import (
     _read_nsys_rows,
     _validate_nsys_sqlite_preamble,
 )
-
 
 SCHEMA_VERSION = "3.16.1"
 

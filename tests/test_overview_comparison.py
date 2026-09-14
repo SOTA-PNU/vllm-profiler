@@ -7,13 +7,12 @@ import json
 import math
 import unittest
 
+from tests.support.comparison import report
 from tools.evaluation.overview import (
     OverviewComparisonError,
     build_comparison,
     overview_document_from_json,
 )
-from tests.support.comparison import kpi, report
-
 
 
 class ComparisonDeterminismTests(unittest.TestCase):
