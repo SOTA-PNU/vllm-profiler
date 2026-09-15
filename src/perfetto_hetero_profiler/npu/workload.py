@@ -115,25 +115,18 @@ def observation_metrics(
                 f"{observation.request_id}-done",
             ],
         ),
-        MetricSample(
-            **common,
-            metric_name="latency.ttft",
-            metric_kind=MetricKind.DURATION,
-            availability=Availability.NOT_AVAILABLE,
-            origin=ValueOrigin.MEASURED,
-            unit="ns",
-            value=None,
-            reason=NON_TOKEN_REASON,
-        ),
-        MetricSample(
-            **common,
-            metric_name="latency.tpot",
-            metric_kind=MetricKind.DURATION,
-            availability=Availability.NOT_AVAILABLE,
-            origin=ValueOrigin.MEASURED,
-            unit="ns",
-            value=None,
-            reason=NON_TOKEN_REASON,
+        *(
+            MetricSample(
+                **common,
+                metric_name=name,
+                metric_kind=MetricKind.DURATION,
+                availability=Availability.NOT_AVAILABLE,
+                origin=ValueOrigin.MEASURED,
+                unit="ns",
+                value=None,
+                reason=NON_TOKEN_REASON,
+            )
+            for name in ("latency.ttft", "latency.tpot")
         ),
     ]
 

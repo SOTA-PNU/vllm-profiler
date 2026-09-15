@@ -104,17 +104,9 @@ class ManagedProcess:
         except subprocess.TimeoutExpired:
             timed_out = True
             terminated = self._signal_owned_group(signal.SIGTERM)
-            try:
-                return_code = self.process.wait(timeout=self.spec.terminate_grace_sec)
-            except subprocess.TimeoutExpired:
-                killed = self._signal_owned_group(signal.SIGKILL)
-                return_code = self.process.wait()
-            else:
-                remaining_terminated, remaining_killed = (
-                    self._finish_remaining_group(term_already_sent=True)
-                )
-                terminated = terminated or remaining_terminated
-                killed = killed or remaining_killed
+            return_code, terminated, killed = self._wait_out_grace(
+                terminated=terminated
+            )
         else:
             terminated, killed = self._finish_remaining_group(
                 term_already_sent=False
@@ -138,19 +130,9 @@ class ManagedProcess:
         try:
             if self.process.poll() is None:
                 terminated = self._signal_owned_group(signal.SIGTERM)
-                try:
-                    return_code = self.process.wait(
-                        timeout=self.spec.terminate_grace_sec
-                    )
-                except subprocess.TimeoutExpired:
-                    killed = self._signal_owned_group(signal.SIGKILL)
-                    return_code = self.process.wait()
-                else:
-                    remaining_terminated, remaining_killed = (
-                        self._finish_remaining_group(term_already_sent=True)
-                    )
-                    terminated = terminated or remaining_terminated
-                    killed = killed or remaining_killed
+                return_code, terminated, killed = self._wait_out_grace(
+                    terminated=terminated
+                )
             else:
                 return_code = self.process.wait()
                 terminated, killed = self._finish_remaining_group(
@@ -207,19 +189,9 @@ class ManagedProcess:
                     terminated = (
                         self._signal_owned_group(signal.SIGTERM) or terminated
                     )
-                    try:
-                        return_code = self.process.wait(
-                            timeout=self.spec.terminate_grace_sec
-                        )
-                    except subprocess.TimeoutExpired:
-                        killed = self._signal_owned_group(signal.SIGKILL)
-                        return_code = self.process.wait()
-                    else:
-                        remaining_terminated, remaining_killed = (
-                            self._finish_remaining_group(term_already_sent=True)
-                        )
-                        terminated = terminated or remaining_terminated
-                        killed = killed or remaining_killed
+                    return_code, terminated, killed = self._wait_out_grace(
+                        terminated=terminated
+                    )
                 else:
                     remaining_terminated, remaining_killed = (
                         self._finish_remaining_group(term_already_sent=False)
@@ -242,6 +214,24 @@ class ManagedProcess:
             terminated=terminated,
             killed=killed,
         )
+
+    def _wait_out_grace(self, *, terminated: bool) -> tuple[int, bool, bool]:
+        """Wait out the terminate grace period, escalating to SIGKILL if needed.
+
+        Either way the owned descendants are finished before returning, so the
+        caller keeps the same cleanup order it had when this was written inline.
+        """
+
+        assert self.process is not None
+        try:
+            return_code = self.process.wait(timeout=self.spec.terminate_grace_sec)
+        except subprocess.TimeoutExpired:
+            killed = self._signal_owned_group(signal.SIGKILL)
+            return self.process.wait(), terminated, killed
+        remaining_terminated, remaining_killed = self._finish_remaining_group(
+            term_already_sent=True
+        )
+        return return_code, terminated or remaining_terminated, remaining_killed
 
     def _signal_owned_group(
         self, sig: signal.Signals | int, *, leader_may_have_exited: bool = False

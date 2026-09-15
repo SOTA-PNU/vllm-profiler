@@ -3,39 +3,27 @@
 from __future__ import annotations
 
 import json
-import platform
-import sys
 import time
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Callable
 
 from ...runtime_metadata import topology_metadata
 from ...schema import (
     ArtifactKind,
-    ArtifactReference,
-    ClockDomain,
-    ClockType,
     DeviceDescriptor,
     DeviceType,
-    EventRecord,
-    EventType,
-    HostDescriptor,
-    ModelDescriptor,
-    Phase,
     ProfileMode,
     RunManifest,
     RunMode,
     RunStatus,
     SoftwareDescriptor,
-    WorkloadDescriptor,
-    write_jsonl,
 )
-from ...schema.manifests import publish_run_manifest
-from ..command import mask_command
-from ..process import ManagedProcess
-from ..run import run_monitored_process
-from ..system import SystemTelemetryCollector
+from ..monitor import (
+    HOST_CLOCK_DOMAIN,
+    MonitorRunCollector,
+    MonitorRunResult,
+    monitor_run_plan,
+)
 from .config import GpuDeviceInfo, GpuRunConfig
 from .nvml import (
     NVML_DISTRIBUTION,
@@ -46,39 +34,16 @@ from .nvml import (
 from .profiling import build_detailed_profile_plan
 from .telemetry import GpuTelemetryCollector
 
-HOST_CLOCK_DOMAIN = "host-monotonic"
+RAW_NVML_RELATIVE_PATH = "raw/gpu/nvml-last.json"
 
 
 @dataclass(frozen=True)
-class GpuRunResult:
-    status: RunStatus
-    return_code: int
-    event_count: int
-    metric_count: int
-    artifact_count: int
-    run_directory: Path
+class GpuRunResult(MonitorRunResult):
+    """Outcome of one GPU-only monitor run."""
 
 
 def build_gpu_run_plan(config: GpuRunConfig) -> dict[str, object]:
-    paths = config.paths
-    plan: dict[str, object] = {
-        "mode": RunMode.GPU_ONLY.value,
-        "profile_mode": config.profile_mode.value,
-        "run_id": config.run_id,
-        "run_directory": str(paths.root),
-        "sample_interval_ms": config.sample_interval_ms,
-        "command": config.command_spec.safe_plan(),
-        "outputs": {
-            "manifest": str(paths.manifest),
-            "clock_domains": str(paths.clock_domains),
-            "events": str(paths.events),
-            "metrics": str(paths.metrics),
-            "artifacts": str(paths.artifacts),
-            "stdout": str(paths.root / "raw/client/stdout.log"),
-            "stderr": str(paths.root / "raw/client/stderr.log"),
-        },
-        "executes": False,
-    }
+    plan = monitor_run_plan(config, mode=RunMode.GPU_ONLY)
     if config.profile_mode is ProfileMode.DETAILED_PROFILE:
         detailed = build_detailed_profile_plan(config.command)
         plan["detailed_profile"] = {
@@ -89,7 +54,14 @@ def build_gpu_run_plan(config: GpuRunConfig) -> dict[str, object]:
     return plan
 
 
-class GpuRunCollector:
+class GpuRunCollector(MonitorRunCollector[GpuRunResult]):
+    artifact_producer = "gpu-monitor"
+    raw_device_relative_path = RAW_NVML_RELATIVE_PATH
+    raw_device_artifact_id = "nvml-last"
+    raw_device_producer = "nvml"
+    raw_device_kind = ArtifactKind.TELEMETRY
+    result_type = GpuRunResult
+
     def __init__(
         self,
         config: GpuRunConfig,
@@ -99,141 +71,62 @@ class GpuRunCollector:
         unix_time_ns: Callable[[], int] = time.time_ns,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        self.config = config
+        super().__init__(
+            config,
+            monotonic_ns=monotonic_ns,
+            unix_time_ns=unix_time_ns,
+            sleep=sleep,
+        )
         self.gpu_client = gpu_client or NvmlClient()
-        self.monotonic_ns = monotonic_ns
-        self.unix_time_ns = unix_time_ns
-        self.sleep = sleep
 
-    def run(self) -> GpuRunResult:
+    @property
+    def host_id(self) -> str:
+        return self.config.host_alias
+
+    def _reject_unsupported_profile_mode(self) -> None:
         if self.config.profile_mode is ProfileMode.DETAILED_PROFILE:
             raise NotImplementedError(
                 "detailed-profile execution requires the runtime collector; use --dry-run"
             )
-        paths = self.config.paths
-        paths.create()
-        devices, discovery_error = self._discover_devices()
-        manifest = self._manifest(devices, RunStatus.RUNNING, ())
-        publish_run_manifest(paths.manifest, manifest, initial=True)
-        clock = ClockDomain(
-            run_id=self.config.run_id,
-            clock_domain_id=HOST_CLOCK_DOMAIN,
-            host_id=self.config.host_alias,
-            clock_type=ClockType.MONOTONIC,
-            unit="ns",
-            monotonic=True,
-            adjustable=False,
-            attributes={"vendor.clock_source": "time.monotonic_ns"},
-        )
-        write_jsonl(paths.clock_domains, [clock])
 
-        stdout_path = paths.root / "raw/client/stdout.log"
-        stderr_path = paths.root / "raw/client/stderr.log"
-        process = ManagedProcess(
-            self.config.command_spec,
-            stdout_path,
-            stderr_path,
-            monotonic_ns=self.monotonic_ns,
+    def _discover_devices(self) -> tuple[tuple[GpuDeviceInfo, ...], tuple[str, ...]]:
+        if self.config.gpu_devices:
+            return self.config.gpu_devices, ()
+        try:
+            result = self.gpu_client.query()
+        except NvmlError as error:
+            return (GpuDeviceInfo(index=0, name="unknown"),), (str(error),)
+        devices = tuple(
+            GpuDeviceInfo(
+                index=row.index,
+                name=row.name,
+                memory_total_bytes=(
+                    int(row.memory_total_bytes.value)
+                    if row.memory_total_bytes.value is not None
+                    else None
+                ),
+            )
+            for row in result.rows
         )
-        gpu = GpuTelemetryCollector(
+        return devices, ()
+
+    def _device_telemetry(
+        self, devices: tuple[GpuDeviceInfo, ...]
+    ) -> GpuTelemetryCollector:
+        return GpuTelemetryCollector(
             run_id=self.config.run_id,
-            host_id=self.config.host_alias,
+            host_id=self.host_id,
             clock_domain_id=HOST_CLOCK_DOMAIN,
             sample_interval_ms=self.config.sample_interval_ms,
             client=self.gpu_client,
             known_gpu_indices=tuple(device.index for device in devices),
             monotonic_ns=self.monotonic_ns,
         )
-        system = SystemTelemetryCollector(
-            run_id=self.config.run_id,
-            host_id=self.config.host_alias,
-            clock_domain_id=HOST_CLOCK_DOMAIN,
-            pid_provider=lambda: (
-                process.process.pid if process.process is not None else None
-            ),
-            monotonic_ns=self.monotonic_ns,
-        )
 
-        run_start_ns = self.monotonic_ns()
-        errors = [discovery_error] if discovery_error else []
-        monitored = run_monitored_process(
-            process,
-            (gpu, system),
-            sample_interval_ms=self.config.sample_interval_ms,
-            stdout_path=stdout_path,
-            stderr_path=stderr_path,
-            monotonic_ns=self.monotonic_ns,
-            sleep=self.sleep,
-        )
-        errors.extend(monitored.errors)
-        events: list[EventRecord] = [
-            self._event("run-start", "collector.run_start", run_start_ns),
-            self._event(
-                "child-start",
-                "collector.child_process_start",
-                monitored.command.started_monotonic_ns,
-                process_id=monitored.process_id,
-            ),
-            self._event(
-                "child-end",
-                "collector.child_process_end",
-                monitored.command.ended_monotonic_ns,
-                process_id=monitored.process_id,
-                attributes={
-                    "vendor.return_code": monitored.command.return_code,
-                    "vendor.timed_out": monitored.command.timed_out,
-                },
-            ),
-        ]
-        errors.extend(
-            f"{metric.metric_name}: {metric.reason}"
-            for metric in monitored.metrics
-            if metric.availability.value == "error"
-        )
-        artifacts = self._write_raw_artifacts(
-            stdout_path, stderr_path, gpu.last_raw_snapshot, tuple(errors)
-        )
-        write_jsonl(paths.events, events)
-        write_jsonl(paths.metrics, monitored.metrics)
-        write_jsonl(paths.artifacts, artifacts)
-
-        if monitored.command.return_code != 0 or monitored.command.timed_out:
-            status = RunStatus.FAILED
-        elif errors:
-            status = RunStatus.PARTIAL
-        else:
-            status = RunStatus.SUCCEEDED
-        final_manifest = self._manifest(devices, status, tuple(errors))
-        publish_run_manifest(paths.manifest, final_manifest)
-        return GpuRunResult(
-            status=status,
-            return_code=monitored.command.return_code,
-            event_count=len(events),
-            metric_count=len(monitored.metrics),
-            artifact_count=len(artifacts),
-            run_directory=paths.root,
-        )
-
-    def _discover_devices(self) -> tuple[tuple[GpuDeviceInfo, ...], str | None]:
-        if self.config.gpu_devices:
-            return self.config.gpu_devices, None
-        try:
-            result = self.gpu_client.query()
-            devices = tuple(
-                GpuDeviceInfo(
-                    index=row.index,
-                    name=row.name,
-                    memory_total_bytes=(
-                        int(row.memory_total_bytes.value)
-                        if row.memory_total_bytes.value is not None
-                        else None
-                    ),
-                )
-                for row in result.rows
-            )
-            return devices, None
-        except NvmlError as error:
-            return (GpuDeviceInfo(index=0, name="unknown"),), str(error)
+    def _raw_device_snapshot(
+        self, device_telemetry: GpuTelemetryCollector
+    ) -> str | None:
+        return device_telemetry.last_raw_snapshot
 
     def _manifest(
         self,
@@ -241,46 +134,12 @@ class GpuRunCollector:
         status: RunStatus,
         errors: tuple[str, ...],
     ) -> RunManifest:
-        return RunManifest(
-            run_id=self.config.run_id,
+        return self._manifest_record(
             mode=RunMode.GPU_ONLY,
-            profile_mode=self.config.profile_mode,
+            host_role="gpu",
             status=status,
-            created_at_unix_ns=self.unix_time_ns(),
-            models=[
-                ModelDescriptor(
-                    role="served",
-                    model_id=self.config.model_id,
-                    revision=None,
-                    tokenizer_id=None,
-                    dtype=None,
-                )
-            ],
-            workload=WorkloadDescriptor(
-                request_count=None,
-                concurrency=None,
-                request_rate_per_s=None,
-                input_tokens=None,
-                output_tokens=None,
-                max_model_len=None,
-                warmup_requests=None,
-            ),
-            hosts=[
-                HostDescriptor(
-                    host_id=self.config.host_alias,
-                    role="gpu",
-                    hostname=self.config.host_alias,
-                    operating_system=platform.system() or "unknown",
-                    architecture=platform.machine() or "unknown",
-                )
-            ],
             software=[
-                SoftwareDescriptor(
-                    name="python",
-                    version=platform.python_version(),
-                    role="child-runtime",
-                    path=sys.executable,
-                ),
+                self._python_runtime_descriptor(),
                 SoftwareDescriptor(
                     name=NVML_DISTRIBUTION,
                     version=NVML_DISTRIBUTION_VERSION,
@@ -302,10 +161,7 @@ class GpuRunCollector:
                 for device in devices
             ],
             configuration={
-                "sample_interval_ms": self.config.sample_interval_ms,
-                "command": mask_command(self.config.command),
-                "cwd": str(self.config.cwd) if self.config.cwd else None,
-                "timeout_sec": self.config.timeout_sec,
+                **self._base_configuration(),
                 "runtime_metadata": {
                     "topology": topology_metadata(RunMode.GPU_ONLY),
                 },
@@ -316,92 +172,6 @@ class GpuRunCollector:
             },
         )
 
-    def _event(
-        self,
-        event_id: str,
-        event_name: str,
-        timestamp_ns: int,
-        *,
-        process_id: int | None = None,
-        attributes: dict[str, object] | None = None,
-    ) -> EventRecord:
-        return EventRecord(
-            run_id=self.config.run_id,
-            event_id=event_id,
-            event_name=event_name,
-            event_type=EventType.INSTANT,
-            phase=Phase.SYSTEM,
-            host_id=self.config.host_alias,
-            clock_domain_id=HOST_CLOCK_DOMAIN,
-            timestamp_ns=timestamp_ns,
-            process_id=process_id,
-            attributes=attributes or {},
-        )
-
-    def _write_raw_artifacts(
-        self,
-        stdout_path: Path,
-        stderr_path: Path,
-        raw_gpu: str | None,
-        errors: tuple[str, ...],
-    ) -> list[ArtifactReference]:
-        paths = self.config.paths
-        artifacts = [
-            self._artifact("child-stdout", "raw/client/stdout.log", stdout_path),
-            self._artifact("child-stderr", "raw/client/stderr.log", stderr_path),
-        ]
-        if raw_gpu is not None:
-            raw_path = paths.root / "raw/gpu/nvml-last.json"
-            raw_path.parent.mkdir(parents=True, exist_ok=True)
-            raw_path.write_text(raw_gpu, encoding="utf-8")
-            artifacts.append(
-                self._artifact(
-                    "nvml-last",
-                    "raw/gpu/nvml-last.json",
-                    raw_path,
-                    format_name="json",
-                    producer="nvml",
-                    kind=ArtifactKind.TELEMETRY,
-                )
-            )
-        if errors:
-            error_path = paths.root / "raw/system/collector-errors.json"
-            error_path.parent.mkdir(parents=True, exist_ok=True)
-            error_path.write_text(
-                json.dumps({"errors": list(errors)}, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            artifacts.append(
-                self._artifact(
-                    "collector-errors",
-                    "raw/system/collector-errors.json",
-                    error_path,
-                    format_name="json",
-                )
-            )
-        return artifacts
-
-    def _artifact(
-        self,
-        artifact_id: str,
-        relative_path: str,
-        actual_path: Path,
-        *,
-        format_name: str = "text",
-        producer: str = "gpu-monitor",
-        kind: ArtifactKind = ArtifactKind.RAW_LOG,
-    ) -> ArtifactReference:
-        return ArtifactReference(
-            run_id=self.config.run_id,
-            artifact_id=artifact_id,
-            artifact_kind=kind,
-            relative_path=relative_path,
-            format=format_name,
-            producer=producer,
-            created_at_unix_ns=self.unix_time_ns(),
-            size_bytes=actual_path.stat().st_size,
-            attributes={},
-        )
 
 def format_plan_json(plan: dict[str, object]) -> str:
     return json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True)

@@ -90,35 +90,22 @@ def observation_metrics(
                 f"{request_id}-done",
             ],
         ),
-        _metric(
-            run_id,
-            "request.input_tokens",
-            MetricKind.COUNT,
-            MetricScope.REQUEST,
-            "tokens",
-            observation.input_tokens,
-            observation.done_ns,
-            request_id=request_id,
-        ),
-        _metric(
-            run_id,
-            "request.output_tokens",
-            MetricKind.COUNT,
-            MetricScope.REQUEST,
-            "tokens",
-            observation.output_tokens,
-            observation.done_ns,
-            request_id=request_id,
-        ),
-        _metric(
-            run_id,
-            "request.total_tokens",
-            MetricKind.COUNT,
-            MetricScope.REQUEST,
-            "tokens",
-            observation.total_tokens,
-            observation.done_ns,
-            request_id=request_id,
+        *(
+            _metric(
+                run_id,
+                name,
+                MetricKind.COUNT,
+                MetricScope.REQUEST,
+                "tokens",
+                value,
+                observation.done_ns,
+                request_id=request_id,
+            )
+            for name, value in (
+                ("request.input_tokens", observation.input_tokens),
+                ("request.output_tokens", observation.output_tokens),
+                ("request.total_tokens", observation.total_tokens),
+            )
         ),
     ]
     if observation.ttft_ns is not None:
@@ -183,59 +170,42 @@ def measured_window_metrics(
     return [
         _metric(
             run_id,
-            "request.count",
-            MetricKind.COUNT,
+            name,
+            kind,
             MetricScope.RUN,
-            "requests",
-            len(items),
+            unit,
+            value,
             end_ns,
             interval_ns=interval_ns,
             dimensions=dimensions,
-        ),
-        _metric(
-            run_id,
-            "throughput.requests",
-            MetricKind.RATE,
-            MetricScope.RUN,
-            "requests/s",
-            len(items) / interval_sec,
-            end_ns,
-            interval_ns=interval_ns,
-            dimensions=dimensions,
-        ),
-        _metric(
-            run_id,
-            "throughput.input_tokens",
-            MetricKind.RATE,
-            MetricScope.RUN,
-            "tokens/s",
-            input_tokens / interval_sec,
-            end_ns,
-            interval_ns=interval_ns,
-            dimensions=dimensions,
-        ),
-        _metric(
-            run_id,
-            "throughput.output_tokens",
-            MetricKind.RATE,
-            MetricScope.RUN,
-            "tokens/s",
-            output_tokens / interval_sec,
-            end_ns,
-            interval_ns=interval_ns,
-            dimensions=dimensions,
-        ),
-        _metric(
-            run_id,
-            "throughput.total_tokens",
-            MetricKind.RATE,
-            MetricScope.RUN,
-            "tokens/s",
-            total_tokens / interval_sec,
-            end_ns,
-            interval_ns=interval_ns,
-            dimensions=dimensions,
-        ),
+        )
+        for name, kind, unit, value in (
+            ("request.count", MetricKind.COUNT, "requests", len(items)),
+            (
+                "throughput.requests",
+                MetricKind.RATE,
+                "requests/s",
+                len(items) / interval_sec,
+            ),
+            (
+                "throughput.input_tokens",
+                MetricKind.RATE,
+                "tokens/s",
+                input_tokens / interval_sec,
+            ),
+            (
+                "throughput.output_tokens",
+                MetricKind.RATE,
+                "tokens/s",
+                output_tokens / interval_sec,
+            ),
+            (
+                "throughput.total_tokens",
+                MetricKind.RATE,
+                "tokens/s",
+                total_tokens / interval_sec,
+            ),
+        )
     ]
 
 

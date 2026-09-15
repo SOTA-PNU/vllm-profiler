@@ -66,6 +66,16 @@ from .validation import (
     validate_hybrid_records,
 )
 
+
+def _write_json_document(path: Path, payload: dict[str, object]) -> None:
+    """Write one human-readable JSON publication document."""
+
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 _PHASE_METRICS = {
     stage.metric_name: (stage.start_event, stage.end_event, stage.phase)
     for stage in STAGE_DEFINITIONS
@@ -125,17 +135,8 @@ class HybridBundleMerger:
             source.manifest.attributes.get("hybrid.fake_source") is True
             for source in (gpu, npu)
         ):
-            reason = "executable merge accepts synthetic source bundles only"
-            return HybridMergeResult(
-                run_directory=paths.root,
-                status=RunStatus.FAILED,
-                event_count=0,
-                metric_count=0,
-                artifact_count=0,
-                joined_request_count=0,
-                unjoined_request_count=0,
-                uncertainty_ns=0,
-                reasons=(reason,),
+            return self._failed_result(
+                "executable merge accepts synthetic source bundles only"
             )
 
         paths.create()
@@ -1122,10 +1123,7 @@ class HybridBundleMerger:
                     record_to_dict(artifact) for artifact in source.artifacts
                 ],
             }
-            path.write_text(
-                json.dumps(payload, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
+            _write_json_document(path, payload)
             result[role] = path
         return result
 
@@ -1215,10 +1213,7 @@ class HybridBundleMerger:
                 for result in joins
             ],
         }
-        path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        _write_json_document(path, payload)
 
     def _artifact_reference(
         self,
@@ -1244,20 +1239,19 @@ class HybridBundleMerger:
 
     def _write_failed_source_bundle(self, reason: str) -> HybridMergeResult:
         """Keep a machine-readable failure when source streams are corrupt."""
-        path = self.config.paths.root / "summary/hybrid_summary.json"
-        path.write_text(
-            json.dumps(
-                {
-                    "run_id": self.config.run_id,
-                    "status": "failed",
-                    "reasons": [reason],
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
+        _write_json_document(
+            self.config.paths.root / "summary/hybrid_summary.json",
+            {
+                "run_id": self.config.run_id,
+                "status": "failed",
+                "reasons": [reason],
+            },
         )
+        return self._failed_result(reason)
+
+    def _failed_result(self, reason: str) -> HybridMergeResult:
+        """One empty failed merge result carrying the refusal reason."""
+
         return HybridMergeResult(
             run_directory=self.config.paths.root,
             status=RunStatus.FAILED,

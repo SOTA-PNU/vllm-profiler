@@ -257,169 +257,80 @@ def _parse_marker(
     expected_clock_domain_id: str,
     process_devices: ProcessDeviceMap,
 ) -> EventRecord:
-    if not isinstance(row, dict):
-        raise RuntimeMarkerIngestError(
-            path,
-            line_number,
-            "marker must be a JSON object",
+    def reject(message: str) -> RuntimeMarkerIngestError:
+        return RuntimeMarkerIngestError(path, line_number, message)
+
+    def text(value: object, field: str) -> str:
+        return _nonempty_string(
+            value, path=path, line_number=line_number, field=field
         )
+
+    def integer(value: object, field: str) -> int:
+        return _nonnegative_integer(
+            value, path=path, line_number=line_number, field=field
+        )
+
+    def identifier(field: str) -> str | None:
+        return _optional_identifier(
+            row, field, path=path, line_number=line_number
+        )
+
+    if not isinstance(row, dict):
+        raise reject("marker must be a JSON object")
     keys = set(row)
     missing = sorted(_REQUIRED_FIELDS - keys)
     if missing:
-        raise RuntimeMarkerIngestError(
-            path,
-            line_number,
-            f"required field is missing: {missing[0]}",
-        )
+        raise reject(f"required field is missing: {missing[0]}")
     unknown = sorted(keys - _REQUIRED_FIELDS - _OPTIONAL_FIELDS)
     if unknown:
-        raise RuntimeMarkerIngestError(
-            path,
-            line_number,
-            f"unknown field: {unknown[0]}",
-        )
+        raise reject(f"unknown field: {unknown[0]}")
     if row["schema_version"] != SCHEMA_VERSION:
-        raise RuntimeMarkerIngestError(
-            path,
-            line_number,
-            f"schema_version must be {SCHEMA_VERSION}",
-        )
+        raise reject(f"schema_version must be {SCHEMA_VERSION}")
 
-    event_name = _nonempty_string(
-        row["event_name"],
-        path=path,
-        line_number=line_number,
-        field="event_name",
-    )
+    event_name = text(row["event_name"], "event_name")
     if event_name not in CANONICAL_EVENT_NAMES:
-        raise RuntimeMarkerIngestError(
-            path,
-            line_number,
-            f"event_name is not canonical: {event_name}",
-        )
+        raise reject(f"event_name is not canonical: {event_name}")
     expected_phase = CANONICAL_MARKER_PHASES[event_name]
-    phase_text = _nonempty_string(
-        row["phase"],
-        path=path,
-        line_number=line_number,
-        field="phase",
-    )
+    phase_text = text(row["phase"], "phase")
     if phase_text != expected_phase.value:
-        raise RuntimeMarkerIngestError(
-            path,
-            line_number,
+        raise reject(
             f"phase {phase_text!r} does not match {event_name!r}; "
-            f"expected {expected_phase.value!r}",
+            f"expected {expected_phase.value!r}"
         )
 
-    timestamp_ns = _nonnegative_integer(
-        row["timestamp_ns"],
-        path=path,
-        line_number=line_number,
-        field="timestamp_ns",
-    )
-    process_id = _nonnegative_integer(
-        row["pid"],
-        path=path,
-        line_number=line_number,
-        field="pid",
-    )
-    thread_id = _nonnegative_integer(
-        row["thread_id"],
-        path=path,
-        line_number=line_number,
-        field="thread_id",
-    )
-    host_id = _nonempty_string(
-        row["host_id"],
-        path=path,
-        line_number=line_number,
-        field="host_id",
-    )
-    clock_domain_id = _nonempty_string(
-        row["clock_domain_id"],
-        path=path,
-        line_number=line_number,
-        field="clock_domain_id",
-    )
+    timestamp_ns = integer(row["timestamp_ns"], "timestamp_ns")
+    process_id = integer(row["pid"], "pid")
+    thread_id = integer(row["thread_id"], "thread_id")
+    host_id = text(row["host_id"], "host_id")
+    clock_domain_id = text(row["clock_domain_id"], "clock_domain_id")
     if host_id != expected_host_id:
-        raise RuntimeMarkerIngestError(
-            path,
-            line_number,
-            f"host_id {host_id!r} does not match expected {expected_host_id!r}",
+        raise reject(
+            f"host_id {host_id!r} does not match expected {expected_host_id!r}"
         )
     if clock_domain_id != expected_clock_domain_id:
-        raise RuntimeMarkerIngestError(
-            path,
-            line_number,
+        raise reject(
             "clock_domain_id "
             f"{clock_domain_id!r} does not match expected "
-            f"{expected_clock_domain_id!r}",
+            f"{expected_clock_domain_id!r}"
         )
-    process_role = _nonempty_string(
-        row["process_role"],
-        path=path,
-        line_number=line_number,
-        field="process_role",
-    )
-    source = _nonempty_string(
-        row["source"],
-        path=path,
-        line_number=line_number,
-        field="source",
-    )
-    request_id = _nonempty_string(
-        row["request_id"],
-        path=path,
-        line_number=line_number,
-        field="request_id",
-    )
-    correlation_id = _optional_identifier(
-        row,
-        "correlation_id",
-        path=path,
-        line_number=line_number,
-    )
-    remote_suffix = _optional_identifier(
-        row,
-        "remote_request_id_suffix",
-        path=path,
-        line_number=line_number,
-    )
+    process_role = text(row["process_role"], "process_role")
+    source = text(row["source"], "source")
+    request_id = text(row["request_id"], "request_id")
+    correlation_id = identifier("correlation_id")
+    remote_suffix = identifier("remote_request_id_suffix")
     if remote_suffix is not None and _SAFE_SUFFIX_RE.fullmatch(remote_suffix) is None:
-        raise RuntimeMarkerIngestError(
-            path,
-            line_number,
-            "remote_request_id_suffix must be 1-64 safe identifier characters",
+        raise reject(
+            "remote_request_id_suffix must be 1-64 safe identifier characters"
         )
-    transfer_id = _optional_identifier(
-        row,
-        "transfer_id",
-        path=path,
-        line_number=line_number,
-    )
+    transfer_id = identifier("transfer_id")
     sequence = row.get("sequence")
     if sequence is not None:
-        sequence = _nonnegative_integer(
-            sequence,
-            path=path,
-            line_number=line_number,
-            field="sequence",
-        )
+        sequence = integer(sequence, "sequence")
     marker_version = row.get("marker_version")
     if marker_version is not None:
-        marker_version = _nonempty_string(
-            marker_version,
-            path=path,
-            line_number=line_number,
-            field="marker_version",
-        )
+        marker_version = text(marker_version, "marker_version")
         if re.fullmatch(r"[1-9][0-9]*\.[0-9]+\.[0-9]+", marker_version) is None:
-            raise RuntimeMarkerIngestError(
-                path,
-                line_number,
-                "marker_version must be a semantic version",
-            )
+            raise reject("marker_version must be a semantic version")
 
     attributes = _validate_safe_attributes(
         row["attributes"],
@@ -453,11 +364,7 @@ def _parse_marker(
         or not isinstance(device[1], str)
         or not device[1]
     ):
-        raise RuntimeMarkerIngestError(
-            path,
-            line_number,
-            f"invalid process device mapping for role {process_role!r}",
-        )
+        raise reject(f"invalid process device mapping for role {process_role!r}")
     device_type = device[0] if device is not None else None
     device_id = device[1] if device is not None else None
     event = EventRecord(
@@ -486,11 +393,7 @@ def _parse_marker(
     try:
         validate_record(event)
     except SchemaValidationError as error:
-        raise RuntimeMarkerIngestError(
-            path,
-            line_number,
-            f"normalized event is invalid: {error}",
-        ) from error
+        raise reject(f"normalized event is invalid: {error}") from error
     return event
 
 
